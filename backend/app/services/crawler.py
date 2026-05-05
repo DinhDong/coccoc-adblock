@@ -1,0 +1,1 @@
+#Calls the other crawler files in order: open page → extract data → detect ad signals → save result

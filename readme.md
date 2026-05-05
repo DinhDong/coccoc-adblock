@@ -48,7 +48,7 @@ Responsibilities:
 Person 1: Crawler browser control
 Files:
 - backend/app/crawler/browser.py
-- backend/app/services/crawler_service.py
+- backend/app/services/crawler.py
 
 Person 2: Data extraction
 Files:
@@ -61,6 +61,3 @@ Files:
 Person 4: Storage, testing, and documentation
 Files:
 - backend/app/crawler/storage.py
-- tests/test_crawler.py
-- docs/crawler.md
-- data/sample_urls.json

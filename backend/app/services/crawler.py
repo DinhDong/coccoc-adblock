@@ -1,1 +1,242 @@
 #Calls the other crawler files in order: open page → extract data → detect ad signals → save result
+
+import logging
+from typing import Dict, Any, Optional
+from pathlib import Path
+
+from ..crawler.browser import render_url
+from ..crawler.extractor import PageExtractor
+from ..crawler.detector import detect_ads
+from ..crawler.storage import CrawlStorage
+
+logger = logging.getLogger(__name__)
+
+
+class CrawlService:
+    """
+    Orchestrates the complete crawler pipeline:
+    1. Render page with browser
+    2. Extract data from HTML
+    3. Detect ad signals
+    4. Save all results
+    """
+
+    def __init__(self, storage_base_dir: str = "data/crawl_outputs"):
+        """
+        Initialize the crawler service.
+
+        Args:
+            storage_base_dir: Base directory for storing crawl outputs.
+        """
+        self.storage = CrawlStorage(base_dir=storage_base_dir)
+
+    def crawl_url(self, url: str, report_id: str, **render_kwargs) -> Dict[str, Any]:
+        """
+        Crawl a single URL through the complete pipeline.
+
+        Args:
+            url: The URL to crawl.
+            report_id: Unique identifier for this crawl report.
+            **render_kwargs: Additional arguments passed to render_page().
+
+        Returns:
+            Dictionary containing the complete crawl result.
+        """
+        logger.info(f"Starting crawl for URL: {url} (report_id: {report_id})")
+
+        # Step 1: Render the page
+        try:
+            logger.debug("Rendering page...")
+            render_result = render_url(url, **render_kwargs)
+        except Exception as exc:
+            logger.error(f"Failed to render page {url}: {exc}")
+            error_path = self.storage.save_error(
+                report_id=report_id,
+                url=url,
+                error_message=str(exc),
+                extra_info={"stage": "render"}
+            )
+            return {
+                "url": url,
+                "report_id": report_id,
+                "status": "failed",
+                "error": str(exc),
+                "error_file": error_path,
+                "stage": "render"
+            }
+
+        # Check if rendering succeeded
+        if render_result.status != "success":
+            logger.warning(f"Page render failed for {url}: {render_result.error}")
+            error_path = self.storage.save_error(
+                report_id=report_id,
+                url=url,
+                error_message=render_result.error,
+                extra_info={
+                    "stage": "render",
+                    "elapsed_ms": render_result.elapsed_ms
+                }
+            )
+            return {
+                "url": url,
+                "report_id": report_id,
+                "status": "failed",
+                "error": render_result.error,
+                "error_file": error_path,
+                "stage": "render",
+                "elapsed_ms": render_result.elapsed_ms
+            }
+
+        # Step 2: Extract data from HTML
+        try:
+            logger.debug("Extracting data from HTML...")
+            extractor = PageExtractor(render_result.html)
+            extracted_data = extractor.extract_all()
+        except Exception as exc:
+            logger.error(f"Failed to extract data from {url}: {exc}")
+            error_path = self.storage.save_error(
+                report_id=report_id,
+                url=url,
+                error_message=str(exc),
+                extra_info={
+                    "stage": "extract",
+                    "html_length": len(render_result.html)
+                }
+            )
+            return {
+                "url": url,
+                "report_id": report_id,
+                "status": "failed",
+                "error": str(exc),
+                "error_file": error_path,
+                "stage": "extract",
+                "render": {
+                    "status": render_result.status,
+                    "elapsed_ms": render_result.elapsed_ms
+                }
+            }
+
+        # Step 3: Detect ad signals
+        try:
+            logger.debug("Detecting ad signals...")
+            # Prepare data for detector (matches detector.py expected format)
+            detector_input = extracted_data.to_dict()
+            detector_input["url"] = url
+            detector_input["html"] = render_result.html  # Add raw HTML for content analysis
+
+            detection_result = detect_ads(detector_input)
+        except Exception as exc:
+            logger.error(f"Failed to detect ads for {url}: {exc}")
+            error_path = self.storage.save_error(
+                report_id=report_id,
+                url=url,
+                error_message=str(exc),
+                extra_info={
+                    "stage": "detect",
+                    "extracted_fields": list(extracted_data.to_dict().keys())
+                }
+            )
+            return {
+                "url": url,
+                "report_id": report_id,
+                "status": "failed",
+                "error": str(exc),
+                "error_file": error_path,
+                "stage": "detect",
+                "render": {
+                    "status": render_result.status,
+                    "elapsed_ms": render_result.elapsed_ms
+                },
+                "extracted": extracted_data.to_dict()
+            }
+
+        # Step 4: Save results
+        try:
+            logger.debug("Saving crawl results...")
+            html_path = self.storage.save_html(report_id, render_result.html)
+            screenshot_path = self.storage.save_screenshot(report_id, render_result.screenshot_bytes)
+            result_path = self.storage.save_result(report_id, {
+                "url": url,
+                "report_id": report_id,
+                "timestamp": self.storage._current_timestamp(),
+                "render": {
+                    "status": render_result.status,
+                    "elapsed_ms": render_result.elapsed_ms,
+                    "html_length": len(render_result.html),
+                    "screenshot_size": len(render_result.screenshot_bytes)
+                },
+                "extracted": extracted_data.to_dict(),
+                "detection": detection_result
+            })
+        except Exception as exc:
+            logger.error(f"Failed to save results for {url}: {exc}")
+            error_path = self.storage.save_error(
+                report_id=report_id,
+                url=url,
+                error_message=str(exc),
+                extra_info={"stage": "save"}
+            )
+            return {
+                "url": url,
+                "report_id": report_id,
+                "status": "failed",
+                "error": str(exc),
+                "error_file": error_path,
+                "stage": "save",
+                "render": {
+                    "status": render_result.status,
+                    "elapsed_ms": render_result.elapsed_ms
+                },
+                "extracted": extracted_data.to_dict(),
+                "detection": detection_result
+            }
+
+        # Success! Return complete result
+        logger.info(f"Successfully crawled {url} (report_id: {report_id})")
+        return {
+            "url": url,
+            "report_id": report_id,
+            "status": "success",
+            "timestamp": self.storage._current_timestamp(),
+            "render": {
+                "status": render_result.status,
+                "elapsed_ms": render_result.elapsed_ms,
+                "html_length": len(render_result.html),
+                "screenshot_size": len(render_result.screenshot_bytes)
+            },
+            "extracted": extracted_data.to_dict(),
+            "detection": detection_result,
+            "files": {
+                "html": html_path,
+                "screenshot": screenshot_path,
+                "result": result_path
+            }
+        }
+
+
+# ------------------------------------------------------------------
+# Quick test (run: python -m app.services.crawler)
+# ------------------------------------------------------------------
+
+if __name__ == "__main__":
+    import sys
+    import json
+
+    # Get URL from command line argument, or use default
+    url = sys.argv[1] if len(sys.argv) > 1 else "https://httpbin.org/html"
+    report_id = sys.argv[2] if len(sys.argv) > 2 else "test-001"
+
+    print(f"Crawling: {url}")
+    print(f"Report ID: {report_id}")
+
+    # Simple test crawl
+    service = CrawlService()
+    result = service.crawl_url(
+        url=url,
+        report_id=report_id,
+        headless=True,
+        enable_scroll=False  # Keep it fast for testing
+    )
+
+    print("\nCrawl result:")
+    print(json.dumps(result, indent=2, ensure_ascii=False))

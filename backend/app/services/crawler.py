@@ -222,14 +222,25 @@ if __name__ == "__main__":
     import sys
     import json
 
+    # Configure logging so all pipeline alerts/warnings are visible
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
     # Get URL from command line argument, or use default
     url = sys.argv[1] if len(sys.argv) > 1 else "https://httpbin.org/html"
     report_id = sys.argv[2] if len(sys.argv) > 2 else "test-001"
 
-    print(f"Crawling: {url}")
-    print(f"Report ID: {report_id}")
+    print(f"\n{'='*60}")
+    print(f"  CocCoc Adblock Crawler - Test Run")
+    print(f"{'='*60}")
+    print(f"  URL:       {url}")
+    print(f"  Report ID: {report_id}")
+    print(f"{'='*60}\n")
 
-    # Simple test crawl
+    # Run the crawl pipeline
     service = CrawlService()
     result = service.crawl_url(
         url=url,
@@ -238,5 +249,7 @@ if __name__ == "__main__":
         enable_scroll=False  # Keep it fast for testing
     )
 
-    print("\nCrawl result:")
-    print(json.dumps(result, indent=2, ensure_ascii=False))
+    print(f"\n{'='*60}")
+    print(f"  Crawl Result (status: {result.get('status', 'unknown')})")
+    print(f"{'='*60}")
+    print(json.dumps(result, indent=2, ensure_ascii=True))

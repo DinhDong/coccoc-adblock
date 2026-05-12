@@ -1,0 +1,13 @@
+{
+  "report_id": "test-invalid-url",
+  "url": "not-a-valid-url",
+  "status": "failed",
+  "created_at": "2026-05-12T02:37:56.736641+00:00",
+  "error": "Playwright error while rendering not-a-valid-url: Page.goto: Protocol error (Page.navigate): Cannot navigate to invalid URL\nCall log:\n  - navigating to \"not-a-valid-url\", waiting until \"load\"\n",
+  "fallbacks_used": [],
+  "alerts": [],
+  "extra_info": {
+    "stage": "render",
+    "elapsed_ms": 377
+  }
+}

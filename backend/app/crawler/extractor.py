@@ -8,9 +8,12 @@
 # extract element IDs
 # extract basic selectors
 
+import logging
 from bs4 import BeautifulSoup
 from dataclasses import dataclass, field
 from typing import List
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -49,25 +52,79 @@ class PageExtractor:
         Args:
             html: The rendered HTML string from the browser module.
         """
+        # Fallback: guard against None or non-string input
+        if not html or not isinstance(html, str):
+            logger.warning("Received empty or invalid HTML input, using empty document")
+            html = ""
         self.soup = BeautifulSoup(html, "html.parser")
 
     def extract_all(self) -> ExtractedData:
         """
         Run all extraction steps and return an ExtractedData object.
+        Each step is wrapped in try/except so one failure doesn't lose everything.
 
         Returns:
             ExtractedData containing all extracted page information.
         """
-        return ExtractedData(
-            title=self.extract_title(),
-            scripts=self.extract_scripts(),
-            iframes=self.extract_iframes(),
-            images=self.extract_images(),
-            links=self.extract_links(),
-            css_classes=self.extract_css_classes(),
-            element_ids=self.extract_element_ids(),
-            selectors=self.extract_selectors(),
-        )
+        data = ExtractedData()
+
+        # --- title ---
+        try:
+            data.title = self.extract_title()
+        except Exception as e:
+            logger.warning(f"Failed to extract title: {e}")
+            data.title = ""
+
+        # --- scripts ---
+        try:
+            data.scripts = self.extract_scripts()
+        except Exception as e:
+            logger.warning(f"Failed to extract scripts: {e}")
+            data.scripts = []
+
+        # --- iframes ---
+        try:
+            data.iframes = self.extract_iframes()
+        except Exception as e:
+            logger.warning(f"Failed to extract iframes: {e}")
+            data.iframes = []
+
+        # --- images ---
+        try:
+            data.images = self.extract_images()
+        except Exception as e:
+            logger.warning(f"Failed to extract images: {e}")
+            data.images = []
+
+        # --- links ---
+        try:
+            data.links = self.extract_links()
+        except Exception as e:
+            logger.warning(f"Failed to extract links: {e}")
+            data.links = []
+
+        # --- css classes ---
+        try:
+            data.css_classes = self.extract_css_classes()
+        except Exception as e:
+            logger.warning(f"Failed to extract CSS classes: {e}")
+            data.css_classes = []
+
+        # --- element IDs ---
+        try:
+            data.element_ids = self.extract_element_ids()
+        except Exception as e:
+            logger.warning(f"Failed to extract element IDs: {e}")
+            data.element_ids = []
+
+        # --- selectors ---
+        try:
+            data.selectors = self.extract_selectors()
+        except Exception as e:
+            logger.warning(f"Failed to extract selectors: {e}")
+            data.selectors = []
+
+        return data
 
     def extract_title(self) -> str:
         """Extract the page title from the <title> tag."""
@@ -85,9 +142,13 @@ class PageExtractor:
         """
         scripts = []
         for tag in self.soup.find_all("script", src=True):
-            src = tag.get("src", "").strip()
-            if src:
-                scripts.append(src)
+            try:
+                src = tag.get("src", "").strip()
+                if src:
+                    scripts.append(src)
+            except Exception as e:
+                logger.warning(f"Skipped broken <script> tag: {e}")
+                continue
         return scripts
 
     def extract_iframes(self) -> List[str]:
@@ -99,9 +160,13 @@ class PageExtractor:
         """
         iframes = []
         for tag in self.soup.find_all("iframe", src=True):
-            src = tag.get("src", "").strip()
-            if src:
-                iframes.append(src)
+            try:
+                src = tag.get("src", "").strip()
+                if src:
+                    iframes.append(src)
+            except Exception as e:
+                logger.warning(f"Skipped broken <iframe> tag: {e}")
+                continue
         return iframes
 
     def extract_images(self) -> List[str]:
@@ -113,9 +178,13 @@ class PageExtractor:
         """
         images = []
         for tag in self.soup.find_all("img", src=True):
-            src = tag.get("src", "").strip()
-            if src:
-                images.append(src)
+            try:
+                src = tag.get("src", "").strip()
+                if src:
+                    images.append(src)
+            except Exception as e:
+                logger.warning(f"Skipped broken <img> tag: {e}")
+                continue
         return images
 
     def extract_links(self) -> List[str]:
@@ -127,9 +196,13 @@ class PageExtractor:
         """
         links = []
         for tag in self.soup.find_all("a", href=True):
-            href = tag.get("href", "").strip()
-            if href:
-                links.append(href)
+            try:
+                href = tag.get("href", "").strip()
+                if href:
+                    links.append(href)
+            except Exception as e:
+                logger.warning(f"Skipped broken <a> tag: {e}")
+                continue
         return links
 
     def extract_css_classes(self) -> List[str]:
@@ -141,11 +214,15 @@ class PageExtractor:
         """
         classes = set()
         for tag in self.soup.find_all(True):  # all tags
-            tag_classes = tag.get("class", [])
-            for cls in tag_classes:
-                cls = cls.strip()
-                if cls:
-                    classes.add(cls)
+            try:
+                tag_classes = tag.get("class", [])
+                for cls in tag_classes:
+                    cls = cls.strip()
+                    if cls:
+                        classes.add(cls)
+            except Exception as e:
+                logger.warning(f"Skipped tag while extracting classes: {e}")
+                continue
         return sorted(classes)
 
     def extract_element_ids(self) -> List[str]:
@@ -157,9 +234,13 @@ class PageExtractor:
         """
         ids = set()
         for tag in self.soup.find_all(True, id=True):
-            element_id = tag.get("id", "").strip()
-            if element_id:
-                ids.add(element_id)
+            try:
+                element_id = tag.get("id", "").strip()
+                if element_id:
+                    ids.add(element_id)
+            except Exception as e:
+                logger.warning(f"Skipped tag while extracting IDs: {e}")
+                continue
         return sorted(ids)
 
     def extract_selectors(self) -> List[str]:
@@ -176,18 +257,22 @@ class PageExtractor:
         """
         selectors = set()
         for tag in self.soup.find_all(True):
-            tag_name = tag.name
+            try:
+                tag_name = tag.name
 
-            # selector by ID
-            element_id = tag.get("id", "").strip()
-            if element_id:
-                selectors.add(f"{tag_name}#{element_id}")
+                # selector by ID
+                element_id = tag.get("id", "").strip()
+                if element_id:
+                    selectors.add(f"{tag_name}#{element_id}")
 
-            # selectors by class
-            tag_classes = tag.get("class", [])
-            for cls in tag_classes:
-                cls = cls.strip()
-                if cls:
-                    selectors.add(f"{tag_name}.{cls}")
+                # selectors by class
+                tag_classes = tag.get("class", [])
+                for cls in tag_classes:
+                    cls = cls.strip()
+                    if cls:
+                        selectors.add(f"{tag_name}.{cls}")
+            except Exception as e:
+                logger.warning(f"Skipped tag while building selectors: {e}")
+                continue
 
         return sorted(selectors)

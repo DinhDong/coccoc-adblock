@@ -1,0 +1,28 @@
+{
+  "url": "https://httpbin.org/html",
+  "report_id": "venv-test",
+  "timestamp": "2026-05-12T02:26:57.528404+00:00",
+  "render": {
+    "status": "success",
+    "elapsed_ms": 1728,
+    "html_length": 3735,
+    "screenshot_size": 83122
+  },
+  "extracted": {
+    "title": "",
+    "scripts": [],
+    "iframes": [],
+    "images": [],
+    "links": [],
+    "css_classes": [],
+    "element_ids": [],
+    "selectors": []
+  },
+  "detection": {
+    "url": "https://httpbin.org/html",
+    "ad_signals": [],
+    "has_ads": false,
+    "signal_count": 0,
+    "errors": []
+  }
+}

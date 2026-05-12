@@ -40,4 +40,4 @@ Desktop.ini
 htmlcov/
 
 # Crawler output data
-data/crawl_outputs/
+**/data/crawl_outputs/

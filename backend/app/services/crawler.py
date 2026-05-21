@@ -15,10 +15,10 @@ logger = logging.getLogger(__name__)
 class CrawlService:
     """
     Orchestrates the complete crawler pipeline:
-    1. Render page with browser
-    2. Extract data from HTML
-    3. Detect ad signals
-    4. Save all results
+    1. Render page with browser (+ capture network requests)
+    2. Extract ad-relevant data from HTML
+    3. Detect ad candidates from extracted data + network requests
+    4. Save clean results
     """
 
     def __init__(self, storage_base_dir: str = "data/crawl_outputs"):
@@ -37,17 +37,17 @@ class CrawlService:
         Args:
             url: The URL to crawl.
             report_id: Unique identifier for this crawl report.
-            **render_kwargs: Additional arguments passed to render_page().
+            **render_kwargs: Additional arguments passed to render_url().
 
         Returns:
             Dictionary containing the complete crawl result.
         """
         logger.info(f"Starting crawl for URL: {url} (report_id: {report_id})")
 
-        # Step 1: Render the page
+        # Step 1: Render the page (with network request capture)
         try:
             logger.debug("Rendering page...")
-            render_result = render_url(url, **render_kwargs)
+            render_result = render_url(url, capture_requests=True, **render_kwargs)
         except Exception as exc:
             logger.error(f"Failed to render page {url}: {exc}")
             error_path = self.storage.save_error(
@@ -87,10 +87,10 @@ class CrawlService:
                 "elapsed_ms": render_result.elapsed_ms
             }
 
-        # Step 2: Extract data from HTML
+        # Step 2: Extract ad-relevant data from HTML
         try:
-            logger.debug("Extracting data from HTML...")
-            extractor = PageExtractor(render_result.html)
+            logger.debug("Extracting ad-relevant data from HTML...")
+            extractor = PageExtractor(render_result.html, page_url=url)
             extracted_data = extractor.extract_all()
         except Exception as exc:
             logger.error(f"Failed to extract data from {url}: {exc}")
@@ -116,13 +116,16 @@ class CrawlService:
                 }
             }
 
-        # Step 3: Detect ad signals
+        # Step 3: Detect ad candidates
         try:
-            logger.debug("Detecting ad signals...")
-            # Prepare data for detector (matches detector.py expected format)
+            logger.debug("Detecting ad candidates...")
+            # Build detector input: extracted data + network requests
             detector_input = extracted_data.to_dict()
             detector_input["url"] = url
-            detector_input["html"] = render_result.html  # Add raw HTML for content analysis
+            # Convert captured network requests to dicts for the detector
+            detector_input["network_requests"] = [
+                req.to_dict() for req in render_result.captured_requests
+            ]
 
             detection_result = detect_ads(detector_input)
         except Exception as exc:
@@ -150,12 +153,59 @@ class CrawlService:
                 "extracted": extracted_data.to_dict()
             }
 
+        # Build network request summary (grouped by domain)
+        from urllib.parse import urlparse as _urlparse
+        from collections import defaultdict as _defaultdict
+
+        page_domain = ""
+        try:
+            page_domain = _urlparse(url).hostname or ""
+        except Exception:
+            pass
+
+        first_party_by_domain: dict = _defaultdict(list)
+        third_party_by_domain: dict = _defaultdict(list)
+        total_requests = len(render_result.captured_requests)
+        for req in render_result.captured_requests:
+            if req.url.startswith("data:"):
+                continue
+            try:
+                req_host = _urlparse(req.url).hostname or ""
+            except Exception:
+                continue
+            if req_host and page_domain and (
+                req_host == page_domain or
+                req_host.endswith("." + page_domain) or
+                page_domain.endswith("." + req_host)
+            ):
+                first_party_by_domain[req_host].append(req.url)
+            else:
+                third_party_by_domain[req_host].append(req.url)
+
+        # Cap URLs per domain to keep output clean
+        network_summary = {
+            "total": total_requests,
+            "first_party": {
+                "count": sum(len(urls) for urls in first_party_by_domain.values()),
+                "by_domain": {
+                    domain: urls[:5] for domain, urls in sorted(first_party_by_domain.items())
+                }
+            },
+            "third_party": {
+                "count": sum(len(urls) for urls in third_party_by_domain.values()),
+                "by_domain": {
+                    domain: urls[:5] for domain, urls in sorted(third_party_by_domain.items())
+                }
+            },
+        }
+
         # Step 4: Save results
         try:
             logger.debug("Saving crawl results...")
             html_path = self.storage.save_html(report_id, render_result.html)
             screenshot_path = self.storage.save_screenshot(report_id, render_result.screenshot_bytes)
-            result_path = self.storage.save_result(report_id, {
+
+            result_data = {
                 "url": url,
                 "report_id": report_id,
                 "timestamp": self.storage._current_timestamp(),
@@ -163,11 +213,20 @@ class CrawlService:
                     "status": render_result.status,
                     "elapsed_ms": render_result.elapsed_ms,
                     "html_length": len(render_result.html),
-                    "screenshot_size": len(render_result.screenshot_bytes)
                 },
-                "extracted": extracted_data.to_dict(),
-                "detection": detection_result
-            })
+                "title": extracted_data.title,
+                "network_requests": network_summary,
+                "ad_candidates": detection_result.get("ad_candidates", []),
+                "summary": detection_result.get("summary", {}),
+                "files": {
+                    "html": html_path,
+                    "screenshot": screenshot_path,
+                }
+            }
+
+            result_path = self.storage.save_result(report_id, result_data)
+            result_data["files"]["result"] = result_path
+
         except Exception as exc:
             logger.error(f"Failed to save results for {url}: {exc}")
             error_path = self.storage.save_error(
@@ -183,35 +242,12 @@ class CrawlService:
                 "error": str(exc),
                 "error_file": error_path,
                 "stage": "save",
-                "render": {
-                    "status": render_result.status,
-                    "elapsed_ms": render_result.elapsed_ms
-                },
-                "extracted": extracted_data.to_dict(),
-                "detection": detection_result
             }
 
-        # Success! Return complete result
+        # Success!
         logger.info(f"Successfully crawled {url} (report_id: {report_id})")
-        return {
-            "url": url,
-            "report_id": report_id,
-            "status": "success",
-            "timestamp": self.storage._current_timestamp(),
-            "render": {
-                "status": render_result.status,
-                "elapsed_ms": render_result.elapsed_ms,
-                "html_length": len(render_result.html),
-                "screenshot_size": len(render_result.screenshot_bytes)
-            },
-            "extracted": extracted_data.to_dict(),
-            "detection": detection_result,
-            "files": {
-                "html": html_path,
-                "screenshot": screenshot_path,
-                "result": result_path
-            }
-        }
+        result_data["status"] = "success"
+        return result_data
 
 
 # ------------------------------------------------------------------
@@ -246,7 +282,8 @@ if __name__ == "__main__":
         url=url,
         report_id=report_id,
         headless=True,
-        enable_scroll=False  # Keep it fast for testing
+        enable_scroll=True,
+        page_load_delay_ms=5000,  # Wait 5s for async ad content to load
     )
 
     print(f"\n{'='*60}")

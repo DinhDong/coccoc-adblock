@@ -179,8 +179,10 @@ class CrawlStorage:
         url: str,
         status: str,
         crawl_time_ms: int,
-        extracted_data: Optional[Dict[str, Any]] = None,
-        ad_signals: Optional[List[Dict[str, Any]]] = None,
+        title: str = "",
+        network_requests: Optional[Dict[str, Any]] = None,
+        ad_candidates: Optional[List[Dict[str, Any]]] = None,
+        summary: Optional[Dict[str, Any]] = None,
         html_path: str = "",
         screenshot_path: str = "",
         errors: Optional[List[str]] = None,
@@ -199,19 +201,19 @@ class CrawlStorage:
             url: Crawled URL.
             status: success, partial_success, or failed.
             crawl_time_ms: Total crawl time in milliseconds.
-            extracted_data: Data from extractor.py.
-            ad_signals: Ad signals from detector.py.
+            title: Page title.
+            network_requests: Network request summary (grouped by domain).
+            ad_candidates: List of ad candidate dicts with suggested rules.
+            summary: Detection summary (networks found, confidence breakdown).
             html_path: Path to saved HTML file.
             screenshot_path: Path to saved screenshot file.
             errors: List of errors found during crawling.
-            fallbacks_used: List of fallback actions used by browser.py.
-            alerts: List of alert messages from any module.
+            fallbacks_used: List of fallback actions already tried.
+            alerts: List of warning/alert messages.
 
         Returns:
             Final crawl result dictionary.
         """
-        extracted_data = extracted_data or {}
-
         return {
             "report_id": report_id,
             "url": url,
@@ -219,20 +221,16 @@ class CrawlStorage:
             "created_at": self._current_timestamp(),
             "crawl_time_ms": crawl_time_ms,
 
-            "title": extracted_data.get("title", ""),
+            "title": title,
 
-            "html_path": html_path,
-            "screenshot_path": screenshot_path,
+            "files": {
+                "html": html_path,
+                "screenshot": screenshot_path,
+            },
 
-            "scripts": extracted_data.get("scripts", []),
-            "iframes": extracted_data.get("iframes", []),
-            "images": extracted_data.get("images", []),
-            "links": extracted_data.get("links", []),
-            "css_classes": extracted_data.get("css_classes", []),
-            "element_ids": extracted_data.get("element_ids", []),
-            "selectors": extracted_data.get("selectors", []),
-
-            "ad_signals": ad_signals or [],
+            "network_requests": network_requests or {},
+            "ad_candidates": ad_candidates or [],
+            "summary": summary or {},
 
             # Added based on supervisor feedback
             "fallbacks_used": fallbacks_used or [],

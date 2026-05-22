@@ -1,32 +1,96 @@
-# Extracts useful information from the loaded page:
+# Extracts ad-relevant information from the loaded page:
 # extract page title
-# extract scripts
+# extract external scripts
 # extract iframes
-# extract images
-# extract links
-# extract CSS classes
-# extract element IDs
-# extract basic selectors
+# extract ad-related elements (by class/ID patterns) with CSS selectors
+# extract elements with data-ad-* attributes
+# extract third-party resource URLs
 
 import logging
-from bs4 import BeautifulSoup
+import re
+from bs4 import BeautifulSoup, Tag
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Ad-related patterns used to identify ad containers in the DOM
+# ---------------------------------------------------------------------------
+
+# Patterns that indicate an element is ad-related (matched against class names and IDs)
+AD_CLASS_ID_PATTERNS = [
+    re.compile(r'\bad[s]?\b', re.I),              # "ad", "ads"
+    re.compile(r'\bad[-_]', re.I),                 # "ad-container", "ad_slot", etc.
+    re.compile(r'[-_]ad[s]?\b', re.I),             # "google-ad", "sidebar-ads"
+    re.compile(r'\badvertis', re.I),               # "advertisement", "advertising"
+    re.compile(r'\bsponsored?\b', re.I),           # "sponsor", "sponsored"
+    re.compile(r'\bbanner\b', re.I),               # "banner"
+    re.compile(r'\badsbygoogle\b', re.I),          # Google AdSense
+    re.compile(r'\bgpt[-_]?ad\b', re.I),           # Google Publisher Tag
+    re.compile(r'\bdfp[-_]', re.I),                # Google DFP
+    re.compile(r'\btaboola\b', re.I),              # Taboola
+    re.compile(r'\boutbrain\b', re.I),             # Outbrain
+    re.compile(r'\bnative[-_]?ad\b', re.I),        # Native ads
+    re.compile(r'\bpromo(?:tion|ted)?\b', re.I),   # Promo/promoted content
+    re.compile(r'\binterstitial\b', re.I),         # Interstitial ads
+    re.compile(r'\bprebid\b', re.I),               # Prebid header bidding
+]
+
+# Attributes that indicate ad configuration
+AD_DATA_ATTRIBUTES = [
+    "data-ad-client",
+    "data-ad-slot",
+    "data-ad-format",
+    "data-ad-layout",
+    "data-ad-region",
+    "data-ad-unit",
+    "data-ad-zone",
+    "data-tracking-id",
+    "data-sponsor",
+]
+
+
+# ---------------------------------------------------------------------------
+# Data models
+# ---------------------------------------------------------------------------
+
+@dataclass
+class AdElement:
+    """An element in the DOM that appears to be ad-related."""
+    tag: str                     # e.g. "div", "ins", "iframe"
+    selector: str                # CSS selector to target this element, e.g. "div#div-gpt-ad-123"
+    reason: str                  # Why this was flagged, e.g. "class 'ad-container' matches ad pattern"
+    classes: List[str] = field(default_factory=list)
+    element_id: str = ""
+    outer_html_snippet: str = ""  # First ~200 chars of outerHTML for context
+    ad_attributes: dict = field(default_factory=dict)  # data-ad-* values
+
+    def to_dict(self) -> dict:
+        d = {
+            "tag": self.tag,
+            "selector": self.selector,
+            "reason": self.reason,
+        }
+        if self.classes:
+            d["classes"] = self.classes
+        if self.element_id:
+            d["element_id"] = self.element_id
+        if self.outer_html_snippet:
+            d["outer_html_snippet"] = self.outer_html_snippet
+        if self.ad_attributes:
+            d["ad_attributes"] = self.ad_attributes
+        return d
 
 
 @dataclass
 class ExtractedData:
-    """Holds all data extracted from a crawled page."""
+    """Holds ad-relevant data extracted from a crawled page."""
     title: str = ""
-    scripts: List[str] = field(default_factory=list)
-    iframes: List[str] = field(default_factory=list)
-    images: List[str] = field(default_factory=list)
-    links: List[str] = field(default_factory=list)
-    css_classes: List[str] = field(default_factory=list)
-    element_ids: List[str] = field(default_factory=list)
-    selectors: List[str] = field(default_factory=list)
+    scripts: List[str] = field(default_factory=list)       # External script URLs
+    iframes: List[str] = field(default_factory=list)       # Iframe src URLs
+    ad_elements: List[AdElement] = field(default_factory=list)  # DOM elements flagged as ad-related
 
     def to_dict(self) -> dict:
         """Convert to a plain dictionary for JSON serialization."""
@@ -34,29 +98,33 @@ class ExtractedData:
             "title": self.title,
             "scripts": self.scripts,
             "iframes": self.iframes,
-            "images": self.images,
-            "links": self.links,
-            "css_classes": self.css_classes,
-            "element_ids": self.element_ids,
-            "selectors": self.selectors,
+            "ad_elements": [el.to_dict() for el in self.ad_elements],
         }
 
 
 class PageExtractor:
-    """Extracts useful information from rendered HTML content."""
+    """Extracts ad-relevant information from rendered HTML content."""
 
-    def __init__(self, html: str):
+    def __init__(self, html: str, page_url: str = ""):
         """
         Initialize the extractor with raw HTML.
 
         Args:
             html: The rendered HTML string from the browser module.
+            page_url: The URL of the page (used to distinguish first-party vs third-party).
         """
         # Fallback: guard against None or non-string input
         if not html or not isinstance(html, str):
             logger.warning("Received empty or invalid HTML input, using empty document")
             html = ""
         self.soup = BeautifulSoup(html, "html.parser")
+        self.page_url = page_url
+        self._page_domain = ""
+        if page_url:
+            try:
+                self._page_domain = urlparse(page_url).hostname or ""
+            except Exception:
+                self._page_domain = ""
 
     def extract_all(self) -> ExtractedData:
         """
@@ -64,7 +132,7 @@ class PageExtractor:
         Each step is wrapped in try/except so one failure doesn't lose everything.
 
         Returns:
-            ExtractedData containing all extracted page information.
+            ExtractedData containing ad-relevant page information.
         """
         data = ExtractedData()
 
@@ -89,40 +157,12 @@ class PageExtractor:
             logger.warning(f"Failed to extract iframes: {e}")
             data.iframes = []
 
-        # --- images ---
+        # --- ad elements (class/ID/attribute-based) ---
         try:
-            data.images = self.extract_images()
+            data.ad_elements = self.extract_ad_elements()
         except Exception as e:
-            logger.warning(f"Failed to extract images: {e}")
-            data.images = []
-
-        # --- links ---
-        try:
-            data.links = self.extract_links()
-        except Exception as e:
-            logger.warning(f"Failed to extract links: {e}")
-            data.links = []
-
-        # --- css classes ---
-        try:
-            data.css_classes = self.extract_css_classes()
-        except Exception as e:
-            logger.warning(f"Failed to extract CSS classes: {e}")
-            data.css_classes = []
-
-        # --- element IDs ---
-        try:
-            data.element_ids = self.extract_element_ids()
-        except Exception as e:
-            logger.warning(f"Failed to extract element IDs: {e}")
-            data.element_ids = []
-
-        # --- selectors ---
-        try:
-            data.selectors = self.extract_selectors()
-        except Exception as e:
-            logger.warning(f"Failed to extract selectors: {e}")
-            data.selectors = []
+            logger.warning(f"Failed to extract ad elements: {e}")
+            data.ad_elements = []
 
         return data
 
@@ -144,7 +184,7 @@ class PageExtractor:
         for tag in self.soup.find_all("script", src=True):
             try:
                 src = tag.get("src", "").strip()
-                if src:
+                if src and not src.startswith("data:"):
                     scripts.append(src)
             except Exception as e:
                 logger.warning(f"Skipped broken <script> tag: {e}")
@@ -162,117 +202,136 @@ class PageExtractor:
         for tag in self.soup.find_all("iframe", src=True):
             try:
                 src = tag.get("src", "").strip()
-                if src:
+                if src and not src.startswith("data:") and not src.startswith("about:"):
                     iframes.append(src)
             except Exception as e:
                 logger.warning(f"Skipped broken <iframe> tag: {e}")
                 continue
         return iframes
 
-    def extract_images(self) -> List[str]:
+    def extract_ad_elements(self) -> List[AdElement]:
         """
-        Extract all image source URLs.
+        Scan the DOM for elements that look like ad containers.
 
-        Returns:
-            List of image src URLs found on the page.
+        Checks classes, IDs, and data-ad-* attributes against known ad patterns.
+        Returns elements with their CSS selector paths for direct use in adblock rules.
         """
-        images = []
-        for tag in self.soup.find_all("img", src=True):
-            try:
-                src = tag.get("src", "").strip()
-                if src:
-                    images.append(src)
-            except Exception as e:
-                logger.warning(f"Skipped broken <img> tag: {e}")
-                continue
-        return images
+        ad_elements: List[AdElement] = []
+        seen_selectors: set = set()
 
-    def extract_links(self) -> List[str]:
-        """
-        Extract all anchor href URLs.
-
-        Returns:
-            List of link href URLs found on the page.
-        """
-        links = []
-        for tag in self.soup.find_all("a", href=True):
-            try:
-                href = tag.get("href", "").strip()
-                if href:
-                    links.append(href)
-            except Exception as e:
-                logger.warning(f"Skipped broken <a> tag: {e}")
-                continue
-        return links
-
-    def extract_css_classes(self) -> List[str]:
-        """
-        Extract all unique CSS class names used on the page.
-
-        Returns:
-            Sorted list of unique CSS class names.
-        """
-        classes = set()
-        for tag in self.soup.find_all(True):  # all tags
-            try:
-                tag_classes = tag.get("class", [])
-                for cls in tag_classes:
-                    cls = cls.strip()
-                    if cls:
-                        classes.add(cls)
-            except Exception as e:
-                logger.warning(f"Skipped tag while extracting classes: {e}")
-                continue
-        return sorted(classes)
-
-    def extract_element_ids(self) -> List[str]:
-        """
-        Extract all unique element IDs used on the page.
-
-        Returns:
-            Sorted list of unique element IDs.
-        """
-        ids = set()
-        for tag in self.soup.find_all(True, id=True):
-            try:
-                element_id = tag.get("id", "").strip()
-                if element_id:
-                    ids.add(element_id)
-            except Exception as e:
-                logger.warning(f"Skipped tag while extracting IDs: {e}")
-                continue
-        return sorted(ids)
-
-    def extract_selectors(self) -> List[str]:
-        """
-        Build basic CSS selectors from elements that have an id or class.
-
-        Generates selectors like:
-          - 'div#main-content'
-          - 'div.ad-banner'
-          - 'iframe.ad-frame'
-
-        Returns:
-            Sorted list of unique CSS selectors.
-        """
-        selectors = set()
         for tag in self.soup.find_all(True):
-            try:
-                tag_name = tag.name
-
-                # selector by ID
-                element_id = tag.get("id", "").strip()
-                if element_id:
-                    selectors.add(f"{tag_name}#{element_id}")
-
-                # selectors by class
-                tag_classes = tag.get("class", [])
-                for cls in tag_classes:
-                    cls = cls.strip()
-                    if cls:
-                        selectors.add(f"{tag_name}.{cls}")
-            except Exception as e:
-                logger.warning(f"Skipped tag while building selectors: {e}")
+            if not isinstance(tag, Tag):
                 continue
 
-        return sorted(selectors)
+            tag_name = tag.name
+            # Skip non-visual / structural tags
+            if tag_name in ("html", "head", "body", "meta", "link", "title",
+                            "style", "script", "noscript"):
+                continue
+
+            element_id = (tag.get("id") or "").strip()
+            tag_classes = tag.get("class", [])
+            if isinstance(tag_classes, str):
+                tag_classes = tag_classes.split()
+
+            reasons = []
+
+            # Check ID against ad patterns
+            if element_id:
+                for pattern in AD_CLASS_ID_PATTERNS:
+                    if pattern.search(element_id):
+                        reasons.append(f"id '{element_id}' matches ad pattern")
+                        break
+
+            # Check classes against ad patterns
+            matched_classes = []
+            for cls in tag_classes:
+                for pattern in AD_CLASS_ID_PATTERNS:
+                    if pattern.search(cls):
+                        matched_classes.append(cls)
+                        break
+            if matched_classes:
+                reasons.append(f"class '{', '.join(matched_classes)}' matches ad pattern")
+
+            # Check for ad data attributes
+            ad_attrs = {}
+            for attr_name in AD_DATA_ATTRIBUTES:
+                val = tag.get(attr_name)
+                if val is not None:
+                    ad_attrs[attr_name] = str(val)
+            # Also check any data-ad-* attribute not in the explicit list
+            for attr_name in tag.attrs:
+                if isinstance(attr_name, str) and attr_name.startswith("data-ad-") and attr_name not in ad_attrs:
+                    ad_attrs[attr_name] = str(tag[attr_name])
+
+            if ad_attrs:
+                reasons.append(f"has ad data attributes: {', '.join(ad_attrs.keys())}")
+
+            # Check for <ins class="adsbygoogle"> (AdSense)
+            if tag_name == "ins" and "adsbygoogle" in tag_classes:
+                if not reasons:
+                    reasons.append("AdSense <ins> element")
+
+            # Check for <amp-ad>
+            if tag_name == "amp-ad":
+                reasons.append("AMP ad component")
+
+            if not reasons:
+                continue
+
+            # Build CSS selector
+            selector = self._build_selector(tag, element_id, tag_classes)
+
+            # Skip duplicates
+            if selector in seen_selectors:
+                continue
+            seen_selectors.add(selector)
+
+            # Get outer HTML snippet (truncated)
+            try:
+                outer_html = str(tag)
+                # Only keep the opening tag for the snippet
+                if ">" in outer_html:
+                    opening_end = outer_html.index(">") + 1
+                    snippet = outer_html[:min(opening_end, 200)]
+                else:
+                    snippet = outer_html[:200]
+            except Exception:
+                snippet = ""
+
+            ad_elements.append(AdElement(
+                tag=tag_name,
+                selector=selector,
+                reason="; ".join(reasons),
+                classes=list(tag_classes),
+                element_id=element_id,
+                outer_html_snippet=snippet,
+                ad_attributes=ad_attrs,
+            ))
+
+        return ad_elements
+
+    def _build_selector(self, tag: Tag, element_id: str, classes: List[str]) -> str:
+        """
+        Build a CSS selector for the element.
+        Prefers ID-based selectors (most specific), falls back to class-based.
+        """
+        tag_name = tag.name
+
+        if element_id:
+            return f"{tag_name}#{element_id}"
+
+        if classes:
+            # Use only the ad-related classes to keep the selector meaningful
+            ad_classes = []
+            for cls in classes:
+                for pattern in AD_CLASS_ID_PATTERNS:
+                    if pattern.search(cls):
+                        ad_classes.append(cls)
+                        break
+            if ad_classes:
+                return f"{tag_name}.{'.'.join(ad_classes)}"
+            # Fall back to first class
+            return f"{tag_name}.{classes[0]}"
+
+        return tag_name

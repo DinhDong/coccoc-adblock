@@ -1,15 +1,13 @@
-#Finds possible ad-related signals:
-#check for ad-related keywords
-#flag suspicious scripts
-#flag suspicious iframes
-#flag suspicious CSS classes
-#flag suspicious IDs
-#flag common ad-like elements
+# Analyses crawl data and produces grouped, actionable ad candidates.
+#
+# Input: extracted page data + captured network requests
+# Output: ad_candidates with suggested adblock rules, grouped by domain/element
 
 
 import re
+from collections import defaultdict
 from dataclasses import dataclass, field, asdict
-from typing import Optional
+from typing import List, Optional
 from urllib.parse import urlparse
 
 
@@ -18,48 +16,64 @@ from urllib.parse import urlparse
 # ---------------------------------------------------------------------------
 
 @dataclass
-class AdSignal:
-    """Represents a single detected ad signal on a page."""
-    type: str          # "script" | "iframe" | "element" | "keyword" | "network"
-    value: str         # The URL, selector, or raw value that triggered detection
-    reason: str        # Human-readable explanation of why this was flagged
-    confidence: str = "high"   # "high" | "medium" | "low"
-    metadata: dict = field(default_factory=dict)
+class AdCandidate:
+    """A single detected ad candidate — ready for rule generation."""
+    category: str          # "ad_network_request", "ad_container", "tracking_script", "ad_iframe"
+    confidence: str        # "high", "medium", "low"
+    suggested_rule: str    # Draft adblock rule, e.g. "||doubleclick.net^" or "example.com##div.ad-slot"
+    reason: str            # Human-readable explanation
+    domain: str = ""       # For network-based candidates: the third-party domain
+    urls: List[str] = field(default_factory=list)      # URLs that triggered this candidate
+    selector: str = ""     # For element-based candidates: the CSS selector
+    element_snippet: str = ""  # Truncated HTML for context
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        d = {
+            "category": self.category,
+            "confidence": self.confidence,
+            "suggested_rule": self.suggested_rule,
+            "reason": self.reason,
+        }
+        if self.domain:
+            d["domain"] = self.domain
+        if self.urls:
+            d["urls"] = self.urls
+        if self.selector:
+            d["selector"] = self.selector
+        if self.element_snippet:
+            d["element_snippet"] = self.element_snippet
+        return d
 
 
 @dataclass
 class DetectionResult:
-    """Full detection result for a crawled page, passed to storage.py."""
+    """Full detection result for a crawled page."""
     url: str
-    ad_signals: list[AdSignal]
+    ad_candidates: List[AdCandidate]
     has_ads: bool
-    signal_count: int
-    errors: list[str]
+    summary: dict
+    errors: List[str]
 
     def to_dict(self) -> dict:
         return {
             "url": self.url,
-            "ad_signals": [s.to_dict() for s in self.ad_signals],
+            "ad_candidates": [c.to_dict() for c in self.ad_candidates],
             "has_ads": self.has_ads,
-            "signal_count": self.signal_count,
+            "summary": self.summary,
             "errors": self.errors,
         }
 
 
 # ---------------------------------------------------------------------------
-# Detection rules
+# Known ad network domains
 # ---------------------------------------------------------------------------
 
-# Known ad network domains (partial match against script/iframe URLs)
 AD_NETWORK_DOMAINS = [
     "doubleclick.net",
     "googlesyndication.com",
     "googletagmanager.com",
     "googletagservices.com",
-    "adnxs.com",           # AppNexus / Xandr
+    "adnxs.com",
     "moatads.com",
     "taboola.com",
     "outbrain.com",
@@ -71,108 +85,58 @@ AD_NETWORK_DOMAINS = [
     "adform.net",
     "media.net",
     "amazon-adsystem.com",
-    "adsrvr.org",          # The Trade Desk
+    "adsrvr.org",
     "advertising.com",
     "yieldmo.com",
     "sharethrough.com",
     "triplelift.com",
     "sovrn.com",
-    "ads.example.com",     # From spec example
-    "adnetwork.example.com",
+    "33across.com",
+    "indexexchange.com",
+    "casalemedia.com",
+    "bidswitch.net",
+    "adsafeprotected.com",
+    "serving-sys.com",
+    "ssp.yahoo.com",
+    "contextweb.com",
 ]
 
-# Keywords found in script/iframe URLs that strongly indicate ads
-AD_URL_KEYWORDS = [
-    "ad", "ads", "adserver", "adservice", "adunit", "adslot",
-    "banner", "sponsor", "promo", "promotion",
-    "tracking", "tracker", "pixel", "beacon",
-    "affiliate", "click", "impression", "monetize",
+# Tracking / analytics domains (separate from ads — lower confidence)
+TRACKING_DOMAINS = [
+    "google-analytics.com",
+    "googletagmanager.com",
+    "facebook.net",
+    "hotjar.com",
+    "mouseflow.com",
+    "clarity.ms",
+    "segment.io",
+    "mixpanel.com",
+    "amplitude.com",
+]
+
+# Domains that are NOT ads — suppress false positives
+SAFE_DOMAINS = [
+    "cloudflareinsights.com",   # Cloudflare analytics (not ads)
+    "cloudflare.com",
+    "googleapis.com",           # Google Fonts, APIs
+    "gstatic.com",              # Google static content
+    "jquery.com",
+    "jsdelivr.net",
+    "cdnjs.cloudflare.com",
+    "unpkg.com",
+    "wordpress.org",
+    "wp.com",
+    "gravatar.com",
+    "fonts.googleapis.com",
+    "fonts.gstatic.com",
+]
+
+# Ad-related URL path keywords (must appear in path/query, not just hostname)
+AD_URL_PATH_KEYWORDS = [
+    "adserver", "adservice", "adunit", "adslot", "ad-slot",
+    "pagead", "show_ads", "ad_iframe",
     "prebid", "dfp", "gpt", "adsense",
     "interstitial", "popup", "popunder",
-    "retarget", "remarketing",
-]
-
-# Suspicious CSS class names that strongly suggest ad containers
-AD_CSS_CLASSES = [
-    "ad", "ads", "ad-unit", "ad-slot", "ad-container", "ad-wrapper",
-    "ad-banner", "ad-box", "ad-block", "ad-frame", "ad-label",
-    "advertisement", "advertising", "advertorial",
-    "adsbygoogle",                   # Google AdSense
-    "dfp-ad", "dfp-slot",            # Google DFP / GAM
-    "gpt-ad",                        # Google Publisher Tag
-    "sponsor", "sponsored", "sponsorship", "sponsored-content",
-    "promo", "promotion", "promoted",
-    "banner", "leaderboard", "skyscraper", "interstitial",
-    "mpu", "mrec", "halfpage",       # IAB standard ad sizes
-    "prebid", "header-bid",
-    "taboola-ad", "outbrain-widget",
-    "native-ad", "native-advert",
-    "text-ad", "text-link-ad",
-]
-
-# Suspicious HTML element IDs that suggest ad placement slots
-AD_SUSPICIOUS_IDS = [
-    "ad", "ads", "ad-unit", "ad-slot", "ad-container", "ad-wrapper",
-    "ad-top", "ad-bottom", "ad-left", "ad-right", "ad-sidebar",
-    "ad-header", "ad-footer", "ad-banner", "ad-leaderboard",
-    "advertisement", "advertise",
-    "google-ad", "google_ads", "google-ads-container",
-    "dfp", "dfp-ad", "gpt-ad",
-    "sponsor", "sponsor-box", "sponsored",
-    "banner", "banner-ad",
-    "taboola", "outbrain",
-    "div-gpt-ad",                    # Google Publisher Tag slot naming pattern
-]
-
-# Common HTML elements / patterns that signal ad placements
-AD_ELEMENT_PATTERNS = [
-    # <ins class="adsbygoogle"> — AdSense standard unit
-    (re.compile(r'<ins\b[^>]*adsbygoogle', re.I),
-     "AdSense <ins> ad unit element"),
-
-    # Google Publisher Tag slot divs: <div id="div-gpt-ad-...">
-    (re.compile(r'<div\b[^>]*id=["\']div-gpt-ad', re.I),
-     "Google Publisher Tag ad slot div"),
-
-    # data-ad-* attributes on any element
-    (re.compile(r'\bdata-ad-\w+', re.I),
-     "Element with data-ad-* attribute (ad configuration)"),
-
-    # <iframe> with known ad sizing (standard IAB ad dimensions)
-    (re.compile(r'<iframe\b[^>]*(?:width=["\'](?:728|300|160|320|970)["\']'
-                r'|height=["\'](?:90|250|600|50|90)["\'])', re.I),
-     "iframe with standard IAB ad dimensions"),
-
-    # Sticky/fixed positioned ad wrappers
-    (re.compile(r'position\s*:\s*(?:fixed|sticky)[^}]*ad', re.I),
-     "Fixed/sticky positioned ad element"),
-
-    # <amp-ad> — AMP pages ad component
-    (re.compile(r'<amp-ad\b', re.I),
-     "AMP ad component (<amp-ad>)"),
-
-    # Taboola widget container
-    (re.compile(r'<div\b[^>]*id=["\']taboola', re.I),
-     "Taboola widget container element"),
-
-    # Outbrain widget
-    (re.compile(r'<div\b[^>]*class=["\'][^"\']*OUTBRAIN', re.I),
-     "Outbrain widget element"),
-]
-
-# Regex patterns for inline HTML / page content signals
-AD_CONTENT_PATTERNS = [
-    (re.compile(r'\bwindow\.__googletag\b', re.I),       "Google Publisher Tag (GPT) initialisation"),
-    (re.compile(r'\bgoogletag\.cmd\b', re.I),             "Google Publisher Tag command queue"),
-    (re.compile(r'\bpbjs\b', re.I),                       "Prebid.js header bidding library"),
-    (re.compile(r'\badfree\s*=\s*false\b', re.I),         "Explicit ad-enabled flag"),
-    (re.compile(r'\badsense\b', re.I),                    "Google AdSense reference"),
-    (re.compile(r'data-ad-client', re.I),                 "AdSense data-ad-client attribute"),
-    (re.compile(r'data-ad-slot', re.I),                   "AdSense data-ad-slot attribute"),
-    (re.compile(r'\b_taboola\b', re.I),                   "Taboola widget initialisation"),
-    (re.compile(r'\boutbrain\b', re.I),                   "Outbrain widget reference"),
-    (re.compile(r'amazon-adsystem', re.I),                "Amazon Advertising pixel"),
-    (re.compile(r'<ins\s[^>]*class=["\'][^"\']*adsbygoogle', re.I), "AdSense <ins> ad unit"),
 ]
 
 
@@ -182,262 +146,315 @@ AD_CONTENT_PATTERNS = [
 
 class AdDetector:
     """
-    Analyses data extracted by extractor.py and returns a DetectionResult.
+    Analyses extracted data + network requests to produce AdCandidates.
 
-    Expected input format (matches extractor.py output):
+    Expected input:
     {
         "url": "https://example.com",
-        "scripts": ["https://...", ...],
-        "iframes": ["https://...", ...],
-        "html": "<html>...</html>",          # optional raw HTML
-        "meta": { ... }                      # optional page metadata
+        "scripts": [...],
+        "iframes": [...],
+        "ad_elements": [...],           # From extractor's ad element scan
+        "network_requests": [...],      # From browser's request capture
     }
     """
 
-    def __init__(self, custom_domains: Optional[list[str]] = None,
-                 custom_keywords: Optional[list[str]] = None):
+    def __init__(self, custom_domains: Optional[List[str]] = None):
         self.ad_domains = AD_NETWORK_DOMAINS + (custom_domains or [])
-        self.ad_keywords = AD_URL_KEYWORDS + (custom_keywords or [])
-
-    # ------------------------------------------------------------------
-    # Public entry point
-    # ------------------------------------------------------------------
 
     def detect(self, extracted_data: dict) -> DetectionResult:
         """
-        Main method. Pass the dict from extractor.py, receive DetectionResult.
-
-        Returns DetectionResult whose .to_dict() matches the crawl result JSON
-        schema (ad_signals array with type/value/reason fields).
+        Main method. Pass the combined dict from extractor + browser, receive DetectionResult.
         """
         url = extracted_data.get("url", "")
+        network_requests = extracted_data.get("network_requests", [])
+        ad_elements = extracted_data.get("ad_elements", [])
         scripts = extracted_data.get("scripts", [])
         iframes = extracted_data.get("iframes", [])
-        html = extracted_data.get("html", "")
-        errors: list[str] = []
-        signals: list[AdSignal] = []
+        errors: List[str] = []
+        candidates: List[AdCandidate] = []
 
+        page_domain = ""
         try:
-            signals += self._check_scripts(scripts)
-        except Exception as exc:
-            errors.append(f"script_check_error: {exc}")
+            page_domain = urlparse(url).hostname or ""
+        except Exception:
+            pass
 
+        # 1. Analyse network requests — group by third-party domain
         try:
-            signals += self._check_iframes(iframes)
+            candidates += self._analyse_network_requests(network_requests, page_domain, url)
         except Exception as exc:
-            errors.append(f"iframe_check_error: {exc}")
+            errors.append(f"network_analysis_error: {exc}")
 
+        # 2. Analyse ad elements from the DOM
         try:
-            if html:
-                signals += self._check_html_content(html)
+            candidates += self._analyse_ad_elements(ad_elements, url)
         except Exception as exc:
-            errors.append(f"html_check_error: {exc}")
+            errors.append(f"ad_element_analysis_error: {exc}")
 
+        # 3. Analyse script URLs (from HTML parsing — backup for network capture)
         try:
-            if html:
-                signals += self._check_css_classes(html)
+            candidates += self._analyse_script_urls(scripts, page_domain, url)
         except Exception as exc:
-            errors.append(f"css_class_check_error: {exc}")
+            errors.append(f"script_analysis_error: {exc}")
 
+        # 4. Analyse iframe URLs
         try:
-            if html:
-                signals += self._check_suspicious_ids(html)
+            candidates += self._analyse_iframe_urls(iframes, page_domain, url)
         except Exception as exc:
-            errors.append(f"id_check_error: {exc}")
+            errors.append(f"iframe_analysis_error: {exc}")
 
-        try:
-            if html:
-                signals += self._check_ad_elements(html)
-        except Exception as exc:
-            errors.append(f"element_check_error: {exc}")
+        # Deduplicate candidates
+        candidates = self._deduplicate(candidates)
 
-        # Deduplicate by (type, value) to avoid noise from repeated URLs
-        signals = self._deduplicate(signals)
+        # Build summary
+        ad_networks = sorted(set(c.domain for c in candidates if c.domain))
+        confidence_breakdown = {"high": 0, "medium": 0, "low": 0}
+        for c in candidates:
+            confidence_breakdown[c.confidence] = confidence_breakdown.get(c.confidence, 0) + 1
+
+        summary = {
+            "ad_networks_found": ad_networks,
+            "ad_containers_found": sum(1 for c in candidates if c.category == "ad_container"),
+            "suggested_rules_count": len(candidates),
+            "confidence_breakdown": confidence_breakdown,
+        }
 
         return DetectionResult(
             url=url,
-            ad_signals=signals,
-            has_ads=len(signals) > 0,
-            signal_count=len(signals),
+            ad_candidates=candidates,
+            has_ads=len(candidates) > 0,
+            summary=summary,
             errors=errors,
         )
 
     # ------------------------------------------------------------------
-    # Private checkers
+    # Analysis methods
     # ------------------------------------------------------------------
 
-    def _check_scripts(self, scripts: list[str]) -> list[AdSignal]:
-        """Inspect script URLs for ad network domains and keywords."""
-        signals = []
+    def _analyse_network_requests(self, requests: list, page_domain: str, page_url: str) -> List[AdCandidate]:
+        """Group third-party network requests by domain and identify ad networks."""
+        candidates = []
+
+        # Group requests by domain
+        domain_requests: dict[str, list] = defaultdict(list)
+        for req in requests:
+            req_url = req.get("url", "") if isinstance(req, dict) else getattr(req, "url", "")
+            if not req_url or req_url.startswith("data:"):
+                continue
+            try:
+                req_host = urlparse(req_url).hostname or ""
+            except Exception:
+                continue
+
+            # Skip first-party requests
+            if req_host and page_domain and (
+                req_host == page_domain or
+                req_host.endswith("." + page_domain) or
+                page_domain.endswith("." + req_host)
+            ):
+                continue
+
+            # Skip safe domains
+            if any(safe in req_host for safe in SAFE_DOMAINS):
+                continue
+
+            domain_requests[req_host].append(req_url)
+
+        # Check each third-party domain
+        for domain, urls in domain_requests.items():
+            ad_match = self._match_ad_domain(domain)
+            if ad_match:
+                # Known ad network — high confidence
+                candidates.append(AdCandidate(
+                    category="ad_network_request",
+                    confidence="high",
+                    suggested_rule=f"||{ad_match}^",
+                    reason=f"Requests to known ad network '{ad_match}' ({len(urls)} requests)",
+                    domain=ad_match,
+                    urls=urls[:5],  # Cap at 5 example URLs
+                ))
+            elif self._has_ad_path_keywords(urls):
+                # URL paths suggest ad traffic
+                candidates.append(AdCandidate(
+                    category="ad_network_request",
+                    confidence="medium",
+                    suggested_rule=f"||{domain}^",
+                    reason=f"URL paths contain ad-related keywords ({len(urls)} requests)",
+                    domain=domain,
+                    urls=urls[:5],
+                ))
+            elif any(t in domain for t in TRACKING_DOMAINS):
+                # Tracking domain
+                candidates.append(AdCandidate(
+                    category="tracking_script",
+                    confidence="medium",
+                    suggested_rule=f"||{domain}^",
+                    reason=f"Known tracking/analytics domain ({len(urls)} requests)",
+                    domain=domain,
+                    urls=urls[:3],
+                ))
+
+        return candidates
+
+    def _analyse_ad_elements(self, ad_elements: list, page_url: str) -> List[AdCandidate]:
+        """Convert ad elements from the extractor into ad candidates."""
+        candidates = []
+        page_domain = ""
+        try:
+            page_domain = urlparse(page_url).hostname or ""
+            # Strip www. for cleaner rules
+            if page_domain.startswith("www."):
+                page_domain = page_domain[4:]
+        except Exception:
+            pass
+
+        for elem in ad_elements:
+            if isinstance(elem, dict):
+                selector = elem.get("selector", "")
+                reason = elem.get("reason", "")
+                element_id = elem.get("element_id", "")
+                snippet = elem.get("outer_html_snippet", "")
+                ad_attrs = elem.get("ad_attributes", {})
+            else:
+                selector = getattr(elem, "selector", "")
+                reason = getattr(elem, "reason", "")
+                element_id = getattr(elem, "element_id", "")
+                snippet = getattr(elem, "outer_html_snippet", "")
+                ad_attrs = getattr(elem, "ad_attributes", {})
+
+            if not selector:
+                continue
+
+            # Determine confidence based on signals
+            confidence = "medium"
+            if ad_attrs:  # Has data-ad-* attributes — very strong signal
+                confidence = "high"
+            if element_id and re.search(r'gpt-ad|adsense|adsbygoogle', element_id, re.I):
+                confidence = "high"
+
+            # Build suggested rule
+            if element_id:
+                suggested_rule = f"{page_domain}###{element_id}"
+            else:
+                suggested_rule = f"{page_domain}##{selector}"
+
+            candidates.append(AdCandidate(
+                category="ad_container",
+                confidence=confidence,
+                suggested_rule=suggested_rule,
+                reason=reason,
+                selector=selector,
+                element_snippet=snippet,
+            ))
+
+        return candidates
+
+    def _analyse_script_urls(self, scripts: list, page_domain: str, page_url: str) -> List[AdCandidate]:
+        """Check script src URLs against ad network domains (backup for network capture)."""
+        candidates = []
         for src in scripts:
             if not isinstance(src, str) or not src.strip():
                 continue
 
-            domain_match = self._match_ad_domain(src)
-            if domain_match:
-                signals.append(AdSignal(
-                    type="script",
-                    value=src,
-                    reason=f"script src matches known ad network domain ({domain_match})",
+            try:
+                host = urlparse(src).hostname or ""
+            except Exception:
+                continue
+
+            # Skip first-party
+            if host and page_domain and (
+                host == page_domain or host.endswith("." + page_domain)
+            ):
+                continue
+
+            # Skip safe domains
+            if any(safe in host for safe in SAFE_DOMAINS):
+                continue
+
+            ad_match = self._match_ad_domain(host)
+            if ad_match:
+                candidates.append(AdCandidate(
+                    category="ad_network_request",
                     confidence="high",
-                ))
-                continue  # domain match is definitive; skip keyword check
-
-            keyword_match = self._match_ad_keyword_in_url(src)
-            if keyword_match:
-                signals.append(AdSignal(
-                    type="script",
-                    value=src,
-                    reason=f"contains ad keyword",
-                    confidence="medium",
-                    metadata={"matched_keyword": keyword_match},
+                    suggested_rule=f"||{ad_match}^",
+                    reason=f"Script from known ad network '{ad_match}'",
+                    domain=ad_match,
+                    urls=[src],
                 ))
 
-        return signals
+        return candidates
 
-    def _check_iframes(self, iframes: list[str]) -> list[AdSignal]:
-        """Inspect iframe src URLs for ad network domains and keywords."""
-        signals = []
+    def _analyse_iframe_urls(self, iframes: list, page_domain: str, page_url: str) -> List[AdCandidate]:
+        """Check iframe src URLs against ad network domains."""
+        candidates = []
         for src in iframes:
             if not isinstance(src, str) or not src.strip():
                 continue
 
-            domain_match = self._match_ad_domain(src)
-            if domain_match:
-                signals.append(AdSignal(
-                    type="iframe",
-                    value=src,
-                    reason=f"iframe src matches known ad network domain ({domain_match})",
-                    confidence="high",
-                ))
+            try:
+                host = urlparse(src).hostname or ""
+            except Exception:
                 continue
 
-            keyword_match = self._match_ad_keyword_in_url(src)
-            if keyword_match:
-                signals.append(AdSignal(
-                    type="iframe",
-                    value=src,
-                    reason=f"contains ad keyword",
-                    confidence="medium",
-                    metadata={"matched_keyword": keyword_match},
-                ))
+            # Skip first-party
+            if host and page_domain and (
+                host == page_domain or host.endswith("." + page_domain)
+            ):
+                continue
 
-        return signals
-
-    def _check_html_content(self, html: str) -> list[AdSignal]:
-        """Scan raw HTML for inline ad patterns (GPT, Prebid, AdSense, etc.)."""
-        signals = []
-        for pattern, reason in AD_CONTENT_PATTERNS:
-            if pattern.search(html):
-                signals.append(AdSignal(
-                    type="keyword",
-                    value=pattern.pattern,
-                    reason=reason,
-                    confidence="medium",
-                ))
-        return signals
-
-    def _check_css_classes(self, html: str) -> list[AdSignal]:
-        """Scan HTML for elements whose class attribute contains known ad class names."""
-        signals = []
-        # Extract all class attribute values from the HTML
-        class_attrs = re.findall(r'class=["\']([^"\']+)["\']', html, re.I)
-        found_classes: set[str] = set()
-        for attr_value in class_attrs:
-            classes = attr_value.lower().split()
-            for cls in classes:
-                cls_clean = cls.strip(".-_")
-                for ad_class in AD_CSS_CLASSES:
-                    if cls_clean == ad_class.lower() and ad_class not in found_classes:
-                        found_classes.add(ad_class)
-                        signals.append(AdSignal(
-                            type="css_class",
-                            value=f".{ad_class}",
-                            reason=f"suspicious CSS class '{ad_class}' suggests ad container",
-                            confidence="medium",
-                        ))
-        return signals
-
-    def _check_suspicious_ids(self, html: str) -> list[AdSignal]:
-        """Scan HTML for element IDs that match known ad slot naming patterns."""
-        signals = []
-        # Extract all id attribute values
-        id_attrs = re.findall(r'\bid=["\']([^"\']+)["\']', html, re.I)
-        found_ids: set[str] = set()
-        for id_value in id_attrs:
-            id_lower = id_value.lower()
-            # Exact match against known ad IDs
-            for ad_id in AD_SUSPICIOUS_IDS:
-                if id_lower == ad_id.lower() and ad_id not in found_ids:
-                    found_ids.add(ad_id)
-                    signals.append(AdSignal(
-                        type="element_id",
-                        value=f"#{ad_id}",
-                        reason=f"suspicious element ID '#{ad_id}' suggests ad slot",
-                        confidence="medium",
-                    ))
-                    break
-            # Also catch GPT pattern: div-gpt-ad-XXXXXXXXXX-0
-            if re.match(r'div-gpt-ad', id_lower) and id_value not in found_ids:
-                found_ids.add(id_value)
-                signals.append(AdSignal(
-                    type="element_id",
-                    value=f"#{id_value}",
-                    reason="Google Publisher Tag slot ID pattern (div-gpt-ad-*)",
+            ad_match = self._match_ad_domain(host)
+            if ad_match:
+                candidates.append(AdCandidate(
+                    category="ad_iframe",
                     confidence="high",
+                    suggested_rule=f"||{ad_match}^",
+                    reason=f"Iframe from known ad network '{ad_match}'",
+                    domain=ad_match,
+                    urls=[src],
                 ))
-        return signals
+            elif any(kw in src.lower() for kw in AD_URL_PATH_KEYWORDS):
+                candidates.append(AdCandidate(
+                    category="ad_iframe",
+                    confidence="medium",
+                    suggested_rule=f"||{host}^",
+                    reason=f"Iframe URL contains ad-related keywords",
+                    domain=host,
+                    urls=[src],
+                ))
 
-    def _check_ad_elements(self, html: str) -> list[AdSignal]:
-        """Scan HTML for common ad-placement elements and structural patterns."""
-        signals = []
-        for pattern, reason in AD_ELEMENT_PATTERNS:
-            match = pattern.search(html)
-            if match:
-                signals.append(AdSignal(
-                    type="element",
-                    value=match.group(0)[:120],  # truncate long matches
-                    reason=reason,
-                    confidence="high",
-                ))
-        return signals
+        return candidates
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
-    def _match_ad_domain(self, url: str) -> Optional[str]:
+    def _match_ad_domain(self, hostname: str) -> Optional[str]:
         """Return the matched ad domain string, or None."""
-        try:
-            hostname = urlparse(url).hostname or ""
-        except Exception:
-            hostname = url
         hostname = hostname.lower()
         for domain in self.ad_domains:
-            if domain in hostname:
+            if hostname == domain or hostname.endswith("." + domain):
                 return domain
         return None
 
-    def _match_ad_keyword_in_url(self, url: str) -> Optional[str]:
-        """Return the first matched ad keyword found in the URL path/query, or None."""
-        url_lower = url.lower()
-        for keyword in self.ad_keywords:
-            # Match keyword as a whole word segment (between slashes, dots, dashes, etc.)
-            pattern = rf'(?<![a-z]){re.escape(keyword)}(?![a-z])'
-            if re.search(pattern, url_lower):
-                return keyword
-        return None
+    def _has_ad_path_keywords(self, urls: list) -> bool:
+        """Check if any URLs in the list have ad-related path keywords."""
+        for url in urls:
+            url_lower = url.lower()
+            for kw in AD_URL_PATH_KEYWORDS:
+                if kw in url_lower:
+                    return True
+        return False
 
     @staticmethod
-    def _deduplicate(signals: list[AdSignal]) -> list[AdSignal]:
-        """Remove duplicate signals with the same (type, value) pair."""
-        seen: set[tuple] = set()
+    def _deduplicate(candidates: List[AdCandidate]) -> List[AdCandidate]:
+        """Remove duplicate candidates with the same suggested_rule."""
+        seen: set = set()
         unique = []
-        for s in signals:
-            key = (s.type, s.value)
+        for c in candidates:
+            key = c.suggested_rule
             if key not in seen:
                 seen.add(key)
-                unique.append(s)
+                unique.append(c)
         return unique
 
 
@@ -446,58 +463,61 @@ class AdDetector:
 # ---------------------------------------------------------------------------
 
 def detect_ads(extracted_data: dict,
-               custom_domains: Optional[list[str]] = None,
-               custom_keywords: Optional[list[str]] = None) -> dict:
+               custom_domains: Optional[List[str]] = None) -> dict:
     """
     Convenience wrapper used by crawler_service.py in the pipeline.
 
     Usage:
-        from backend.app.crawler.detector import detect_ads
+        from app.crawler.detector import detect_ads
         result = detect_ads(extractor_output)
-        # result["ad_signals"] → list of {type, value, reason, confidence}
 
-    Returns a plain dict (JSON-serialisable) matching the crawl result schema.
+    Returns a plain dict (JSON-serialisable) with ad_candidates and summary.
     """
-    detector = AdDetector(custom_domains=custom_domains,
-                          custom_keywords=custom_keywords)
+    detector = AdDetector(custom_domains=custom_domains)
     return detector.detect(extracted_data).to_dict()
 
 
 # ---------------------------------------------------------------------------
-# Quick smoke-test (run: python detector.py)
+# Quick smoke-test (run: python -m app.crawler.detector)
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     import json
 
-    sample_extractor_output = {
+    sample_data = {
         "url": "https://example-news.com",
         "scripts": [
             "https://example-news.com/main.js",
-            "https://ads.example.com/banner.js",          # should be flagged
-            "https://www.googletagmanager.com/gtm.js",    # should be flagged
+            "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js",
         ],
         "iframes": [
-            "https://adnetwork.example.com/ad.html",      # should be flagged
+            "https://ad.doubleclick.net/ad.html",
         ],
-        "html": """
-            <html>
-            <head>
-              <script>googletag.cmd.push(function() {});</script>
-            </head>
-            <body>
-              <!-- CSS class signal -->
-              <div class="ad-container sponsored">Sponsored content here</div>
-              <!-- ID signal -->
-              <div id="div-gpt-ad-1234567890-0"></div>
-              <!-- AdSense element signal -->
-              <ins class="adsbygoogle" data-ad-slot="1234" data-ad-client="ca-pub-xxx"></ins>
-              <!-- AMP ad element -->
-              <amp-ad width="728" height="90" type="adsense"></amp-ad>
-            </body>
-            </html>
-        """,
+        "ad_elements": [
+            {
+                "tag": "div",
+                "selector": "div#div-gpt-ad-1234567890-0",
+                "reason": "id 'div-gpt-ad-1234567890-0' matches ad pattern",
+                "element_id": "div-gpt-ad-1234567890-0",
+                "outer_html_snippet": '<div id="div-gpt-ad-1234567890-0">',
+                "ad_attributes": {},
+            },
+            {
+                "tag": "ins",
+                "selector": "ins.adsbygoogle",
+                "reason": "class 'adsbygoogle' matches ad pattern",
+                "element_id": "",
+                "outer_html_snippet": '<ins class="adsbygoogle" data-ad-slot="1234">',
+                "ad_attributes": {"data-ad-slot": "1234", "data-ad-client": "ca-pub-xxx"},
+            },
+        ],
+        "network_requests": [
+            {"url": "https://example-news.com/main.js", "resource_type": "script"},
+            {"url": "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js", "resource_type": "script"},
+            {"url": "https://ad.doubleclick.net/ddm/activity", "resource_type": "xhr"},
+            {"url": "https://static.cloudflareinsights.com/beacon.min.js", "resource_type": "script"},
+        ],
     }
 
-    result = detect_ads(sample_extractor_output)
+    result = detect_ads(sample_data)
     print(json.dumps(result, indent=2))

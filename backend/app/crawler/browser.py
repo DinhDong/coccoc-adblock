@@ -4,18 +4,34 @@
 # scroll the page
 # capture screenshot
 # collect rendered HTML
+# capture network requests
 # handle timeout or page errors
 
 """Browser automation helpers using Playwright."""
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT_MS = 30_000
+
+
+@dataclass
+class CapturedRequest:
+    """A single network request captured during page load."""
+    url: str
+    resource_type: str   # "script", "stylesheet", "image", "xhr", "fetch", "document", etc.
+    method: str = "GET"
+
+    def to_dict(self) -> dict:
+        return {
+            "url": self.url,
+            "resource_type": self.resource_type,
+            "method": self.method,
+        }
 
 
 @dataclass
@@ -28,6 +44,7 @@ class RenderResult:
     screenshot_path: str = ""
     error: str = ""
     elapsed_ms: int = 0
+    captured_requests: List[CapturedRequest] = field(default_factory=list)
 
 
 def _import_playwright() -> Any:
@@ -67,6 +84,8 @@ def render_url(
     scroll_step: int = 1000,
     max_scrolls: int = 30,
     network_idle_timeout_ms: Optional[int] = None,
+    capture_requests: bool = True,
+    page_load_delay_ms: int = 3000,
 ) -> RenderResult:
     """Render a URL in Playwright and return the rendered page data."""
     sync_playwright, PlaywrightError, PlaywrightTimeoutError = _import_playwright()
@@ -79,10 +98,36 @@ def render_url(
             context = browser.new_context()
             page = context.new_page()
 
+            # Capture all network requests during page load
+            seen_urls: set = set()
+
+            if capture_requests:
+                def _on_request(request):
+                    req_url = request.url
+                    if req_url not in seen_urls:
+                        seen_urls.add(req_url)
+                        result.captured_requests.append(CapturedRequest(
+                            url=req_url,
+                            resource_type=request.resource_type,
+                            method=request.method,
+                        ))
+
+                page.on("request", _on_request)
+
             page.goto(url, wait_until=wait_until, timeout=timeout_ms)
 
-            if network_idle_timeout_ms:
-                page.wait_for_load_state("networkidle", timeout=network_idle_timeout_ms)
+            # Wait for network to settle (async ad scripts, lazy JS)
+            try:
+                idle_timeout = network_idle_timeout_ms or timeout_ms
+                page.wait_for_load_state("networkidle", timeout=idle_timeout)
+            except Exception:
+                logger.debug("networkidle timeout — continuing with what we have")
+
+            # Extra delay to let remaining async content fire (ads, trackers)
+            if page_load_delay_ms > 0:
+                delay_sec = page_load_delay_ms / 1000
+                logger.debug(f"Waiting {delay_sec:.1f}s for async content to load...")
+                time.sleep(delay_sec)
 
             if enable_scroll:
                 _scroll_page(page, scroll_step=scroll_step, max_scrolls=max_scrolls)

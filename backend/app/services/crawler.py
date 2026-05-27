@@ -283,7 +283,6 @@ if __name__ == "__main__":
         report_id=report_id,
         headless=True,
         enable_scroll=True,
-        page_load_delay_ms=5000,  # Wait 5s for async ad content to load
     )
 
     print(f"\n{'='*60}")

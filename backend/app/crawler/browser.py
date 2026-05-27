@@ -18,6 +18,60 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT_MS = 30_000
 
+# Suppress automation signals that bot detectors check for
+_STEALTH_LAUNCH_ARGS = [
+    "--disable-blink-features=AutomationControlled",
+    "--disable-dev-shm-usage",
+    "--no-sandbox",
+    "--disable-infobars",
+    "--disable-extensions-except=",
+    "--disable-plugins-discovery",
+]
+
+# Matches a real Chrome on Windows 10 (update major version periodically)
+_DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/136.0.0.0 Safari/537.36"
+)
+
+# Injected before any page JS runs when playwright-stealth is unavailable.
+# Covers the most-checked properties without the full stealth library.
+_FALLBACK_STEALTH_SCRIPT = """
+(() => {
+    // Remove the most-flagged automation marker
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+
+    // Restore chrome runtime that headless Chrome omits
+    if (!window.chrome) window.chrome = {};
+    if (!window.chrome.runtime) window.chrome.runtime = {};
+
+    // Fake a non-empty plugins list (headless has 0)
+    Object.defineProperty(navigator, 'plugins', {
+        get: () => { const p = [1, 2, 3]; p.item = i => p[i]; p.namedItem = n => null; p.refresh = () => {}; return p; }
+    });
+
+    // Consistent language list
+    Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+
+    // Spoof notification permission so it doesn't return "denied" immediately
+    const origQuery = window.Notification
+        ? window.Notification.requestPermission.bind(window.Notification)
+        : null;
+    if (origQuery) {
+        window.Notification.requestPermission = () => Promise.resolve('default');
+    }
+
+    // WebGL vendor/renderer — headless exposes "SwiftShader" which is flagged
+    const getParam = WebGLRenderingContext.prototype.getParameter;
+    WebGLRenderingContext.prototype.getParameter = function(param) {
+        if (param === 37445) return 'Intel Inc.';         // VENDOR
+        if (param === 37446) return 'Intel Iris OpenGL Engine'; // RENDERER
+        return getParam.call(this, param);
+    };
+})();
+"""
+
 
 @dataclass
 class CapturedRequest:
@@ -61,6 +115,20 @@ def _import_playwright() -> Any:
         ) from exc
 
 
+def _apply_stealth(page: Any, user_agent: Optional[str] = None) -> None:
+    """Apply stealth patches to a Playwright page to suppress bot-detection signals."""
+    try:
+        from playwright_stealth import Stealth
+        Stealth(
+            chrome_runtime=True,
+            navigator_user_agent_override=user_agent or _DEFAULT_USER_AGENT,
+        ).apply_stealth_sync(page)
+        logger.debug("playwright-stealth applied")
+    except ImportError:
+        logger.debug("playwright-stealth not installed; using fallback stealth script")
+        page.add_init_script(_FALLBACK_STEALTH_SCRIPT)
+
+
 def _scroll_page(page: Any, scroll_step: int = 1000, max_scrolls: int = 30, delay_seconds: float = 0.1) -> None:
     """Scroll the page gradually to load lazy content."""
     previous_height = page.evaluate("() => document.documentElement.scrollHeight")
@@ -82,10 +150,12 @@ def render_url(
     headless: bool = True,
     enable_scroll: bool = True,
     scroll_step: int = 1000,
-    max_scrolls: int = 30,
-    network_idle_timeout_ms: Optional[int] = None,
+    max_scrolls: int = 10,
+    network_idle_timeout_ms: Optional[int] = 8000,
     capture_requests: bool = True,
-    page_load_delay_ms: int = 3000,
+    page_load_delay_ms: int = 1500,
+    stealth: bool = True,
+    user_agent: Optional[str] = None,
 ) -> RenderResult:
     """Render a URL in Playwright and return the rendered page data."""
     sync_playwright, PlaywrightError, PlaywrightTimeoutError = _import_playwright()
@@ -94,9 +164,29 @@ def render_url(
 
     try:
         with sync_playwright() as playwright:
-            browser = getattr(playwright, browser_type).launch(headless=headless)
-            context = browser.new_context()
+            launch_kwargs: Dict[str, Any] = {"headless": headless}
+            if stealth:
+                launch_kwargs["args"] = _STEALTH_LAUNCH_ARGS
+
+            browser = getattr(playwright, browser_type).launch(**launch_kwargs)
+
+            context_kwargs: Dict[str, Any] = {}
+            if stealth:
+                context_kwargs.update({
+                    "user_agent": user_agent or _DEFAULT_USER_AGENT,
+                    "viewport": {"width": 1920, "height": 1080},
+                    "locale": "en-US",
+                    "timezone_id": "America/New_York",
+                    "extra_http_headers": {"Accept-Language": "en-US,en;q=0.9"},
+                })
+            elif user_agent:
+                context_kwargs["user_agent"] = user_agent
+
+            context = browser.new_context(**context_kwargs)
             page = context.new_page()
+
+            if stealth:
+                _apply_stealth(page, user_agent=user_agent or _DEFAULT_USER_AGENT)
 
             # Capture all network requests during page load
             seen_urls: set = set()
@@ -131,6 +221,8 @@ def render_url(
 
             if enable_scroll:
                 _scroll_page(page, scroll_step=scroll_step, max_scrolls=max_scrolls)
+                page.evaluate("window.scrollTo(0, 0)")
+                time.sleep(0.3)
 
             html = page.content()
             screenshot_bytes = page.screenshot(full_page=True, timeout=timeout_ms)

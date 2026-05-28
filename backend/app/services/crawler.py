@@ -153,7 +153,7 @@ class CrawlService:
                 "extracted": extracted_data.to_dict()
             }
 
-        # Build network request summary (grouped by domain)
+        # Build network request summary grouped by first/third party
         from urllib.parse import urlparse as _urlparse
         from collections import defaultdict as _defaultdict
 
@@ -163,14 +163,18 @@ class CrawlService:
         except Exception:
             pass
 
-        first_party_by_domain: dict = _defaultdict(list)
-        third_party_by_domain: dict = _defaultdict(list)
+        # domain -> {path, ...}  (paths deduplicated per domain)
+        first_party_counts: dict = _defaultdict(int)
+        third_party_paths: dict = _defaultdict(set)  # domain -> set of paths
+
         total_requests = len(render_result.captured_requests)
         for req in render_result.captured_requests:
             if req.url.startswith("data:"):
                 continue
             try:
-                req_host = _urlparse(req.url).hostname or ""
+                parsed = _urlparse(req.url)
+                req_host = parsed.hostname or ""
+                req_path = parsed.path or "/"
             except Exception:
                 continue
             if req_host and page_domain and (
@@ -178,25 +182,27 @@ class CrawlService:
                 req_host.endswith("." + page_domain) or
                 page_domain.endswith("." + req_host)
             ):
-                first_party_by_domain[req_host].append(req.url)
+                first_party_counts[req_host] += 1
             else:
-                third_party_by_domain[req_host].append(req.url)
+                third_party_paths[req_host].add(req_path)
 
-        # Cap URLs per domain to keep output clean
+        # Third-party: domain + up to 3 unique paths (query strings stripped).
+        # This is what the AI rule generator reads — keep it compact.
+        third_party_list = []
+        for domain in sorted(third_party_paths):
+            paths = sorted(third_party_paths[domain])
+            third_party_list.append({
+                "domain": domain,
+                "request_count": len(third_party_paths[domain]),
+                "sample_paths": paths[:3],
+            })
+
         network_summary = {
             "total": total_requests,
-            "first_party": {
-                "count": sum(len(urls) for urls in first_party_by_domain.values()),
-                "by_domain": {
-                    domain: urls[:5] for domain, urls in sorted(first_party_by_domain.items())
-                }
-            },
-            "third_party": {
-                "count": sum(len(urls) for urls in third_party_by_domain.values()),
-                "by_domain": {
-                    domain: urls[:5] for domain, urls in sorted(third_party_by_domain.items())
-                }
-            },
+            "first_party_count": sum(first_party_counts.values()),
+            "third_party_count": sum(len(p) for p in third_party_paths.values()),
+            # Structured for AI rule generation: domain + path patterns, no query strings
+            "third_party": third_party_list,
         }
 
         # Step 4: Save results

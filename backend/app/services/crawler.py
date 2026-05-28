@@ -272,8 +272,8 @@ if __name__ == "__main__":
     )
 
     # Get URL from command line argument, or use default
-    url = sys.argv[1] if len(sys.argv) > 1 else "https://httpbin.org/html"
-    report_id = sys.argv[2] if len(sys.argv) > 2 else "test-001"
+    url = sys.argv[1] if len(sys.argv) > 1 else "https://youareanidiot.cc/"
+    report_id = sys.argv[2] if len(sys.argv) > 2 else "look_who_forgot_to_input_a_report_id"
 
     print(f"\n{'='*60}")
     print(f"  CocCoc Adblock Crawler - Test Run")

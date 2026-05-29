@@ -41,3 +41,6 @@ htmlcov/
 
 # Crawler output data
 **/data/crawl_outputs/
+
+
+.claude/

@@ -8,13 +8,34 @@
 # Output: raw LLM response text
 
 import logging
-from typing import Optional
+import os
+import time
+
+from openai import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    OpenAI,
+    RateLimitError,
+)
 
 logger = logging.getLogger(__name__)
 
-# Default model for rule generation. Falls back to stronger model on failure.
-DEFAULT_MODEL = "gpt-4o-mini"
-FALLBACK_MODEL = "gpt-4o"
+# Model IDs — override via OPENAI_DEFAULT_MODEL / OPENAI_FALLBACK_MODEL in .env
+DEFAULT_MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "gpt-4o-mini")
+FALLBACK_MODEL = os.getenv("OPENAI_FALLBACK_MODEL", "gpt-4o")
+
+MAX_RETRIES = 3
+RETRY_BASE_DELAY = 2.0  # seconds; multiplied by attempt number on rate-limit
+
+
+def _get_client() -> OpenAI:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "OPENAI_API_KEY is not set. Add it to your .env file."
+        )
+    return OpenAI(api_key=api_key)
 
 
 def call_llm(
@@ -38,16 +59,63 @@ def call_llm(
         Raw text content of the model's first choice message.
 
     Raises:
-        RuntimeError: If the API call fails after retries.
+        RuntimeError: If the API call fails after all retries.
     """
-    raise NotImplementedError
+    client = _get_client()
+
+    messages = []
+    if system_message:
+        messages.append({"role": "system", "content": system_message})
+    messages.append({"role": "user", "content": prompt})
+
+    last_error: Exception = Exception("No attempts made")
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            logger.debug(f"LLM call attempt {attempt}/{MAX_RETRIES} (model={model})")
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+            text = (response.choices[0].message.content or "").strip()
+            logger.debug(f"LLM response received: {len(text)} chars")
+            return text
+
+        except RateLimitError as exc:
+            logger.warning(f"Rate limit (attempt {attempt}/{MAX_RETRIES}): {exc}")
+            last_error = exc
+            time.sleep(RETRY_BASE_DELAY * attempt)
+
+        except (APITimeoutError, APIConnectionError) as exc:
+            logger.warning(f"API connection error (attempt {attempt}/{MAX_RETRIES}): {exc}")
+            last_error = exc
+            time.sleep(RETRY_BASE_DELAY)
+
+        except APIStatusError as exc:
+            # 4xx errors won't be fixed by retrying
+            logger.error(f"OpenAI API error {exc.status_code}: {exc.message}")
+            raise RuntimeError(f"OpenAI API error {exc.status_code}: {exc.message}") from exc
+
+    raise RuntimeError(
+        f"LLM call failed after {MAX_RETRIES} attempts: {last_error}"
+    ) from last_error
 
 
 def call_llm_with_fallback(prompt: str, system_message: str = "") -> str:
     """
     Try DEFAULT_MODEL first; if it fails or returns empty, retry with FALLBACK_MODEL.
 
-    Use for complex pages where the cheaper model struggles (dynamic ad scripts,
+    Use this for complex pages where the cheaper model struggles (dynamic ad scripts,
     unclear DOM patterns).
     """
-    raise NotImplementedError
+    try:
+        result = call_llm(prompt, system_message=system_message, model=DEFAULT_MODEL)
+        if result:
+            return result
+        logger.warning("Default model returned empty response — trying fallback model")
+    except RuntimeError as exc:
+        logger.warning(f"Default model failed ({exc}) — trying fallback model")
+
+    return call_llm(prompt, system_message=system_message, model=FALLBACK_MODEL)

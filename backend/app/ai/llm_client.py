@@ -22,8 +22,8 @@ from openai import (
 logger = logging.getLogger(__name__)
 
 # Model IDs — override via OPENAI_DEFAULT_MODEL / OPENAI_FALLBACK_MODEL in .env
-DEFAULT_MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "gpt-4o-mini")
-FALLBACK_MODEL = os.getenv("OPENAI_FALLBACK_MODEL", "gpt-4o")
+DEFAULT_MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "gpt-5.4-mini")
+FALLBACK_MODEL = os.getenv("OPENAI_FALLBACK_MODEL", "gpt-5.5")
 
 MAX_RETRIES = 3
 RETRY_BASE_DELAY = 2.0  # seconds; multiplied by attempt number on rate-limit
@@ -63,10 +63,11 @@ def call_llm(
     """
     client = _get_client()
 
+    # gpt-5 series requires content as an array of content objects
     messages = []
     if system_message:
-        messages.append({"role": "system", "content": system_message})
-    messages.append({"role": "user", "content": prompt})
+        messages.append({"role": "system", "content": [{"type": "text", "text": system_message}]})
+    messages.append({"role": "user", "content": [{"type": "text", "text": prompt}]})
 
     last_error: Exception = Exception("No attempts made")
 
@@ -76,7 +77,7 @@ def call_llm(
             response = client.chat.completions.create(
                 model=model,
                 messages=messages,
-                max_tokens=max_tokens,
+                max_completion_tokens=max_tokens,
                 temperature=temperature,
             )
             text = (response.choices[0].message.content or "").strip()

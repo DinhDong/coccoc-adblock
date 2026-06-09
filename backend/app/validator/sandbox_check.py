@@ -149,6 +149,7 @@ class SandboxResult:
     missing_ad_selectors: List[str] = field(default_factory=list)  # Selectors that disappeared (good)
     hidden_ad_selectors: List[str] = field(default_factory=list)  # Selectors hidden by cosmetic CSS (good)
     broken_selectors: List[str] = field(default_factory=list)   # Non-ad selectors that disappeared (bad)
+    tested_screenshot: bytes = field(default_factory=bytes)     # Page after rules applied
     error: str = ""
 
 
@@ -251,6 +252,7 @@ def run_sandbox(url: str, rules: List[str]) -> SandboxResult:
                 tested_screenshot = test_page.screenshot(full_page=True, timeout=DEFAULT_TIMEOUT_MS)
                 result.blocked_requests = list(getattr(test_page, "_adblock_blocked_requests", []))
                 blocked_by_rule: Dict[str, List[str]] = dict(getattr(test_page, "_adblock_blocked_by_rule", {}))
+                result.tested_screenshot = tested_screenshot
                 test_context.close()
             finally:
                 browser.close()

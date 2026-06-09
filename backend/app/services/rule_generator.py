@@ -36,8 +36,9 @@ def generate_rules(crawl_result: Dict[str, Any], prompt_template: str = "") -> L
         # 2. Assemble prompt using the cleaned signals
         prompt = build_prompt(compact_signals, prompt_template)
         
-        # 3. Request rule generation from the LLM client
-        raw_response = call_llm_with_fallback(prompt)
+        # 3. Unpack (system_message, user_message) tuple from prompt_builder, then call LLM
+        system_message, user_message = prompt
+        raw_response = call_llm_with_fallback(user_message, system_message=system_message)
         if not raw_response:
             logger.warning("LLM client returned an empty response string.")
             return []
@@ -71,16 +72,31 @@ def _extract_signals(crawl_result: Dict[str, Any]) -> Dict[str, Any]:
         "ad_candidates": []
     }
 
-    # Extract cleaned third-party request metrics (relying on your grouped domain structural design)[cite: 2]
+    # Extract cleaned third-party request metrics
+    # Handles both output formats:
+    #   new: third_party = [{domain, request_count, sample_paths}, ...]
+    #   old: third_party = {count, by_domain: {domain: [urls]}}
     network_data = crawl_result.get("network_requests", {})
     third_party_raw = network_data.get("third_party", [])
-    
-    for item in third_party_raw:
-        signals["third_party"].append({
-            "domain": item.get("domain", ""),
-            "request_count": item.get("request_count", 0),
-            "sample_paths": item.get("sample_paths", [])
-        })
+
+    if isinstance(third_party_raw, list):
+        for item in third_party_raw:
+            signals["third_party"].append({
+                "domain": item.get("domain", ""),
+                "request_count": item.get("request_count", 0),
+                "sample_paths": item.get("sample_paths", []),
+            })
+    elif isinstance(third_party_raw, dict):
+        # Old format: by_domain maps domain -> list of URLs
+        by_domain = third_party_raw.get("by_domain", {})
+        for domain, urls in by_domain.items():
+            from urllib.parse import urlparse as _up
+            paths = list({_up(u).path for u in urls if u})[:3]
+            signals["third_party"].append({
+                "domain": domain,
+                "request_count": len(urls),
+                "sample_paths": paths,
+            })
 
     # Regex parameter to match and strip tracking 'ad-events' attributes or heavy inline payload styles[cite: 2]
     # This prevents the LLM context window from drowning in encrypted tracking IDs[cite: 2].

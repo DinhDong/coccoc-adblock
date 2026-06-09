@@ -39,8 +39,6 @@ Desktop.ini
 .coverage
 htmlcov/
 
-# Crawler output data
+# Output data
 **/data/crawl_outputs/
-
-
-.claude/
+**/data/rule_outputs/

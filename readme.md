@@ -34,7 +34,7 @@ adblock-rule-engine-generator/
 │       │   └── prompt.py
 │       │
 │       ├── services/                   # Orchestration layer
-│       │   ├── workflow.py             # End-to-end pipeline coordinator
+│       │   ├── workflow.py             # End-to-end pipeline coordinator (run_pipeline)
 │       │   ├── crawler.py              # Crawl pipeline (browser → extract → detect → store)
 │       │   ├── classifier.py           # Domestic/foreign domain classification
 │       │   ├── rule_generator.py       # Calls AI, parses output, stores candidates

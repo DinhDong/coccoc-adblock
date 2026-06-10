@@ -1,0 +1,615 @@
+[
+  {
+    "site": "vnexpress.net",
+    "url": "https://vnexpress.net/",
+    "rules": [
+      "||admicro.vn^",
+      "||vccorp.vn^$third-party",
+      "||googlesyndication.com^",
+      "##.banner_ads",
+      "##.ads_zone",
+      "##.ads-dfp",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "tuoitre.vn",
+    "url": "https://tuoitre.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||googlesyndication.com^",
+      "##.advertisement",
+      "##.dfp-ad",
+      "##.ads-slot",
+      "##[class*='banner-ads']"
+    ]
+  },
+  {
+    "site": "thanhnien.vn",
+    "url": "https://thanhnien.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||googlesyndication.com^",
+      "##.ads-container",
+      "##.tn-ads",
+      "##[id^='div-gpt-ad']",
+      "##.quangcao"
+    ]
+  },
+  {
+    "site": "dantri.com.vn",
+    "url": "https://dantri.com.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||eclick.vn^",
+      "||googlesyndication.com^",
+      "##.dt-ads",
+      "##.banner-ads",
+      "##[class*='quangcao']",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "vietnamnet.vn",
+    "url": "https://vietnamnet.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||novaon.net^",
+      "||googlesyndication.com^",
+      "##.vnn-ads",
+      "##.ads-banner",
+      "##[id^='div-gpt-ad']",
+      "##.advertisement"
+    ]
+  },
+  {
+    "site": "tienphong.vn",
+    "url": "https://tienphong.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||googlesyndication.com^",
+      "##.ads-zone",
+      "##.tp-ads",
+      "##[class*='banner-ads']"
+    ]
+  },
+  {
+    "site": "laodong.vn",
+    "url": "https://laodong.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||googlesyndication.com^",
+      "##.ld-ads",
+      "##.banner-ads",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "nld.com.vn",
+    "url": "https://nld.com.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||eclick.vn^",
+      "||googlesyndication.com^",
+      "##.nld-ads",
+      "##.ads-banner",
+      "##.quangcao"
+    ]
+  },
+  {
+    "site": "danviet.vn",
+    "url": "https://danviet.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||googlesyndication.com^",
+      "##.dv-ads",
+      "##.advertisement",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "plo.vn",
+    "url": "https://plo.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||googlesyndication.com^",
+      "##.plo-ads",
+      "##.ads-container",
+      "##[class*='banner-ads']"
+    ]
+  },
+  {
+    "site": "vtcnews.vn",
+    "url": "https://vtcnews.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||googlesyndication.com^",
+      "##.vtc-ads",
+      "##.ads-zone",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "baomoi.com",
+    "url": "https://baomoi.com/",
+    "rules": [
+      "||admicro.vn^",
+      "||adtima.vn^",
+      "||googlesyndication.com^",
+      "##.bm-ads",
+      "##[class*='ads-']",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "24h.com.vn",
+    "url": "https://24h.com.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||eclick.vn^",
+      "||googlesyndication.com^",
+      "##.ads-24h",
+      "##.banner-ads",
+      "##.quangcao",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "kenh14.vn",
+    "url": "https://kenh14.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||vccorp.vn^$third-party",
+      "||googlesyndication.com^",
+      "##.k14-ads",
+      "##.ads-container",
+      "##[id^='div-gpt-ad']",
+      "##.dfp-slot"
+    ]
+  },
+  {
+    "site": "soha.vn",
+    "url": "https://soha.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||vccorp.vn^$third-party",
+      "||googlesyndication.com^",
+      "##.soha-ads",
+      "##.ads-zone",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "cafef.vn",
+    "url": "https://cafef.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||vccorp.vn^$third-party",
+      "||googlesyndication.com^",
+      "##.cafef-ads",
+      "##.banner-ads",
+      "##[id^='div-gpt-ad']",
+      "##[class*='quangcao']"
+    ]
+  },
+  {
+    "site": "cafebiz.vn",
+    "url": "https://cafebiz.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||vccorp.vn^$third-party",
+      "||googlesyndication.com^",
+      "##.cafebiz-ads",
+      "##.ads-container",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "genk.vn",
+    "url": "https://genk.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||vccorp.vn^$third-party",
+      "||googlesyndication.com^",
+      "##.genk-ads",
+      "##.ads-banner",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "gamek.vn",
+    "url": "https://gamek.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||vccorp.vn^$third-party",
+      "||googlesyndication.com^",
+      "##.gamek-ads",
+      "##.ads-zone",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "afamily.vn",
+    "url": "https://afamily.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||vccorp.vn^$third-party",
+      "||googlesyndication.com^",
+      "##.afamily-ads",
+      "##.banner-ads",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "eva.vn",
+    "url": "https://eva.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||vccorp.vn^$third-party",
+      "||googlesyndication.com^",
+      "##.eva-ads",
+      "##.ads-container",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "suckhoedoisong.vn",
+    "url": "https://suckhoedoisong.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||googlesyndication.com^",
+      "##.skds-ads",
+      "##.advertisement",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "giadinh.suckhoedoisong.vn",
+    "url": "https://giadinh.suckhoedoisong.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||googlesyndication.com^",
+      "##.ads-container",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "vov.vn",
+    "url": "https://vov.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||googlesyndication.com^",
+      "##.vov-ads",
+      "##.banner-ads",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "vovgiaothong.vn",
+    "url": "https://vovgiaothong.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||googlesyndication.com^",
+      "##.ads-zone",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "ictnews.vietnamnet.vn",
+    "url": "https://ictnews.vietnamnet.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||novaon.net^",
+      "||googlesyndication.com^",
+      "##.ict-ads",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "baodautu.vn",
+    "url": "https://baodautu.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||googlesyndication.com^",
+      "##.bdt-ads",
+      "##.banner-ads",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "vietnambiz.vn",
+    "url": "https://vietnambiz.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||googlesyndication.com^",
+      "##.vbiz-ads",
+      "##.ads-container",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "vietstock.vn",
+    "url": "https://vietstock.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||googlesyndication.com^",
+      "##.vs-ads",
+      "##.advertisement",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "stockbiz.vn",
+    "url": "https://stockbiz.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||googlesyndication.com^",
+      "##.sb-ads",
+      "##.banner-ads",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "diendandoanhnghiep.vn",
+    "url": "https://diendandoanhnghiep.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||googlesyndication.com^",
+      "##.dddn-ads",
+      "##.ads-zone",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "cafeland.vn",
+    "url": "https://cafeland.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||vccorp.vn^$third-party",
+      "||googlesyndication.com^",
+      "##.cl-ads",
+      "##.banner-ads",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "batdongsan.com.vn",
+    "url": "https://batdongsan.com.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||googlesyndication.com^",
+      "##.bds-ads",
+      "##.ads-banner",
+      "##[id^='div-gpt-ad']",
+      "##.promo-block"
+    ]
+  },
+  {
+    "site": "alonhadat.com.vn",
+    "url": "https://alonhadat.com.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||googlesyndication.com^",
+      "##.and-ads",
+      "##.advertisement",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "chotot.com",
+    "url": "https://chotot.com/",
+    "rules": [
+      "||ct.omtrdc.net^",
+      "||googlesyndication.com^",
+      "||doubleclick.net^",
+      "##.ct-ads",
+      "##[class*='AdsBanner']",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "muaban.net",
+    "url": "https://muaban.net/",
+    "rules": [
+      "||admicro.vn^",
+      "||googlesyndication.com^",
+      "##.mb-ads",
+      "##.banner-ads",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "oto.com.vn",
+    "url": "https://oto.com.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||googlesyndication.com^",
+      "##.oto-ads",
+      "##.advertisement",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "autopro.com.vn",
+    "url": "https://autopro.com.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||vccorp.vn^$third-party",
+      "||googlesyndication.com^",
+      "##.ap-ads",
+      "##.ads-container",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "znews.vn",
+    "url": "https://znews.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||googlesyndication.com^",
+      "##.zn-ads",
+      "##.banner-ads",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "2sao.vn",
+    "url": "https://2sao.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||vccorp.vn^$third-party",
+      "||googlesyndication.com^",
+      "##.2sao-ads",
+      "##.ads-zone",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "tiin.vn",
+    "url": "https://tiin.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||vccorp.vn^$third-party",
+      "||googlesyndication.com^",
+      "##.tiin-ads",
+      "##.advertisement",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "ngoisao.vnexpress.net",
+    "url": "https://ngoisao.vnexpress.net/",
+    "rules": [
+      "||admicro.vn^",
+      "||vccorp.vn^$third-party",
+      "||googlesyndication.com^",
+      "##.ns-ads",
+      "##.ads_zone",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "doisongphapluat.com.vn",
+    "url": "https://doisongphapluat.com.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||googlesyndication.com^",
+      "##.dspl-ads",
+      "##.banner-ads",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "nguoiduatin.vn",
+    "url": "https://nguoiduatin.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||googlesyndication.com^",
+      "##.ndt-ads",
+      "##.ads-container",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "baophapluat.vn",
+    "url": "https://baophapluat.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||googlesyndication.com^",
+      "##.bpl-ads",
+      "##.advertisement",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "anninhthudo.vn",
+    "url": "https://anninhthudo.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||googlesyndication.com^",
+      "##.ant-ads",
+      "##.banner-ads",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "webtretho.com",
+    "url": "https://webtretho.com/",
+    "rules": [
+      "||admicro.vn^",
+      "||googlesyndication.com^",
+      "||doubleclick.net^",
+      "##.wtt-ads",
+      "##.ads-zone",
+      "##[id^='div-gpt-ad']",
+      "##.forum-ad-block"
+    ]
+  },
+  {
+    "site": "tinhte.vn",
+    "url": "https://tinhte.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||googlesyndication.com^",
+      "||doubleclick.net^",
+      "##.tt-ads",
+      "##.ads-banner",
+      "##[id^='div-gpt-ad']",
+      "##.forum-ad"
+    ]
+  },
+  {
+    "site": "thethao247.vn",
+    "url": "https://thethao247.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||googlesyndication.com^",
+      "##.tt247-ads",
+      "##.advertisement",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "bongdaplus.vn",
+    "url": "https://bongdaplus.vn/",
+    "rules": [
+      "||admicro.vn^",
+      "||eclick.vn^",
+      "||googlesyndication.com^",
+      "##.bdp-ads",
+      "##.banner-ads",
+      "##[id^='div-gpt-ad']"
+    ]
+  },
+  {
+    "site": "truyenqqko.com",
+    "url": "https://truyenqqko.com",
+    "rules": [
+      "||googlesyndication.com^",
+      "||doubleclick.net^",
+      "||exoclick.com^",
+      "||adsterra.com^",
+      "##.ads-container",
+      "##.banner-ads",
+      "##[id^='div-gpt-ad']",
+      "##.popup-ads",
+      "##.overlay-ads"
+    ]
+  },
+  {
+    "site": "animevietsub.site",
+    "url": "https://animevietsub.site",
+    "rules": [
+      "||googlesyndication.com^",
+      "||doubleclick.net^",
+      "||exoclick.com^",
+      "||adsterra.com^",
+      "||popads.net^",
+      "##.ads-container",
+      "##.video-ads",
+      "##.popup-ads",
+      "##.overlay-ads",
+      "##[id^='div-gpt-ad']"
+    ]
+  }
+]

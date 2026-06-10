@@ -215,6 +215,7 @@ class CrawlService:
                 "url": url,
                 "report_id": report_id,
                 "timestamp": self.storage._current_timestamp(),
+                "environment": render_result.environment,
                 "render": {
                     "status": render_result.status,
                     "elapsed_ms": render_result.elapsed_ms,
@@ -257,39 +258,63 @@ class CrawlService:
 
 
 # ------------------------------------------------------------------
-# Quick test (run: python -m app.services.crawler)
+# Quick crawl runner
+# Usage: python -m app.services.crawler <url> <report_id> [--env ENV ...]
 # ------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import sys
+    import argparse
     import json
 
-    # Configure logging so all pipeline alerts/warnings are visible
     logging.basicConfig(
-        level=logging.DEBUG,
+        level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
 
-    # Get URL from command line argument, or use default
-    url = sys.argv[1] if len(sys.argv) > 1 else "https://youareanidiot.cc/"
-    report_id = sys.argv[2] if len(sys.argv) > 2 else "look_who_forgot_to_input_a_report_id"
+    from app.crawler.browser import ENVIRONMENTS
+    VALID_ENVS = list(ENVIRONMENTS.keys())
 
-    print(f"\n{'='*60}")
-    print(f"  CocCoc Adblock Crawler - Test Run")
-    print(f"{'='*60}")
-    print(f"  URL:       {url}")
-    print(f"  Report ID: {report_id}")
-    print(f"{'='*60}\n")
-
-    # Run the crawl pipeline
-    service = CrawlService()
-    result = service.crawl_url(
-        url=url,
-        report_id=report_id,
-        headless=True,
-        enable_scroll=True,
+    parser = argparse.ArgumentParser(description="CocCoc Adblock Crawler")
+    parser.add_argument("url", help="URL to crawl")
+    parser.add_argument("report_id", help="Unique report identifier")
+    parser.add_argument(
+        "--env",
+        nargs="+",
+        default=["desktop"],
+        metavar="ENV",
+        help=f"Environment(s) to crawl: {', '.join(VALID_ENVS)}  (or 'all')",
     )
+    args = parser.parse_args()
+
+    selected_envs = VALID_ENVS if "all" in args.env else args.env
+    unknown = [e for e in selected_envs if e not in VALID_ENVS]
+    if unknown:
+        print(f"Unknown environment(s): {unknown}. Valid: {VALID_ENVS}")
+        raise SystemExit(1)
+
+    service = CrawlService()
+
+    for env in selected_envs:
+        report_id_env = f"{args.report_id}-{env}"
+
+        print(f"\n{'='*60}")
+        print(f"  CocCoc Adblock Crawler")
+        print(f"{'='*60}")
+        print(f"  URL:         {args.url}")
+        print(f"  Report ID:   {report_id_env}")
+        print(f"  Environment: {env}")
+        print(f"{'='*60}\n")
+
+        result = service.crawl_url(
+            url=args.url,
+            report_id=report_id_env,
+            headless=True,
+            enable_scroll=True,
+            environment=env,
+        )
+
+        print(json.dumps(result, indent=2, ensure_ascii=True))
 
     print(f"\n{'='*60}")
     print(f"  Crawl Result (status: {result.get('status', 'unknown')})")

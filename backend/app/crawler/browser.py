@@ -35,6 +35,45 @@ _DEFAULT_USER_AGENT = (
     "Chrome/136.0.0.0 Safari/537.36"
 )
 
+# Device profiles for multi-environment crawling.
+# Each profile sets the browser engine + context options that make the page
+# behave as if it were visited from that device.
+ENVIRONMENTS: Dict[str, Dict] = {
+    "desktop": {
+        "browser_type": "chromium",
+        "user_agent": _DEFAULT_USER_AGENT,
+        "viewport": {"width": 1920, "height": 1080},
+        "device_scale_factor": 1.0,
+        "is_mobile": False,
+        "has_touch": False,
+    },
+    "android": {
+        "browser_type": "chromium",
+        "user_agent": (
+            "Mozilla/5.0 (Linux; Android 14; Pixel 8) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/136.0.0.0 Mobile Safari/537.36"
+        ),
+        "viewport": {"width": 412, "height": 915},
+        "device_scale_factor": 2.625,
+        "is_mobile": True,
+        "has_touch": True,
+    },
+    "ios": {
+        # WebKit engine gives the closest match to real Mobile Safari behaviour
+        "browser_type": "webkit",
+        "user_agent": (
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) "
+            "AppleWebKit/605.1.15 (KHTML, like Gecko) "
+            "Version/17.5 Mobile/15E148 Safari/604.1"
+        ),
+        "viewport": {"width": 390, "height": 844},
+        "device_scale_factor": 3.0,
+        "is_mobile": True,
+        "has_touch": True,
+    },
+}
+
 # Injected before any page JS runs when playwright-stealth is unavailable.
 # Covers the most-checked properties without the full stealth library.
 _FALLBACK_STEALTH_SCRIPT = """
@@ -93,6 +132,7 @@ class RenderResult:
     """Result of rendering a page with a browser."""
     url: str
     status: str
+    environment: str = "desktop"
     html: str = ""
     screenshot_bytes: bytes = b""
     screenshot_path: str = ""
@@ -156,37 +196,48 @@ def render_url(
     page_load_delay_ms: int = 1500,
     stealth: bool = True,
     user_agent: Optional[str] = None,
+    environment: str = "desktop",
 ) -> RenderResult:
     """Render a URL in Playwright and return the rendered page data."""
     sync_playwright, PlaywrightError, PlaywrightTimeoutError = _import_playwright()
     start_time = time.perf_counter()
-    result = RenderResult(url=url, status="failed")
+
+    # Resolve environment profile; fall back to desktop if unknown
+    profile = ENVIRONMENTS.get(environment, ENVIRONMENTS["desktop"])
+    effective_ua = user_agent or profile["user_agent"]
+    # Always use the profile's engine; the legacy browser_type param predates environments
+    effective_browser_type = profile["browser_type"]
+
+    result = RenderResult(url=url, status="failed", environment=environment)
 
     try:
         with sync_playwright() as playwright:
             launch_kwargs: Dict[str, Any] = {"headless": headless}
-            if stealth:
+            if stealth and effective_browser_type == "chromium":
                 launch_kwargs["args"] = _STEALTH_LAUNCH_ARGS
 
-            browser = getattr(playwright, browser_type).launch(**launch_kwargs)
+            browser = getattr(playwright, effective_browser_type).launch(**launch_kwargs)
 
-            context_kwargs: Dict[str, Any] = {}
-            if stealth:
-                context_kwargs.update({
-                    "user_agent": user_agent or _DEFAULT_USER_AGENT,
-                    "viewport": {"width": 1920, "height": 1080},
-                    "locale": "en-US",
-                    "timezone_id": "America/New_York",
-                    "extra_http_headers": {"Accept-Language": "en-US,en;q=0.9"},
-                })
-            elif user_agent:
-                context_kwargs["user_agent"] = user_agent
+            context_kwargs: Dict[str, Any] = {
+                "user_agent": effective_ua,
+                "viewport": profile["viewport"],
+                "device_scale_factor": profile["device_scale_factor"],
+                "is_mobile": profile["is_mobile"],
+                "has_touch": profile["has_touch"],
+                "locale": "en-US",
+                "timezone_id": "America/New_York",
+                "extra_http_headers": {"Accept-Language": "en-US,en;q=0.9"},
+                # WebKit on Windows ships without the full system CA bundle; many HTTPS
+                # sites fail SSL handshakes. Safe to ignore here — we're read-only crawling.
+                "ignore_https_errors": effective_browser_type == "webkit",
+            }
 
             context = browser.new_context(**context_kwargs)
             page = context.new_page()
 
-            if stealth:
-                _apply_stealth(page, user_agent=user_agent or _DEFAULT_USER_AGENT)
+            # Stealth patches are Chromium-specific; skip for WebKit (iOS)
+            if stealth and effective_browser_type == "chromium":
+                _apply_stealth(page, user_agent=effective_ua)
 
             # Capture all network requests during page load
             seen_urls: set = set()
@@ -225,7 +276,11 @@ def render_url(
                 time.sleep(0.3)
 
             html = page.content()
-            screenshot_bytes = page.screenshot(full_page=True, timeout=timeout_ms)
+            try:
+                screenshot_bytes = page.screenshot(full_page=True, timeout=timeout_ms)
+            except Exception:
+                logger.debug("full_page screenshot failed (page too tall?), falling back to viewport")
+                screenshot_bytes = page.screenshot(full_page=False, timeout=timeout_ms)
 
             if screenshot_path:
                 screenshot_file = Path(screenshot_path)

@@ -11,6 +11,21 @@ import logging
 import os
 import time
 
+from dataclasses import dataclass
+@dataclass
+class TokenUsage:
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+
+
+@dataclass
+class LLMResponse:
+    text: str
+    usage: TokenUsage | None = None
+    model: str = ""
+    fallback_used: bool = False
+
 from openai import (
     APIConnectionError,
     APIStatusError,
@@ -44,7 +59,7 @@ def call_llm(
     model: str = DEFAULT_MODEL,
     max_tokens: int = 1024,
     temperature: float = 0.2,
-) -> str:
+) -> LLMResponse:
     """
     Send a prompt to the OpenAI chat completions API and return the response text.
 
@@ -81,9 +96,28 @@ def call_llm(
                 temperature=temperature,
             )
             text = (response.choices[0].message.content or "").strip()
+            usage = None
+            if response.usage:
+                usage = TokenUsage(
+                    prompt_tokens=response.usage.prompt_tokens,
+                    completion_tokens=response.usage.completion_tokens,
+                    total_tokens=response.usage.total_tokens,
+                )
+                logger.info(
+                  "LLM token usage | model=%s | prompt=%s | completion=%s | total=%s",
+                   model,
+                   usage.prompt_tokens,
+                   usage.completion_tokens,
+                   usage.total_tokens,
+             )
             logger.debug(f"LLM response received: {len(text)} chars")
-            return text
 
+            return LLMResponse(
+                text=text,
+                usage=usage,
+                model=model,
+                fallback_used=False,
+            )
         except RateLimitError as exc:
             logger.warning(f"Rate limit (attempt {attempt}/{MAX_RETRIES}): {exc}")
             last_error = exc
@@ -104,7 +138,7 @@ def call_llm(
     ) from last_error
 
 
-def call_llm_with_fallback(prompt: str, system_message: str = "") -> str:
+def call_llm_with_fallback(prompt: str, system_message: str = "") -> LLMResponse:
     """
     Try DEFAULT_MODEL first; if it fails or returns empty, retry with FALLBACK_MODEL.
 
@@ -113,10 +147,17 @@ def call_llm_with_fallback(prompt: str, system_message: str = "") -> str:
     """
     try:
         result = call_llm(prompt, system_message=system_message, model=DEFAULT_MODEL)
-        if result:
+        if result.text:
+            result.fallback_used = False
             return result
         logger.warning("Default model returned empty response — trying fallback model")
     except RuntimeError as exc:
         logger.warning(f"Default model failed ({exc}) — trying fallback model")
 
-    return call_llm(prompt, system_message=system_message, model=FALLBACK_MODEL)
+    fallback_result = call_llm(
+        prompt,
+        system_message=system_message,
+        model=FALLBACK_MODEL,
+    )
+    fallback_result.fallback_used = True
+    return fallback_result

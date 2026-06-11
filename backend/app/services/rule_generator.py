@@ -17,54 +17,20 @@ class RuleGenerationResult:
     """
     Result returned by the AI rule generation stage.
 
-    `rules` is used by the validator.
-    `token_usage` is used by API/CMS to display LLM usage.
+    rules:
+        Parsed rules used by validation/workflow.
+
+    token_usage:
+        LLM token usage metadata used in generated *_rules.json output.
     """
 
     rules: List[ParsedRule]
     token_usage: Optional[Dict[str, Any]] = None
     model: str = ""
     fallback_used: bool = False
-    prompt_chars: int = 0
-    raw_response_chars: int = 0
 
     def rule_strings(self) -> List[str]:
-        """
-        Return only clean rule strings.
-
-        Useful when passing rules into validators or storing approved rules.
-        """
         return [rule.rule for rule in self.rules]
-
-    def to_dict(self, include_token_usage: bool = True) -> Dict[str, Any]:
-        """
-        Convert result into JSON-serialisable payload.
-
-        By default, this includes token usage for standalone usage.
-
-        Pipeline/API responses should pass include_token_usage=False
-        so token_usage is exposed only once at the top level.
-        """
-        payload: Dict[str, Any] = {
-            "rules": [
-                {
-                    "raw": rule.raw,
-                    "rule": rule.rule,
-                    "rule_type": rule.rule_type,
-                }
-                for rule in self.rules
-            ],
-            "rule_strings": self.rule_strings(),
-            "prompt_chars": self.prompt_chars,
-            "raw_response_chars": self.raw_response_chars,
-        }
-
-        if include_token_usage:
-            payload["token_usage"] = self.token_usage
-            payload["model"] = self.model
-            payload["fallback_used"] = self.fallback_used
-
-        return payload
 
 
 def generate_rules(
@@ -74,10 +40,8 @@ def generate_rules(
     """
     Backward-compatible wrapper.
 
-    Existing workflow/validator code can keep using this function and receive
-    only parsed rules, exactly like before.
-
-    API/CMS should use generate_rules_with_metadata() when it needs token usage.
+    Existing code can keep calling generate_rules() and receive only parsed rules.
+    Workflow should call generate_rules_with_metadata() when it needs token_usage.
     """
     return generate_rules_with_metadata(
         crawl_result=crawl_result,
@@ -96,23 +60,9 @@ def generate_rules_with_metadata(
         1. Build compact crawl signals from crawl_result.
         2. Assemble prompt via prompt_builder.build_prompt().
         3. Call LLM via llm_client.call_llm_with_fallback().
-        4. Capture model, fallback status, and token usage.
+        4. Capture token usage if the LLM client returns it.
         5. Parse raw response into ParsedRule objects.
-        6. Return rules + metadata for API/CMS.
-
-    Args:
-        crawl_result:    The full dict from CrawlService.crawl_url().
-        prompt_template: Optional custom system prompt from CMS.
-                         Uses DEFAULT_SYSTEM_PROMPT when empty.
-
-    Returns:
-        RuleGenerationResult containing:
-            - rules
-            - token_usage
-            - model
-            - fallback_used
-            - prompt_chars
-            - raw_response_chars
+        6. Return rules + token metadata.
     """
     try:
         logger.info(
@@ -120,90 +70,54 @@ def generate_rules_with_metadata(
             crawl_result.get("url"),
         )
 
-        # 1. Extract and clean data down to compact signals to preserve token budget.
         compact_signals = _extract_signals(crawl_result)
-
-        # 2. Assemble prompt.
-        # If CMS does not provide a prompt template, use the default system prompt.
-        system_template = (
-            prompt_template.strip()
-            if isinstance(prompt_template, str) and prompt_template.strip()
-            else DEFAULT_SYSTEM_PROMPT
-        )
 
         system_message, user_message = build_prompt(
             compact_signals,
-            system_template,
+            prompt_template,
         )
 
-        prompt_chars = len(system_message or "") + len(user_message or "")
-
-        logger.debug(
-            "Rule generation prompt prepared | url=%s | prompt_chars=%s | third_party=%s | ad_candidates=%s",
-            crawl_result.get("url"),
-            prompt_chars,
-            len(compact_signals.get("third_party", [])),
-            len(compact_signals.get("ad_candidates", [])),
-        )
-
-        # 3. Call LLM.
         llm_response = call_llm_with_fallback(
             user_message,
             system_message=system_message,
         )
 
-        token_usage = _build_token_usage_payload(llm_response)
+        response_text = _extract_llm_text(llm_response)
 
-        model = getattr(llm_response, "model", "") or (
-            token_usage.get("model", "") if token_usage else ""
-        )
-        fallback_used = bool(getattr(llm_response, "fallback_used", False))
-
-        # 4. Handle empty response while still returning metadata if available.
-        if not llm_response.text:
+        if not response_text:
             logger.warning("LLM client returned an empty response string.")
-
             return RuleGenerationResult(
                 rules=[],
-                token_usage=token_usage,
-                model=model,
-                fallback_used=fallback_used,
-                prompt_chars=prompt_chars,
-                raw_response_chars=0,
+                token_usage=_build_token_usage_payload(llm_response),
+                model=getattr(llm_response, "model", ""),
+                fallback_used=bool(getattr(llm_response, "fallback_used", False)),
             )
+
+        parsed_rules = parse_llm_response(response_text)
+        token_usage = _build_token_usage_payload(llm_response)
 
         if token_usage:
             logger.info(
                 "Rule generation token usage | model=%s | fallback_used=%s | prompt=%s | completion=%s | total=%s",
-                token_usage["model"],
-                token_usage["fallback_used"],
-                token_usage["prompt_tokens"],
-                token_usage["completion_tokens"],
-                token_usage["total_tokens"],
+                token_usage.get("model", ""),
+                token_usage.get("fallback_used", False),
+                token_usage.get("prompt_tokens", ""),
+                token_usage.get("completion_tokens", ""),
+                token_usage.get("total_tokens", ""),
             )
         else:
-            logger.info(
-                "Rule generation token usage unavailable | model=%s | fallback_used=%s",
-                model,
-                fallback_used,
-            )
-
-        # 5. Parse the plain text response into structured rule objects.
-        parsed_rules = parse_llm_response(llm_response.text)
+            logger.info("Rule generation token usage unavailable from LLM client.")
 
         logger.info(
             "Successfully generated %s candidate rules via AI orchestration.",
             len(parsed_rules),
         )
 
-        # 6. Return candidate rules + metadata for API/CMS.
         return RuleGenerationResult(
             rules=parsed_rules,
             token_usage=token_usage,
-            model=model,
-            fallback_used=fallback_used,
-            prompt_chars=prompt_chars,
-            raw_response_chars=len(llm_response.text),
+            model=getattr(llm_response, "model", ""),
+            fallback_used=bool(getattr(llm_response, "fallback_used", False)),
         )
 
     except Exception as exc:
@@ -215,13 +129,28 @@ def generate_rules_with_metadata(
         return RuleGenerationResult(rules=[])
 
 
-def _build_token_usage_payload(
-    llm_response: LLMResponse,
-) -> Optional[Dict[str, Any]]:
+def _extract_llm_text(llm_response: Any) -> str:
     """
-    Convert LLMResponse.usage into a JSON-serialisable dict for API/CMS.
+    Support both old and new llm_client return formats.
 
-    Returns None when the provider/API response does not include token usage.
+    Old format:
+        call_llm_with_fallback(...) -> str
+
+    New token-aware format:
+        call_llm_with_fallback(...) -> LLMResponse(text=..., usage=...)
+    """
+    if isinstance(llm_response, str):
+        return llm_response.strip()
+
+    return (getattr(llm_response, "text", "") or "").strip()
+
+
+def _build_token_usage_payload(llm_response: Any) -> Optional[Dict[str, Any]]:
+    """
+    Convert LLMResponse.usage into a JSON-serialisable dict.
+
+    Returns None if current llm_client still returns plain text or does not
+    expose usage metadata.
     """
     usage = getattr(llm_response, "usage", None)
 
@@ -231,9 +160,9 @@ def _build_token_usage_payload(
     return {
         "model": getattr(llm_response, "model", ""),
         "fallback_used": bool(getattr(llm_response, "fallback_used", False)),
-        "prompt_tokens": usage.prompt_tokens,
-        "completion_tokens": usage.completion_tokens,
-        "total_tokens": usage.total_tokens,
+        "prompt_tokens": getattr(usage, "prompt_tokens", 0),
+        "completion_tokens": getattr(usage, "completion_tokens", 0),
+        "total_tokens": getattr(usage, "total_tokens", 0),
     }
 
 
@@ -245,15 +174,13 @@ def _extract_signals(crawl_result: Dict[str, Any]) -> Dict[str, Any]:
         - url
         - title
         - third_party: domain, request_count, sample_paths
-        - ad_candidates: category, confidence, suggested_rule, selector, reason,
-          cleaned element_snippet
+        - ad_candidates: category, confidence, suggested_rule, selector, reason
 
     Drops:
         - raw HTML
         - screenshot path
         - elapsed time
         - full URLs with query strings
-        - heavy inline tracking/style payloads
     """
     signals: Dict[str, Any] = {
         "url": crawl_result.get("url", ""),
@@ -262,8 +189,6 @@ def _extract_signals(crawl_result: Dict[str, Any]) -> Dict[str, Any]:
         "ad_candidates": [],
     }
 
-    # Extract cleaned third-party request metrics.
-    # Supports both current and older crawl output formats.
     network_data = crawl_result.get("network_requests", {})
     third_party_raw = network_data.get("third_party", [])
 
@@ -272,13 +197,9 @@ def _extract_signals(crawl_result: Dict[str, Any]) -> Dict[str, Any]:
             if not isinstance(item, dict):
                 continue
 
-            domain = item.get("domain", "")
-            if not domain:
-                continue
-
             signals["third_party"].append(
                 {
-                    "domain": domain,
+                    "domain": item.get("domain", ""),
                     "request_count": item.get("request_count", 0),
                     "sample_paths": _clean_sample_paths(
                         item.get("sample_paths", []),
@@ -287,21 +208,12 @@ def _extract_signals(crawl_result: Dict[str, Any]) -> Dict[str, Any]:
             )
 
     elif isinstance(third_party_raw, dict):
-        # Old format:
-        # third_party = {
-        #   "count": 10,
-        #   "by_domain": {
-        #       "ads.example.com": ["https://ads.example.com/a.js?x=1"]
-        #   }
-        # }
         by_domain = third_party_raw.get("by_domain", {})
 
         if isinstance(by_domain, dict):
             for domain, urls in by_domain.items():
-                if not domain:
-                    continue
-
                 paths = []
+
                 if isinstance(urls, list):
                     paths = [_url_to_path(url) for url in urls if url]
 
@@ -313,15 +225,11 @@ def _extract_signals(crawl_result: Dict[str, Any]) -> Dict[str, Any]:
                     }
                 )
 
-    # Regex sanitizer:
-    # Strip heavy inline attributes that can contain tracking IDs, encrypted payloads,
-    # or long style blocks. This keeps prompt/token usage lower.
     cleanup_pattern = re.compile(
         r'\s+(?:ad-events|style|impression-id)\s*=\s*[\'"].*?[\'"]',
         re.IGNORECASE,
     )
 
-    # Process and clean DOM ad candidates.
     for candidate in crawl_result.get("ad_candidates", []):
         if not isinstance(candidate, dict):
             continue
@@ -334,7 +242,6 @@ def _extract_signals(crawl_result: Dict[str, Any]) -> Dict[str, Any]:
 
         clean_snippet = cleanup_pattern.sub("", raw_snippet or "")
 
-        # Normalize trailing bracket if snippet was truncated awkwardly.
         if clean_snippet.startswith("<") and not clean_snippet.endswith(">"):
             clean_snippet += ">"
 
@@ -381,11 +288,9 @@ def _url_to_path(value: str) -> str:
     try:
         parsed = urlparse(value)
 
-        # Full URL case.
         if parsed.scheme and parsed.netloc:
             return parsed.path or "/"
 
-        # Already a path-like string.
         if value.startswith("/"):
             return value.split("?", 1)[0] or "/"
 

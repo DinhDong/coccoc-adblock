@@ -137,6 +137,18 @@ class _CosmeticRule:
     is_exception: bool = False
 
 
+_UNREACHABLE_PATTERNS = (
+    "ERR_CONNECTION_RESET",
+    "ERR_NAME_NOT_RESOLVED",
+    "ERR_NAME_RESOLUTION_FAILED",
+    "ERR_CONNECTION_REFUSED",
+    "ERR_CONNECTION_TIMED_OUT",
+    "ERR_INTERNET_DISCONNECTED",
+    "ERR_ABORTED",
+    "SSL connect error",
+)
+
+
 @dataclass
 class SandboxResult:
     """Result of testing one set of rules against a live page."""
@@ -151,6 +163,7 @@ class SandboxResult:
     broken_selectors: List[str] = field(default_factory=list)   # Non-ad selectors that disappeared (bad)
     tested_screenshot: bytes = field(default_factory=bytes)     # Page after rules applied
     error: str = ""
+    unreachable: bool = False             # True when the target URL can't be loaded (bot-block, DNS, SSL)
 
 
 def run_sandbox(url: str, rules: List[str]) -> SandboxResult:
@@ -257,8 +270,13 @@ def run_sandbox(url: str, rules: List[str]) -> SandboxResult:
             finally:
                 browser.close()
     except Exception as exc:
+        error_str = str(exc)
         result.error = f"sandbox browser failed for {url}: {exc}"
-        logger.exception(result.error)
+        if any(pat in error_str for pat in _UNREACHABLE_PATTERNS):
+            result.unreachable = True
+            logger.warning("Sandbox unreachable (connection error) for %s: %s", url, error_str.splitlines()[0])
+        else:
+            logger.exception(result.error)
         return result
 
     result.layout_diff_pct = _screenshot_diff(baseline_screenshot, tested_screenshot)

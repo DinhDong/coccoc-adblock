@@ -192,10 +192,27 @@ def run_pipeline(
             "status": "ok" | "generated" | "no_rules",
         }
     """
-    crawl_path = Path("data/crawl_outputs/results") / f"{report_id}.json"
+    results_dir = Path("data/crawl_outputs/results")
+    crawl_path = results_dir / f"{report_id}.json"
 
     if not crawl_path.exists():
-        raise FileNotFoundError(f"Crawl result not found: {crawl_path}")
+        # User may have forgotten the -env suffix (e.g. "vnexpress" instead of "vnexpress-desktop").
+        # Find all files that start with report_id + "-" and help them pick.
+        candidates = sorted(results_dir.glob(f"{report_id}-*.json"))
+        if len(candidates) == 1:
+            crawl_path = candidates[0]
+            report_id = crawl_path.stem
+            logger.info("Auto-resolved report_id to %s", report_id)
+        elif len(candidates) > 1:
+            names = "  " + "\n  ".join(p.stem for p in candidates)
+            raise FileNotFoundError(
+                f"Multiple crawl results match '{report_id}'. Specify one:\n{names}"
+            )
+        else:
+            raise FileNotFoundError(
+                f"Crawl result not found: {crawl_path}\n"
+                f"Run: python -m app.services.crawler <url> {report_id} --env desktop"
+            )
 
     with open(crawl_path, encoding="utf-8") as file:
         crawl_result = json.load(file)

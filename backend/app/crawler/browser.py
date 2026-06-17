@@ -111,6 +111,63 @@ _FALLBACK_STEALTH_SCRIPT = """
 })();
 """
 
+# Evaluates in the live browser to find position:fixed / position:sticky elements.
+# BeautifulSoup can't see computed styles, so floating ad banners are otherwise invisible.
+_FIXED_ELEMENT_SCRIPT = """
+() => {
+    const MIN_W = 100, MIN_H = 20;
+    const results = [];
+    const seen = new Set();
+
+    for (const el of document.querySelectorAll('*')) {
+        const st = window.getComputedStyle(el);
+        if (st.position !== 'fixed' && st.position !== 'sticky') continue;
+
+        const rect = el.getBoundingClientRect();
+        if (rect.width < MIN_W || rect.height < MIN_H) continue;
+
+        // Skip elements that are clearly nav / cookie / chat (not ads)
+        const text = (el.innerText || '').toLowerCase().slice(0, 200);
+        if (/cookie|consent|accept|chat|subscribe|newsletter/.test(text)) continue;
+
+        // Deduplicate by outerHTML prefix
+        const key = el.outerHTML.slice(0, 80);
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        // Collect external link hrefs inside this element
+        const links = [];
+        for (const a of el.querySelectorAll('a[href]')) {
+            try {
+                const href = new URL(a.href, location.href).href;
+                if (!href.startsWith(location.origin)) links.push(href);
+            } catch(_) {}
+        }
+
+        // Collect iframe sources
+        const iframes = [];
+        for (const f of el.querySelectorAll('iframe[src]')) {
+            const src = f.getAttribute('src') || '';
+            if (src && !src.startsWith(location.origin)) iframes.push(src);
+        }
+
+        results.push({
+            tag:       el.tagName.toLowerCase(),
+            id:        el.id || '',
+            classes:   typeof el.className === 'string' ? el.className : '',
+            position:  st.position,
+            width:     Math.round(rect.width),
+            height:    Math.round(rect.height),
+            top:       Math.round(rect.top),
+            snippet:   el.outerHTML.slice(0, 300),
+            ext_links: links.slice(0, 5),
+            iframes:   iframes.slice(0, 3),
+        });
+    }
+    return results;
+}
+"""
+
 
 @dataclass
 class CapturedRequest:
@@ -139,6 +196,7 @@ class RenderResult:
     error: str = ""
     elapsed_ms: int = 0
     captured_requests: List[CapturedRequest] = field(default_factory=list)
+    fixed_elements: List[Dict] = field(default_factory=list)
 
 
 def _import_playwright() -> Any:
@@ -281,6 +339,15 @@ def render_url(
             except Exception:
                 logger.debug("full_page screenshot failed (page too tall?), falling back to viewport")
                 screenshot_bytes = page.screenshot(full_page=False, timeout=timeout_ms)
+
+            # Capture fixed/sticky positioned elements — invisible to HTML parsing
+            # because position is a computed style, not a static attribute.
+            try:
+                result.fixed_elements = page.evaluate(_FIXED_ELEMENT_SCRIPT) or []
+                if result.fixed_elements:
+                    logger.debug("Found %d fixed/sticky element(s)", len(result.fixed_elements))
+            except Exception as exc:
+                logger.debug("Fixed element scan failed: %s", exc)
 
             if screenshot_path:
                 screenshot_file = Path(screenshot_path)

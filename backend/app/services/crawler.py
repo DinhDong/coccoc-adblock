@@ -122,10 +122,11 @@ class CrawlService:
             # Build detector input: extracted data + network requests
             detector_input = extracted_data.to_dict()
             detector_input["url"] = url
-            # Convert captured network requests to dicts for the detector
             detector_input["network_requests"] = [
                 req.to_dict() for req in render_result.captured_requests
             ]
+            # Fixed/sticky elements captured by JS evaluation — invisible to HTML parsing
+            detector_input["fixed_elements"] = render_result.fixed_elements
 
             detection_result = detect_ads(detector_input)
         except Exception as exc:

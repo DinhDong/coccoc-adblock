@@ -203,6 +203,13 @@ class AdDetector:
         except Exception as exc:
             errors.append(f"iframe_analysis_error: {exc}")
 
+        # 5. Analyse fixed/sticky overlay elements (floating banners, interstitials)
+        try:
+            fixed_elements = extracted_data.get("fixed_elements", [])
+            candidates += self._analyse_fixed_elements(fixed_elements, page_domain, url)
+        except Exception as exc:
+            errors.append(f"fixed_element_analysis_error: {exc}")
+
         # Deduplicate candidates
         candidates = self._deduplicate(candidates)
 
@@ -421,6 +428,101 @@ class AdDetector:
                     domain=host,
                     urls=[src],
                 ))
+
+        return candidates
+
+    def _analyse_fixed_elements(self, fixed_elements: list, page_domain: str, page_url: str) -> List[AdCandidate]:
+        """
+        Detect ad banners that use position:fixed / position:sticky.
+
+        These are invisible to BeautifulSoup because position is a computed
+        style set by CSS or JavaScript, not an HTML attribute.  The browser
+        captures them via _FIXED_ELEMENT_SCRIPT during render.
+        """
+        candidates = []
+        clean_domain = page_domain.lstrip("www.")
+
+        for el in fixed_elements:
+            if not isinstance(el, dict):
+                continue
+
+            el_id      = el.get("id", "")
+            el_classes = el.get("classes", "")
+            ext_links  = el.get("ext_links", [])
+            iframes    = el.get("iframes", [])
+            width      = el.get("width", 0)
+            height     = el.get("height", 0)
+            snippet    = el.get("snippet", "")
+            position   = el.get("position", "fixed")
+
+            # --- Signal 1: external links inside the element ---
+            # Floating banners almost always link out to ad/gambling sites.
+            external_domains = []
+            for href in ext_links:
+                try:
+                    h = urlparse(href).hostname or ""
+                    if h and not h.endswith(page_domain):
+                        external_domains.append(h)
+                except Exception:
+                    pass
+
+            # --- Signal 2: class/ID matches known ad patterns ---
+            attrs_text = f"{el_id} {el_classes}"
+            class_match = any(p.search(attrs_text) for p in AD_CLASS_ID_PATTERNS)
+
+            # --- Signal 3: iframes from third-party domains ---
+            has_ad_iframe = any(
+                not urlparse(src).hostname.endswith(page_domain)
+                for src in iframes
+                if urlparse(src).hostname
+            )
+
+            # --- Signal 4: banner proportions (wide + short = horizontal ad) ---
+            is_banner_shape = width >= 400 and 20 <= height <= 200
+
+            # Require at least one strong signal to avoid blocking nav/cookie bars
+            signals = sum([
+                bool(external_domains),
+                class_match,
+                has_ad_iframe,
+                is_banner_shape,
+            ])
+            if signals < 1:
+                continue
+
+            confidence = "high" if signals >= 2 else "medium"
+
+            # Build the most specific selector available
+            if el_id:
+                selector = f"#{el_id}"
+                suggested_rule = f"{clean_domain}###{el_id}"
+            elif el_classes:
+                # Use first meaningful class (skip whitespace-only tokens)
+                first_class = next((c for c in el_classes.split() if c), None)
+                selector = f".{first_class}" if first_class else el.get("tag", "div")
+                suggested_rule = f"{clean_domain}##{selector}"
+            else:
+                selector = el.get("tag", "div")
+                suggested_rule = f"{clean_domain}##{selector}[style*='position:{position}']"
+
+            reason_parts = []
+            if external_domains:
+                reason_parts.append(f"links to external domains: {', '.join(external_domains[:3])}")
+            if class_match:
+                reason_parts.append("class/id matches ad pattern")
+            if has_ad_iframe:
+                reason_parts.append("contains third-party iframe")
+            if is_banner_shape:
+                reason_parts.append(f"banner proportions ({width}×{height}px)")
+
+            candidates.append(AdCandidate(
+                category="floating_ad",
+                confidence=confidence,
+                suggested_rule=suggested_rule,
+                reason=f"position:{position} overlay — {'; '.join(reason_parts)}",
+                selector=selector,
+                element_snippet=snippet[:300],
+            ))
 
         return candidates
 

@@ -60,18 +60,44 @@ def _separator(title: str) -> None:
 
 def run_rule_generation(crawl_result: Dict[str, Any], report_id: str) -> List[Any]:
     """
-    Stage 1 — call the LLM, parse the response, persist the rule list.
+    Stage 1 — call the LLM, parse the response, dedupe against rules already
+    known for this domain, and persist the new rule list.
 
-    The saved rules JSON includes token_usage from the LLM response.
-    Returns the list of ParsedRule objects.
+    The saved rules JSON includes token_usage from the LLM response and a
+    duplicate_rules_skipped count for audit/debugging.
+    Returns the list of new (non-duplicate) ParsedRule objects.
     """
     from app.services.rule_generator import generate_rules_with_metadata
+    from app.services.rule_registry import filter_new_rules, get_domain, normalize_rule, register_rules
+    from app.services.external_filter_lists import filter_uncovered
 
     generation_result = generate_rules_with_metadata(crawl_result)
-    rules = generation_result.rules
+    generated_rules = generation_result.rules
+
+    if not generated_rules:
+        logger.warning("Stage 1: no rules generated for %s", report_id)
+        return []
+
+    url = crawl_result.get("url", "")
+    domain = get_domain(url)
+
+    # --- Dedup 1: skip rules already generated for this domain in a prior run ---
+    rules, internal_dupes = filter_new_rules(url, generated_rules)
+    if internal_dupes:
+        logger.info("Stage 1: skipped %d rule(s) already in internal registry for %s",
+                    len(internal_dupes), domain)
+
+    # --- Dedup 2: skip rules already covered by public filter lists (EasyList, ABPvn, etc.) ---
+    rules, external_dupes = filter_uncovered(rules)
+    if external_dupes:
+        for rule, source in external_dupes:
+            logger.info("Stage 1: skipped rule already in %s: %s", source, rule.rule)
+
+    total_skipped = len(internal_dupes) + len(external_dupes)
 
     if not rules:
-        logger.warning("Stage 1: no rules generated for %s", report_id)
+        logger.info("Stage 1: all %d generated rule(s) were duplicates for %s — nothing new to save",
+                    len(generated_rules), report_id)
         return []
 
     OUT_RESULTS.mkdir(parents=True, exist_ok=True)
@@ -80,9 +106,18 @@ def run_rule_generation(crawl_result: Dict[str, Any], report_id: str) -> List[An
     rules_data = {
         "report_id": report_id,
         "environment": crawl_result.get("environment", "desktop"),
-        "url": crawl_result.get("url", ""),
+        "url": url,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "rule_count": len(rules),
+        "duplicates_skipped": {
+            "total": total_skipped,
+            "internal": len(internal_dupes),
+            "external": len(external_dupes),
+            "external_detail": [
+                {"rule": rule.rule, "covered_by": source}
+                for rule, source in external_dupes
+            ],
+        },
         "token_usage": generation_result.token_usage,
         "rules": [
             {
@@ -97,9 +132,12 @@ def run_rule_generation(crawl_result: Dict[str, Any], report_id: str) -> List[An
     with open(rules_path, "w", encoding="utf-8") as file:
         json.dump(rules_data, file, indent=2, ensure_ascii=False)
 
+    register_rules(domain, [normalize_rule(rule.rule) for rule in rules])
+
     _log_token_usage(generation_result.token_usage)
 
-    logger.info("Stage 1: %d rules saved → %s", len(rules), rules_path)
+    logger.info("Stage 1: %d new rule(s) saved → %s  (%d duplicate(s) skipped)",
+                len(rules), rules_path, total_skipped)
     return rules
 
 

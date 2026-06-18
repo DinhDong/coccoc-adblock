@@ -1,0 +1,48 @@
+# ----- Version control -----
+.git
+.gitignore
+
+# ----- Python artefacts -----
+__pycache__
+*.py[cod]
+*$py.class
+*.egg-info
+*.egg
+dist/
+build/
+
+# ----- Virtual environments -----
+venv/
+env/
+.venv/
+.env/
+
+# ----- Environment files (secrets) -----
+.env
+.env.local
+.env.*
+
+# ----- IDE / Editor -----
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ----- OS files -----
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# ----- Output data (mounted as volume, not baked into image) -----
+data/crawl_outputs/
+data/rule_outputs/
+
+# ----- Test / Coverage -----
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ----- Docker (avoid recursive context) -----
+Dockerfile
+.dockerignore

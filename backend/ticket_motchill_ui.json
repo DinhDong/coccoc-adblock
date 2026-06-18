@@ -1,0 +1,20 @@
+{
+  "platform": "android",
+  "problem_type": "ui_hidden",
+  "request": "[Android][Other] - motchilltv.ltd: Search & Menu bar hidden when Adblock mode is enabled",
+  "actual": "Search and menu bar are hidden when Adblock mode is enabled",
+  "expected": "Search and menu bar should be visible while Adblock remains enabled",
+  "steps": [
+    "Open the reported page",
+    "Enable Adblock mode",
+    "Observe search and menu bar"
+  ],
+  "target_to_preserve": [
+    "search bar",
+    "menu bar",
+    "header",
+    "navigation",
+    "main content"
+  ],
+  "target_to_block": []
+}

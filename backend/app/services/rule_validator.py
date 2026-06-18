@@ -155,21 +155,37 @@ def validate_rules(rules: list[str], page_url: str) -> ValidationReport:
                 error=f"sandbox validator error: {exc}",
             )
 
+    sandbox_unreachable = bool(sandbox_result and sandbox_result.unreachable)
+
     for idx, rule, syntax_result, scope_result in sandbox_candidates:
-        passed = bool(sandbox_result and sandbox_result.passed)
-        failure_stage = "" if passed else "sandbox"
-        failure_reason = "" if passed else _sandbox_failure_reason(sandbox_result)
-        outcomes[idx] = RuleValidationOutcome(
-            rule=rule,
-            passed=passed,
-            syntax=syntax_result,
-            scope=scope_result,
-            sandbox=sandbox_result,
-            failure_stage=failure_stage,
-            failure_reason=failure_reason,
-        )
-        if not passed:
-            _log_failure(rule, "sandbox", failure_reason)
+        if sandbox_unreachable:
+            # Target URL was connection-reset / DNS-failed / bot-blocked during sandbox.
+            # Syntax + scope passed — forward to moderator with a note rather than silently failing.
+            outcomes[idx] = RuleValidationOutcome(
+                rule=rule,
+                passed=True,
+                syntax=syntax_result,
+                scope=scope_result,
+                sandbox=sandbox_result,
+                failure_stage="",
+                failure_reason="sandbox skipped — target unreachable during testing (manual review recommended)",
+            )
+            logger.warning("Sandbox unreachable — forwarding to moderator: %s", rule)
+        else:
+            passed = bool(sandbox_result and sandbox_result.passed)
+            failure_stage = "" if passed else "sandbox"
+            failure_reason = "" if passed else _sandbox_failure_reason(sandbox_result)
+            outcomes[idx] = RuleValidationOutcome(
+                rule=rule,
+                passed=passed,
+                syntax=syntax_result,
+                scope=scope_result,
+                sandbox=sandbox_result,
+                failure_stage=failure_stage,
+                failure_reason=failure_reason,
+            )
+            if not passed:
+                _log_failure(rule, "sandbox", failure_reason)
 
     return _finalize_report(report, outcomes)
 

@@ -11,12 +11,12 @@ Run from backend/:
     python -m app.services.workflow <report_id> --no-sandbox
 
 Examples:
-    python -m app.services.workflow vnexpress-desktop
-    python -m app.services.workflow reddit-android --no-sandbox
+    python -m app.services.workflow vnexpress
+    python -m app.services.workflow reddit --no-sandbox
 
 Input:
     data/crawl_outputs/results/<report_id>.json
-    environment is read from the 'environment' field in that file.
+    environment is read from the 'environment' field inside that file.
 
 Output:
     data/rule_outputs/results/<report_id>_rules.json
@@ -58,17 +58,25 @@ def _separator(title: str) -> None:
     print(f"{'=' * 60}\n")
 
 
-def run_rule_generation(crawl_result: Dict[str, Any], report_id: str) -> List[Any]:
+
+def run_rule_generation(
+    crawl_result: Dict[str, Any],
+    report_id: str,
+    skip_external: bool = False,
+    discard_existing: bool = False,
+) -> List[Any]:
     """
     Stage 1 — call the LLM, parse the response, dedupe against rules already
     known for this domain, and persist the new rule list.
 
-    The saved rules JSON includes token_usage from the LLM response and a
-    duplicate_rules_skipped count for audit/debugging.
+    Args:
+        skip_external:    Skip external filter list (EasyList, etc.) checks.
+        discard_existing: Clear the domain's internal registry before deduping
+                          so all generated rules are treated as new.
     Returns the list of new (non-duplicate) ParsedRule objects.
     """
     from app.services.rule_generator import generate_rules_with_metadata
-    from app.services.rule_registry import filter_new_rules, get_domain, normalize_rule, register_rules
+    from app.services.rule_registry import filter_new_rules, get_domain, normalize_rule, register_rules, clear_rules
     from app.services.external_filter_lists import filter_uncovered
 
     generation_result = generate_rules_with_metadata(crawl_result)
@@ -81,6 +89,11 @@ def run_rule_generation(crawl_result: Dict[str, Any], report_id: str) -> List[An
     url = crawl_result.get("url", "")
     domain = get_domain(url)
 
+    if discard_existing:
+        cleared = clear_rules(domain)
+        if cleared:
+            logger.info("Stage 1: cleared %d existing rule(s) for %s (discard mode)", cleared, domain)
+
     # --- Dedup 1: skip rules already generated for this domain in a prior run ---
     rules, internal_dupes = filter_new_rules(url, generated_rules)
     if internal_dupes:
@@ -88,7 +101,7 @@ def run_rule_generation(crawl_result: Dict[str, Any], report_id: str) -> List[An
                     len(internal_dupes), domain)
 
     # --- Dedup 2: skip rules already covered by public filter lists (EasyList, ABPvn, etc.) ---
-    rules, external_dupes = filter_uncovered(rules)
+    rules, external_dupes = filter_uncovered(rules, skip=skip_external)
     if external_dupes:
         for rule, source in external_dupes:
             logger.info("Stage 1: skipped rule already in %s: %s", source, rule.rule)
@@ -141,7 +154,9 @@ def run_rule_generation(crawl_result: Dict[str, Any], report_id: str) -> List[An
     return rules
 
 
-def run_rule_validation(rules: List[Any], url: str, report_id: str) -> Dict[str, Any]:
+def run_rule_validation(
+    rules: List[Any], url: str, report_id: str, environment: str = "desktop"
+) -> Dict[str, Any]:
     """
     Stage 2 — run ABP syntax, scope, and sandbox checks on the rule list.
 
@@ -151,7 +166,7 @@ def run_rule_validation(rules: List[Any], url: str, report_id: str) -> Dict[str,
     from app.services.rule_validator import validate_rules
 
     rule_strings = [rule.rule for rule in rules]
-    report = validate_rules(rule_strings, url)
+    report = validate_rules(rule_strings, url, environment=environment)
 
     OUT_VALIDATION.mkdir(parents=True, exist_ok=True)
     validation_path = OUT_VALIDATION / f"{report_id}_validation.json"
@@ -208,15 +223,17 @@ def run_pipeline(
     report_id: str,
     verbose: bool = False,
     run_validation: bool = True,
+    skip_external: bool = False,
 ) -> Dict[str, Any]:
     """
     Full pipeline:
         load crawl result → generate rules → optionally validate → return summary.
 
     Args:
-        report_id:       Matches data/crawl_outputs/results/<report_id>.json
-        verbose:         Print stage headers and per-rule output to stdout.
-        run_validation:  If False, skip validation/sandbox stage.
+        report_id:      Matches data/crawl_outputs/results/<report_id>.json
+        verbose:        Print stage headers and per-rule output to stdout.
+        run_validation: If False, skip validation/sandbox stage.
+        skip_external:  Skip external filter list (EasyList etc.) dedup check.
 
     Returns:
         {
@@ -227,30 +244,19 @@ def run_pipeline(
             "rules_passed": int,
             "rules_failed": int,
             "passing_rules": [str, ...],
-            "status": "ok" | "generated" | "no_rules",
+            "status": "ok" | "generated" | "no_rules" | "aborted",
         }
     """
+    from app.services.rule_registry import get_domain, get_existing_rules
+
     results_dir = Path("data/crawl_outputs/results")
     crawl_path = results_dir / f"{report_id}.json"
 
     if not crawl_path.exists():
-        # User may have forgotten the -env suffix (e.g. "vnexpress" instead of "vnexpress-desktop").
-        # Find all files that start with report_id + "-" and help them pick.
-        candidates = sorted(results_dir.glob(f"{report_id}-*.json"))
-        if len(candidates) == 1:
-            crawl_path = candidates[0]
-            report_id = crawl_path.stem
-            logger.info("Auto-resolved report_id to %s", report_id)
-        elif len(candidates) > 1:
-            names = "  " + "\n  ".join(p.stem for p in candidates)
-            raise FileNotFoundError(
-                f"Multiple crawl results match '{report_id}'. Specify one:\n{names}"
-            )
-        else:
-            raise FileNotFoundError(
-                f"Crawl result not found: {crawl_path}\n"
-                f"Run: python -m app.services.crawler <url> {report_id} --env desktop"
-            )
+        raise FileNotFoundError(
+            f"Crawl result not found: {crawl_path}\n"
+            f"Run: python -m app.services.crawler <url> {report_id} --env desktop"
+        )
 
     with open(crawl_path, encoding="utf-8") as file:
         crawl_result = json.load(file)
@@ -258,14 +264,56 @@ def run_pipeline(
     env = crawl_result.get("environment", "desktop")
     url = crawl_result.get("url", "unknown")
 
+    crawl_screenshot = crawl_result.get("files", {}).get("screenshot", "")
+    if crawl_screenshot:
+        logger.info("Crawl screenshot → %s", crawl_screenshot)
+
     if verbose:
         _separator(f"Pipeline: {report_id}  |  {url}  |  env: {env}")
+
+    # --- Check for existing rules in the registry and prompt the user ---
+    domain = get_domain(url)
+    existing = get_existing_rules(domain)
+    discard_existing = False
+
+    if existing and verbose:
+        print(f"  Domain '{domain}' already has {len(existing)} rule(s) in the registry.")
+        print("  [1] Discard old rules — overwrite with fresh generation")
+        print("  [2] Keep old rules — only add new ones  (default)")
+        print("  [3] Abort")
+        try:
+            choice = input("  Choice [1/2/3]: ").strip() or "2"
+        except (EOFError, KeyboardInterrupt):
+            choice = "2"
+
+        if choice == "1":
+            discard_existing = True
+            print()
+        elif choice == "3":
+            print("\n  Aborted.")
+            return {
+                "report_id": report_id,
+                "url": url,
+                "environment": env,
+                "rules_generated": 0,
+                "rules_passed": 0,
+                "rules_failed": 0,
+                "passing_rules": [],
+                "status": "aborted",
+            }
+        else:
+            print()
 
     # Stage 1 — rule generation
     if verbose:
         _separator(f"Stage 1: Rule Generation — {report_id}")
 
-    rules = run_rule_generation(crawl_result, report_id)
+    rules = run_rule_generation(
+        crawl_result,
+        report_id,
+        skip_external=skip_external,
+        discard_existing=discard_existing,
+    )
 
     if not rules:
         if verbose:
@@ -306,7 +354,7 @@ def run_pipeline(
     if verbose:
         _separator(f"Stage 2: Rule Validation — {report_id}")
 
-    validation = run_rule_validation(rules, url, report_id)
+    validation = run_rule_validation(rules, url, report_id, environment=env)
 
     if verbose:
         print(
@@ -322,7 +370,6 @@ def run_pipeline(
                 f"\n  {validation['passed']}/{validation['total']} "
                 "rules ready for moderator review"
             )
-
     return {
         "report_id": report_id,
         "url": url,
@@ -373,13 +420,19 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "report_id",
-        help="Report ID matching data/crawl_outputs/results/<report_id>.json",
+        help="Report ID matching data/crawl_outputs/results/<report_id>.json (e.g. vnexpress, reddit)",
     )
 
     parser.add_argument(
         "--no-sandbox",
         action="store_true",
         help="Skip validation/sandbox stage for faster rule generation testing.",
+    )
+
+    parser.add_argument(
+        "--no-external",
+        action="store_true",
+        help="Skip external filter list checks (EasyList, ABPvn, etc.) — useful when download fails or you want to generate rules regardless.",
     )
 
     args = parser.parse_args()
@@ -389,6 +442,7 @@ if __name__ == "__main__":
             report_id=args.report_id,
             verbose=True,
             run_validation=not args.no_sandbox,
+            skip_external=args.no_external,
         )
     except FileNotFoundError as exc:
         logger.error(str(exc))

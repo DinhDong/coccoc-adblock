@@ -27,6 +27,7 @@ Rules you may generate:
 Guidelines:
 - Prefer specific rules over broad ones. Never generate ||com^ or ||.^.
 - For cosmetic rules, always include the target domain (e.g. site.vn##div.ad).
+- The crawl environment (desktop/android/ios) tells you the viewport and UA used. Mobile crawls may expose different ad slots and selectors than desktop — generate rules matching what was actually observed.
 - Output one rule per line. No explanations, no markdown, no blank lines, no comments.\
 """
 
@@ -54,9 +55,11 @@ def build_prompt(
     # --- Page identity ---
     url = crawl_signals.get("url", "unknown")
     title = crawl_signals.get("title", "")
+    environment = crawl_signals.get("environment", "desktop")
     lines.append(f"Target page: {url}")
     if title:
         lines.append(f"Page title: {title}")
+    lines.append(f"Crawl environment: {environment}")
 
     # --- Third-party network requests (ad networks, trackers) ---
     third_party: List[Dict] = crawl_signals.get("third_party", [])

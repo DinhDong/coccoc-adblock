@@ -286,6 +286,11 @@ if __name__ == "__main__":
         metavar="ENV",
         help=f"Environment(s) to crawl: {', '.join(VALID_ENVS)}  (or 'all')",
     )
+    parser.add_argument(
+        "--no-headless",
+        action="store_true",
+        help="Open a visible browser window (helps bypass Cloudflare connection resets on some sites)",
+    )
     args = parser.parse_args()
 
     selected_envs = VALID_ENVS if "all" in args.env else args.env
@@ -297,20 +302,18 @@ if __name__ == "__main__":
     service = CrawlService()
 
     for env in selected_envs:
-        report_id_env = f"{args.report_id}-{env}"
-
         print(f"\n{'='*60}")
         print(f"  CocCoc Adblock Crawler")
         print(f"{'='*60}")
         print(f"  URL:         {args.url}")
-        print(f"  Report ID:   {report_id_env}")
+        print(f"  Report ID:   {args.report_id}")
         print(f"  Environment: {env}")
         print(f"{'='*60}\n")
 
         result = service.crawl_url(
             url=args.url,
-            report_id=report_id_env,
-            headless=True,
+            report_id=args.report_id,
+            headless=not args.no_headless,
             enable_scroll=True,
             environment=env,
         )

@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_MS = 30_000
 NETWORK_IDLE_TIMEOUT_MS = 5_000
-PAGE_SETTLE_DELAY_SECONDS = 0.5
+PAGE_SETTLE_DELAY_SECONDS = 2.0
 LAYOUT_DIFF_FAIL_THRESHOLD = 0.40
 VISIBLE_ELEMENT_DROP_FAIL_RATIO = 0.35
 
@@ -166,7 +166,7 @@ class SandboxResult:
     unreachable: bool = False             # True when the target URL can't be loaded (bot-block, DNS, SSL)
 
 
-def run_sandbox(url: str, rules: List[str]) -> SandboxResult:
+def run_sandbox(url: str, rules: List[str], environment: str = "desktop") -> SandboxResult:
     """
     Test a set of candidate ABP rules against the live page.
 
@@ -188,8 +188,13 @@ def run_sandbox(url: str, rules: List[str]) -> SandboxResult:
            - broken_selectors: non-ad selectors that disappeared (false positives)
 
     Args:
-        url:   The original reported page URL.
-        rules: List of rule strings that passed stages 1 and 2.
+        url:         The original reported page URL.
+        rules:       List of rule strings that passed stages 1 and 2.
+        environment: Crawl environment name ("desktop", "android", "ios"). The sandbox
+                     uses the matching viewport and user-agent so the page renders the
+                     same layout as during the crawl. Always uses Chromium (page.route()
+                     is not available in WebKit), so iOS uses the iOS UA/viewport on
+                     Chromium as a best-effort match.
 
     Returns:
         SandboxResult. passed=True only if ads_blocked=True AND page_functional=True.
@@ -208,7 +213,7 @@ def run_sandbox(url: str, rules: List[str]) -> SandboxResult:
 
     try:
         from ..crawler.browser import (
-            _DEFAULT_USER_AGENT,
+            ENVIRONMENTS,
             _STEALTH_LAUNCH_ARGS,
             _apply_stealth,
             _import_playwright,
@@ -225,36 +230,41 @@ def run_sandbox(url: str, rules: List[str]) -> SandboxResult:
         logger.exception("Playwright import failed")
         return result
 
+    profile = ENVIRONMENTS.get(environment, ENVIRONMENTS["desktop"])
+    ua = profile["user_agent"]
+    context_kwargs: Dict[str, Any] = {
+        "user_agent": ua,
+        "viewport": profile["viewport"],
+        "device_scale_factor": profile["device_scale_factor"],
+        "is_mobile": profile["is_mobile"],
+        "has_touch": profile["has_touch"],
+        "locale": "en-US",
+        "timezone_id": "America/New_York",
+        "extra_http_headers": {"Accept-Language": "en-US,en;q=0.9"},
+    }
+
+    logger.debug("Sandbox running in '%s' environment (viewport %s, mobile=%s)",
+                 environment, profile["viewport"], profile["is_mobile"])
+
     try:
         with sync_playwright() as playwright:
+            # Always use Chromium — WebKit does not support page.route() for network blocking
             browser = playwright.chromium.launch(
                 headless=True,
                 args=_STEALTH_LAUNCH_ARGS,
             )
             try:
-                baseline_context = browser.new_context(
-                    user_agent=_DEFAULT_USER_AGENT,
-                    viewport={"width": 1920, "height": 1080},
-                    locale="en-US",
-                    timezone_id="America/New_York",
-                    extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
-                )
+                baseline_context = browser.new_context(**context_kwargs)
                 baseline_page = baseline_context.new_page()
-                _apply_stealth(baseline_page, user_agent=_DEFAULT_USER_AGENT)
+                _apply_stealth(baseline_page, user_agent=ua)
                 _load_page(baseline_page, url, PlaywrightTimeoutError)
                 baseline_state = _capture_page_state(baseline_page, cosmetic_selectors)
                 baseline_screenshot = baseline_page.screenshot(full_page=True, timeout=DEFAULT_TIMEOUT_MS)
                 baseline_context.close()
 
-                test_context = browser.new_context(
-                    user_agent=_DEFAULT_USER_AGENT,
-                    viewport={"width": 1920, "height": 1080},
-                    locale="en-US",
-                    timezone_id="America/New_York",
-                    extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
-                )
+                test_context = browser.new_context(**context_kwargs)
                 test_page = test_context.new_page()
-                _apply_stealth(test_page, user_agent=_DEFAULT_USER_AGENT)
+                _apply_stealth(test_page, user_agent=ua)
                 setattr(test_page, "_adblock_document_url", url)
                 _apply_network_rules(test_page, clean_rules)
                 _load_page(test_page, url, PlaywrightTimeoutError)

@@ -185,6 +185,7 @@ def _extract_signals(crawl_result: Dict[str, Any]) -> Dict[str, Any]:
     signals: Dict[str, Any] = {
         "url": crawl_result.get("url", ""),
         "title": crawl_result.get("title", ""),
+        "environment": crawl_result.get("environment", "desktop"),
         "third_party": [],
         "ad_candidates": [],
     }

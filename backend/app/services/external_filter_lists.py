@@ -197,12 +197,17 @@ def is_covered(rule_text: str) -> Tuple[bool, str]:
     return False, ""
 
 
-def filter_uncovered(rules: list) -> Tuple[list, list]:
+def filter_uncovered(rules: list, skip: bool = False) -> Tuple[list, list]:
     """
     Split ParsedRule objects into (uncovered, externally_covered).
 
+    Pass skip=True to bypass all external list checks and return all rules as uncovered.
     Loads lists on first call; subsequent calls use the in-memory sets.
     """
+    if skip:
+        logger.info("External filter list check skipped (--no-external)")
+        return list(rules), []
+
     if not _loaded_sets:
         load_all()
 

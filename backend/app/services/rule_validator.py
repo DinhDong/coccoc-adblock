@@ -46,7 +46,7 @@ class ValidationReport:
         return [o.rule for o in self.outcomes if o.passed]
 
 
-def validate_rules(rules: list[str], page_url: str) -> ValidationReport:
+def validate_rules(rules: list[str], page_url: str, environment: str = "desktop") -> ValidationReport:
     """
     Run all three validation stages on a batch of candidate rules.
 
@@ -58,8 +58,10 @@ def validate_rules(rules: list[str], page_url: str) -> ValidationReport:
     Failed rules are logged with their failure stage and reason for the audit trail.
 
     Args:
-        rules:    List of rule strings from rule_generator.generate_rules().
-        page_url: The original reported URL (needed for the sandbox browser session).
+        rules:       List of rule strings from rule_generator.generate_rules().
+        page_url:    The original reported URL (needed for the sandbox browser session).
+        environment: Crawl environment ("desktop", "android", "ios") — passed to the
+                     sandbox so it validates with the same viewport and UA as the crawl.
 
     Returns:
         ValidationReport. Pass report.passing_rules() to the moderator queue.
@@ -147,7 +149,7 @@ def validate_rules(rules: list[str], page_url: str) -> ValidationReport:
     if sandbox_candidates:
         sandbox_rules = [rule for _, rule, _, _ in sandbox_candidates]
         try:
-            sandbox_result = run_sandbox(page_url, sandbox_rules)
+            sandbox_result = run_sandbox(page_url, sandbox_rules, environment=environment)
         except Exception as exc:
             sandbox_result = SandboxResult(
                 url=page_url,

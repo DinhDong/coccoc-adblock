@@ -1,14 +1,18 @@
 """
 End-to-end pipeline coordinator.
 
-Reads a crawl result, runs AI rule generation, validates the candidates,
-and writes the outputs to data/rule_outputs/.
+Reads a crawl result, runs AI rule generation, deduplicates candidates,
+validates the remaining candidates, and writes the outputs to data/rule_outputs/.
 
 This workflow is ticket-aware:
 - normalizes ticket_context before rule generation
 - persists problem_type and resolution_strategy in rule output
 - validates rules using problem_policy-aware validator
 - persists policy validation details in validation output
+
+It also supports rule deduplication:
+- skips rules already generated for the same domain
+- skips rules already covered by public filter lists such as ABPvn/EasyList
 
 Run from backend/:
     .venv\\Scripts\\activate
@@ -66,7 +70,14 @@ def run_rule_generation(
     report_id: str,
 ) -> List[Any]:
     """
-    Stage 1 — call the LLM, parse the response, persist the rule list.
+    Stage 1 — call the LLM, parse the response, dedupe candidates, and persist
+    the new rule list.
+
+    Dedup stages:
+      1. Internal registry:
+         skip rules already generated for the same domain in a previous run.
+      2. External public filter lists:
+         skip rules already covered by ABPvn/EasyList/EasyPrivacy/etc.
 
     The saved rules JSON includes:
       - ticket_context
@@ -74,21 +85,28 @@ def run_rule_generation(
       - resolution_strategy
       - token usage
       - prompt preview
+      - duplicate rules skipped
       - generated rules
     """
+    from app.services.external_filter_lists import filter_uncovered
     from app.services.rule_generator import generate_rules_with_metadata
+    from app.services.rule_registry import (
+        filter_new_rules,
+        get_domain,
+        normalize_rule,
+        register_rules,
+    )
 
     crawl_result = _prepare_crawl_result(crawl_result)
 
     ticket_context = crawl_result.get("ticket_context", {})
     problem_type = _get_problem_type(ticket_context)
     resolution_strategy = _get_resolution_strategy(ticket_context)
+    url = crawl_result.get("url", "")
+    domain = get_domain(url)
 
     generation_result = generate_rules_with_metadata(crawl_result)
-    rules = list(getattr(generation_result, "rules", []) or [])
-
-    OUT_RESULTS.mkdir(parents=True, exist_ok=True)
-    rules_path = OUT_RESULTS / f"{report_id}_rules.json"
+    generated_rules = list(getattr(generation_result, "rules", []) or [])
 
     token_usage = getattr(generation_result, "token_usage", None)
     model = getattr(generation_result, "model", None)
@@ -101,20 +119,68 @@ def run_rule_generation(
         if fallback_used is None:
             fallback_used = token_usage.get("fallback_used")
 
+    internal_dupes: List[Any] = []
+    external_dupes: List[Any] = []
+    rules: List[Any] = []
+
+    if generated_rules:
+        # Dedup 1: skip rules already generated for this domain.
+        rules, internal_dupes = filter_new_rules(url, generated_rules)
+
+        if internal_dupes:
+            logger.info(
+                "Stage 1: skipped %d rule(s) already in internal registry for %s",
+                len(internal_dupes),
+                domain,
+            )
+
+        # Dedup 2: skip rules already covered by public filter lists.
+        rules, external_dupes = filter_uncovered(rules)
+
+        if external_dupes:
+            for rule, source in external_dupes:
+                logger.info(
+                    "Stage 1: skipped rule already in %s: %s",
+                    source,
+                    _coerce_rule(rule),
+                )
+
+    total_skipped = len(internal_dupes) + len(external_dupes)
+
+    OUT_RESULTS.mkdir(parents=True, exist_ok=True)
+    rules_path = OUT_RESULTS / f"{report_id}_rules.json"
+
     rules_data = {
         "report_id": report_id,
         "environment": crawl_result.get("environment", "desktop"),
-        "url": crawl_result.get("url", ""),
+        "url": url,
         "ticket_context": ticket_context,
         "problem_type": problem_type,
         "resolution_strategy": resolution_strategy,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "status": "generated" if rules else "no_rules",
         "rule_count": len(rules),
+        "generated_rule_count": len(generated_rules),
         "token_usage": token_usage,
         "model": model,
         "fallback_used": fallback_used,
         "prompt_preview": prompt_preview,
+        "duplicates_skipped": {
+            "total": total_skipped,
+            "internal": len(internal_dupes),
+            "external": len(external_dupes),
+            "internal_rules": [
+                _coerce_rule(rule)
+                for rule in internal_dupes
+            ],
+            "external_detail": [
+                {
+                    "rule": _coerce_rule(rule),
+                    "covered_by": source,
+                }
+                for rule, source in external_dupes
+            ],
+        },
         "rules": [
             {
                 "rule": _coerce_rule(rule),
@@ -128,9 +194,19 @@ def run_rule_generation(
     with open(rules_path, "w", encoding="utf-8") as file:
         json.dump(_make_json_safe(rules_data), file, indent=2, ensure_ascii=False)
 
+    # Register only rules that survived dedup and were saved.
+    if rules:
+        register_rules(
+            domain,
+            [
+                normalize_rule(_coerce_rule(rule))
+                for rule in rules
+            ],
+        )
+
     _log_token_usage(token_usage)
 
-    if not rules:
+    if not generated_rules:
         logger.warning(
             "Stage 1: no rules generated for %s | problem_type=%s | strategy=%s",
             report_id,
@@ -139,10 +215,24 @@ def run_rule_generation(
         )
         return []
 
+    if not rules:
+        logger.info(
+            "Stage 1: all %d generated rule(s) were duplicates for %s "
+            "| skipped=%d | problem_type=%s | strategy=%s",
+            len(generated_rules),
+            report_id,
+            total_skipped,
+            problem_type,
+            resolution_strategy,
+        )
+        return []
+
     logger.info(
-        "Stage 1: %d rules saved → %s | problem_type=%s | strategy=%s",
+        "Stage 1: %d/%d new rules saved → %s | skipped=%d | problem_type=%s | strategy=%s",
         len(rules),
+        len(generated_rules),
         rules_path,
+        total_skipped,
         problem_type,
         resolution_strategy,
     )
@@ -244,6 +334,7 @@ def run_pipeline(
         load crawl result
         normalize ticket_context
         generate rules
+        dedupe generated rules
         optionally validate
         return summary
     """
@@ -268,7 +359,6 @@ def run_pipeline(
         print(f"  Problem type: {problem_type}")
         print(f"  Strategy: {resolution_strategy}")
 
-    # Stage 1 — rule generation
     if verbose:
         _separator(f"Stage 1: Rule Generation — {report_id}")
 
@@ -276,7 +366,7 @@ def run_pipeline(
 
     if not rules:
         if verbose:
-            print("  No rules generated — pipeline stopped.")
+            print("  No new rules generated — pipeline stopped.")
 
         return {
             "report_id": report_id,
@@ -295,11 +385,10 @@ def run_pipeline(
         for rule in rules:
             print(f"  [{getattr(rule, 'rule_type', ''):10}] {_coerce_rule(rule)}")
 
-        print(f"\n  {len(rules)} rules generated")
+        print(f"\n  {len(rules)} new rules generated")
         print(f"  Problem type: {problem_type}")
         print(f"  Strategy: {resolution_strategy}")
 
-    # Optional Stage 2 — validation
     if not run_validation:
         if verbose:
             print("\n  SKIP — validation stage skipped because --no-sandbox was provided")
@@ -543,17 +632,11 @@ def _make_json_safe(value: Any) -> Any:
             for item in value
         ]
 
-    # Avoid serializing raw screenshot bytes into JSON.
     if isinstance(value, (bytes, bytearray)):
         return f"<{len(value)} bytes>"
 
     return str(value)
 
-
-# ------------------------------------------------------------------
-# CLI entry point
-# Usage: python -m app.services.workflow <report_id> [--no-sandbox]
-# ------------------------------------------------------------------
 
 if __name__ == "__main__":
     import argparse

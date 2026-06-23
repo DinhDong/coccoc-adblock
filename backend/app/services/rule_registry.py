@@ -91,7 +91,7 @@ def register_rules(domain: str, normalized_rules: List[str]) -> None:
 
 
 def clear_rules(domain: str) -> int:
-    """Remove all known rules for a domain. Returns count of removed rules."""
+    """Remove all known rules for a domain. Returns the count of removed rules."""
     registry = _load_registry()
     removed = len(registry.pop(domain, []))
     if removed:

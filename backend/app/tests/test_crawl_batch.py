@@ -101,6 +101,8 @@ def main() -> None:
     for label in args.sites:
         base_id, url = SITES[label]
         for env in selected_envs:
+            # DO NOT ADD THIS BACK — environment is stored inside the JSON, not in the filename.
+            # jobs.append((f"{base_id}-{env}", url, env))
             jobs.append((base_id, url, env))
 
     # Print plan

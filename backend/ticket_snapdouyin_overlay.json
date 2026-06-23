@@ -1,0 +1,26 @@
+{
+  "platform": "android",
+  "problem_type": "anti_adblock_or_overlay",
+  "request": "[Adblock][US] - snapdouyin.app: Unable to close ads when Adblock is enabled",
+  "actual": "Ads appear but the close button cannot close the ads when Adblock is enabled",
+  "expected": "The page should work normally without turning off Adblock mode",
+  "steps": [
+    "Open snapdouyin.app with a Douyin video URL",
+    "Tap download",
+    "Choose quality",
+    "Observe ad popup or close button"
+  ],
+  "target_to_block": [
+    "ad overlay",
+    "popup ad",
+    "interstitial ad",
+    "anti-adblock overlay"
+  ],
+  "target_to_preserve": [
+    "download button",
+    "quality selector",
+    "close button",
+    "main form",
+    "video URL input"
+  ]
+}

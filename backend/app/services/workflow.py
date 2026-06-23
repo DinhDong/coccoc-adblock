@@ -2,19 +2,30 @@
 End-to-end pipeline coordinator.
 
 Reads a crawl result, runs AI rule generation, validates the candidates,
-and writes the outputs to data/rule_outputs/. Designed to be called
-from the API layer or directly from the CLI.
+and writes the outputs to data/rule_outputs/.
 
-New in this version:
-- Normalizes crawl_result["ticket_context"] before rule generation.
-- Passes normalized ticket_context into prompt/rule generation.
-- Passes normalized ticket_context into validation/sandbox.
-- Saves normalized ticket_context into generated *_rules.json.
-- Saves normalized ticket_context into *_validation.json.
-- Keeps backward compatibility with older validator/sandbox signatures.
+This workflow is ticket-aware:
+- normalizes ticket_context before rule generation
+- persists problem_type and resolution_strategy in rule output
+- validates rules using problem_policy-aware validator
+- persists policy validation details in validation output
+
+Run from backend/:
+    .venv\\Scripts\\activate
+    python -m app.services.workflow <report_id>
+    python -m app.services.workflow <report_id> --no-sandbox
+
+Input:
+    data/crawl_outputs/results/<report_id>.json
+
+Output:
+    data/rule_outputs/results/<report_id>_rules.json
+    data/rule_outputs/validation/<report_id>_validation.json
+    data/rule_outputs/screenshots/<report_id>_with_rules.png
 """
 
-import inspect
+from __future__ import annotations
+
 import json
 import logging
 import sys
@@ -35,21 +46,13 @@ try:
 except ImportError:
     pass
 
-try:
-    from app.services.ticket_context import normalize_ticket_context
-except Exception:
-    try:
-        from .ticket_context import normalize_ticket_context
-    except Exception:
-        normalize_ticket_context = None  # type: ignore
-
 
 logger = logging.getLogger(__name__)
 
-CRAWL_RESULTS_DIR = Path("data/crawl_outputs/results")
 OUT_RESULTS = Path("data/rule_outputs/results")
 OUT_VALIDATION = Path("data/rule_outputs/validation")
 OUT_SCREENSHOTS = Path("data/rule_outputs/screenshots")
+CRAWL_RESULTS = Path("data/crawl_outputs/results")
 
 
 def _separator(title: str) -> None:
@@ -58,69 +61,91 @@ def _separator(title: str) -> None:
     print(f"{'=' * 60}\n")
 
 
-def run_rule_generation(crawl_result: Dict[str, Any], report_id: str) -> List[Any]:
+def run_rule_generation(
+    crawl_result: Dict[str, Any],
+    report_id: str,
+) -> List[Any]:
     """
     Stage 1 — call the LLM, parse the response, persist the rule list.
 
     The saved rules JSON includes:
-      - normalized ticket_context
+      - ticket_context
       - problem_type
-      - token_usage
+      - resolution_strategy
+      - token usage
+      - prompt preview
       - generated rules
-
-    Returns:
-        List of ParsedRule objects.
     """
     from app.services.rule_generator import generate_rules_with_metadata
 
-    normalized_crawl_result = _with_normalized_ticket_context(crawl_result)
-    ticket_context = normalized_crawl_result.get("ticket_context", {})
-    problem_type = ticket_context.get("problem_type", "unknown")
+    crawl_result = _prepare_crawl_result(crawl_result)
 
-    generation_result = generate_rules_with_metadata(normalized_crawl_result)
-    rules = generation_result.rules or []
+    ticket_context = crawl_result.get("ticket_context", {})
+    problem_type = _get_problem_type(ticket_context)
+    resolution_strategy = _get_resolution_strategy(ticket_context)
+
+    generation_result = generate_rules_with_metadata(crawl_result)
+    rules = list(getattr(generation_result, "rules", []) or [])
 
     OUT_RESULTS.mkdir(parents=True, exist_ok=True)
     rules_path = OUT_RESULTS / f"{report_id}_rules.json"
 
+    token_usage = getattr(generation_result, "token_usage", None)
+    model = getattr(generation_result, "model", None)
+    fallback_used = getattr(generation_result, "fallback_used", None)
+    prompt_preview = getattr(generation_result, "prompt_preview", "")
+
+    if isinstance(token_usage, Mapping):
+        if model is None:
+            model = token_usage.get("model")
+        if fallback_used is None:
+            fallback_used = token_usage.get("fallback_used")
+
     rules_data = {
         "report_id": report_id,
-        "environment": normalized_crawl_result.get("environment", "desktop"),
-        "url": normalized_crawl_result.get("url", ""),
+        "environment": crawl_result.get("environment", "desktop"),
+        "url": crawl_result.get("url", ""),
         "ticket_context": ticket_context,
         "problem_type": problem_type,
+        "resolution_strategy": resolution_strategy,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "status": "generated" if rules else "no_rules",
         "rule_count": len(rules),
-        "token_usage": _make_json_safe(generation_result.token_usage),
-        "model": getattr(generation_result, "model", ""),
-        "fallback_used": bool(getattr(generation_result, "fallback_used", False)),
-        "prompt_preview": getattr(generation_result, "prompt_preview", ""),
+        "token_usage": token_usage,
+        "model": model,
+        "fallback_used": fallback_used,
+        "prompt_preview": prompt_preview,
         "rules": [
-            _rule_to_dict(rule)
+            {
+                "rule": _coerce_rule(rule),
+                "rule_type": getattr(rule, "rule_type", ""),
+                "raw": getattr(rule, "raw", _coerce_rule(rule)),
+            }
             for rule in rules
         ],
     }
 
     with open(rules_path, "w", encoding="utf-8") as file:
-        json.dump(rules_data, file, indent=2, ensure_ascii=False)
+        json.dump(_make_json_safe(rules_data), file, indent=2, ensure_ascii=False)
 
-    _log_token_usage(generation_result.token_usage)
+    _log_token_usage(token_usage)
 
-    if rules:
-        logger.info(
-            "Stage 1: %d rules saved → %s | problem_type=%s",
-            len(rules),
-            rules_path,
-            problem_type,
-        )
-    else:
+    if not rules:
         logger.warning(
-            "Stage 1: no rules generated for %s → %s | problem_type=%s",
+            "Stage 1: no rules generated for %s | problem_type=%s | strategy=%s",
             report_id,
-            rules_path,
             problem_type,
+            resolution_strategy,
         )
+        return []
+
+    logger.info(
+        "Stage 1: %d rules saved → %s | problem_type=%s | strategy=%s",
+        len(rules),
+        rules_path,
+        problem_type,
+        resolution_strategy,
+    )
 
     return rules
 
@@ -129,28 +154,36 @@ def run_rule_validation(
     rules: List[Any],
     url: str,
     report_id: str,
-    ticket_context: Optional[Dict[str, Any]] = None,
+    ticket_context: Optional[Mapping[str, Any]] = None,
+    run_sandbox_checks: bool = True,
 ) -> Dict[str, Any]:
     """
-    Stage 2 — run ABP syntax, scope, and sandbox checks on the rule list.
+    Stage 2 — run syntax, scope, policy, and sandbox checks.
 
-    This version stores normalized ticket_context in validation output.
-
-    It is backward-compatible:
-      - If rule_validator.validate_rules accepts ticket_context, pass it.
-      - If not, call the old validate_rules(rules, page_url) signature.
+    The saved validation JSON includes:
+      - problem_type
+      - resolution_strategy
+      - policy result per rule
+      - syntax/scope/sandbox details per rule
     """
     from app.services.rule_validator import validate_rules
+    from app.services.ticket_context import normalize_ticket_context
 
-    safe_context = _normalize_context(ticket_context or {})
-    problem_type = safe_context.get("problem_type", "unknown")
-    rule_strings = [_coerce_rule_string(rule) for rule in rules]
+    normalized_ticket_context = normalize_ticket_context(ticket_context or {})
+    problem_type = _get_problem_type(normalized_ticket_context)
+    resolution_strategy = _get_resolution_strategy(normalized_ticket_context)
 
-    report = _call_validate_rules(
-        validate_rules_func=validate_rules,
-        rule_strings=rule_strings,
-        url=url,
-        ticket_context=safe_context,
+    rule_strings = [
+        _coerce_rule(rule)
+        for rule in rules
+        if _coerce_rule(rule)
+    ]
+
+    report = validate_rules(
+        rule_strings,
+        url,
+        ticket_context=normalized_ticket_context,
+        run_sandbox_checks=run_sandbox_checks,
     )
 
     OUT_VALIDATION.mkdir(parents=True, exist_ok=True)
@@ -159,44 +192,45 @@ def run_rule_validation(
     validation_data = {
         "report_id": report_id,
         "url": url,
-        "ticket_context": safe_context,
-        "problem_type": problem_type,
+        "ticket_context": normalized_ticket_context,
+        "problem_type": getattr(report, "problem_type", problem_type),
+        "resolution_strategy": getattr(
+            report,
+            "resolution_strategy",
+            resolution_strategy,
+        ),
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "total": getattr(report, "total", 0),
-        "passed": getattr(report, "passed_count", 0),
-        "failed": getattr(report, "failed", 0),
+        "total": report.total,
+        "passed": report.passed_count,
+        "failed": report.failed,
         "passing_rules": report.passing_rules(),
         "outcomes": [
-            _validation_outcome_to_dict(outcome)
-            for outcome in getattr(report, "outcomes", [])
+            _serialize_outcome(outcome)
+            for outcome in report.outcomes
         ],
     }
 
     with open(validation_path, "w", encoding="utf-8") as file:
-        json.dump(validation_data, file, indent=2, ensure_ascii=False)
+        json.dump(_make_json_safe(validation_data), file, indent=2, ensure_ascii=False)
 
-    sandbox_result = _first_sandbox_result(getattr(report, "outcomes", []))
-
-    if sandbox_result and getattr(sandbox_result, "tested_screenshot", b""):
-        OUT_SCREENSHOTS.mkdir(parents=True, exist_ok=True)
-        screenshot_path = OUT_SCREENSHOTS / f"{report_id}_with_rules.png"
-        screenshot_path.write_bytes(sandbox_result.tested_screenshot)
-        logger.info("Stage 2: sandbox screenshot → %s", screenshot_path)
+    _save_first_sandbox_screenshot(report.outcomes, report_id)
 
     logger.info(
-        "Stage 2: %d/%d rules passed validation → %s | problem_type=%s",
-        getattr(report, "passed_count", 0),
-        getattr(report, "total", 0),
+        "Stage 2: %d/%d rules passed validation → %s | problem_type=%s | strategy=%s",
+        report.passed_count,
+        report.total,
         validation_path,
-        problem_type,
+        validation_data["problem_type"],
+        validation_data["resolution_strategy"],
     )
 
     return {
-        "total": getattr(report, "total", 0),
-        "passed": getattr(report, "passed_count", 0),
-        "failed": getattr(report, "failed", 0),
+        "total": report.total,
+        "passed": report.passed_count,
+        "failed": report.failed,
         "passing_rules": report.passing_rules(),
-        "validation_file": str(validation_path),
+        "problem_type": validation_data["problem_type"],
+        "resolution_strategy": validation_data["resolution_strategy"],
     }
 
 
@@ -207,20 +241,13 @@ def run_pipeline(
 ) -> Dict[str, Any]:
     """
     Full pipeline:
-        load crawl result → normalize ticket context → generate rules
-        → optionally validate → return summary.
-
-    Args:
-        report_id:
-            Matches data/crawl_outputs/results/<report_id>.json
-
-        verbose:
-            Print stage headers and per-rule output to stdout.
-
-        run_validation:
-            If False, skip validation/sandbox stage.
+        load crawl result
+        normalize ticket_context
+        generate rules
+        optionally validate
+        return summary
     """
-    crawl_path = CRAWL_RESULTS_DIR / f"{report_id}.json"
+    crawl_path = CRAWL_RESULTS / f"{report_id}.json"
 
     if not crawl_path.exists():
         raise FileNotFoundError(f"Crawl result not found: {crawl_path}")
@@ -228,17 +255,18 @@ def run_pipeline(
     with open(crawl_path, encoding="utf-8") as file:
         crawl_result = json.load(file)
 
-    crawl_result = _with_normalized_ticket_context(crawl_result)
+    crawl_result = _prepare_crawl_result(crawl_result)
 
     env = crawl_result.get("environment", "desktop")
     url = crawl_result.get("url", "unknown")
     ticket_context = crawl_result.get("ticket_context", {})
-    problem_type = ticket_context.get("problem_type", "unknown")
+    problem_type = _get_problem_type(ticket_context)
+    resolution_strategy = _get_resolution_strategy(ticket_context)
 
     if verbose:
-        _separator(
-            f"Pipeline: {report_id} | {url} | env: {env} | ticket: {problem_type}"
-        )
+        _separator(f"Pipeline: {report_id}  |  {url}  |  env: {env}")
+        print(f"  Problem type: {problem_type}")
+        print(f"  Strategy: {resolution_strategy}")
 
     # Stage 1 — rule generation
     if verbose:
@@ -249,14 +277,13 @@ def run_pipeline(
     if not rules:
         if verbose:
             print("  No rules generated — pipeline stopped.")
-            print(f"  Problem type: {problem_type}")
 
         return {
             "report_id": report_id,
             "url": url,
             "environment": env,
-            "ticket_context": ticket_context,
             "problem_type": problem_type,
+            "resolution_strategy": resolution_strategy,
             "rules_generated": 0,
             "rules_passed": 0,
             "rules_failed": 0,
@@ -266,12 +293,11 @@ def run_pipeline(
 
     if verbose:
         for rule in rules:
-            rule_type = getattr(rule, "rule_type", "unknown")
-            rule_text = getattr(rule, "rule", str(rule))
-            print(f"  [{rule_type:10}] {rule_text}")
+            print(f"  [{getattr(rule, 'rule_type', ''):10}] {_coerce_rule(rule)}")
 
         print(f"\n  {len(rules)} rules generated")
         print(f"  Problem type: {problem_type}")
+        print(f"  Strategy: {resolution_strategy}")
 
     # Optional Stage 2 — validation
     if not run_validation:
@@ -282,8 +308,8 @@ def run_pipeline(
             "report_id": report_id,
             "url": url,
             "environment": env,
-            "ticket_context": ticket_context,
             "problem_type": problem_type,
+            "resolution_strategy": resolution_strategy,
             "rules_generated": len(rules),
             "rules_passed": 0,
             "rules_failed": 0,
@@ -295,10 +321,11 @@ def run_pipeline(
         _separator(f"Stage 2: Rule Validation — {report_id}")
 
     validation = run_rule_validation(
-        rules=rules,
-        url=url,
-        report_id=report_id,
+        rules,
+        url,
+        report_id,
         ticket_context=ticket_context,
+        run_sandbox_checks=True,
     )
 
     if verbose:
@@ -320,240 +347,169 @@ def run_pipeline(
         "report_id": report_id,
         "url": url,
         "environment": env,
-        "ticket_context": ticket_context,
-        "problem_type": problem_type,
+        "problem_type": validation["problem_type"],
+        "resolution_strategy": validation["resolution_strategy"],
         "rules_generated": len(rules),
         "rules_passed": validation["passed"],
         "rules_failed": validation["failed"],
         "passing_rules": validation["passing_rules"],
-        "validation_file": validation.get("validation_file", ""),
         "status": "ok",
     }
 
 
-def _with_normalized_ticket_context(crawl_result: Dict[str, Any]) -> Dict[str, Any]:
+def _prepare_crawl_result(crawl_result: Mapping[str, Any]) -> Dict[str, Any]:
     """
-    Return a copy of crawl_result with normalized ticket_context.
-
-    This makes the workflow robust even when crawler/API stored only raw fields:
-      - request
-      - actual
-      - expected
-      - steps
-
-    After normalization, downstream stages can rely on:
-      - problem_type
-      - target_to_block
-      - target_to_preserve
-      - validation_hints
-      - current_rules
-      - blocked_resources
+    Normalize ticket_context inside crawl result before generation/validation.
     """
-    result = dict(crawl_result or {})
-    result["ticket_context"] = _normalize_context(result.get("ticket_context", {}))
-    return result
+    from app.services.ticket_context import normalize_ticket_context
+
+    prepared = dict(crawl_result)
+    prepared["ticket_context"] = normalize_ticket_context(
+        prepared.get("ticket_context", {})
+    )
+
+    return prepared
 
 
-def _normalize_context(value: Any) -> Dict[str, Any]:
-    """
-    Normalize ticket_context if ticket_context.py is available.
-    Otherwise, fall back to JSON-safe dict.
-    """
-    if normalize_ticket_context is not None:
-        try:
-            return normalize_ticket_context(value)
-        except Exception as exc:
-            logger.warning("Failed to normalize ticket_context: %s", exc)
-
-    return _safe_ticket_context(value)
-
-
-def _call_validate_rules(
-    validate_rules_func: Any,
-    rule_strings: List[str],
-    url: str,
-    ticket_context: Dict[str, Any],
-) -> Any:
-    """
-    Call rule_validator.validate_rules in a backward-compatible way.
-
-    Current validator signature:
-        validate_rules(rules: list[str], page_url: str, ticket_context: dict)
-
-    Older validator signature:
-        validate_rules(rules: list[str], page_url: str)
-    """
-    try:
-        signature = inspect.signature(validate_rules_func)
-
-        if "ticket_context" in signature.parameters:
-            return validate_rules_func(
-                rule_strings,
-                url,
-                ticket_context=ticket_context,
-            )
-
-        return validate_rules_func(rule_strings, url)
-
-    except TypeError as exc:
-        logger.warning(
-            "validate_rules did not accept ticket_context. Falling back to old signature: %s",
-            exc,
-        )
-        return validate_rules_func(rule_strings, url)
-
-
-def _rule_to_dict(rule: Any) -> Dict[str, Any]:
-    """
-    Convert ParsedRule or raw rule-like object to JSON-safe dict.
-    """
-    return {
-        "rule": getattr(rule, "rule", str(rule)),
-        "rule_type": getattr(rule, "rule_type", "unknown"),
-        "raw": getattr(rule, "raw", getattr(rule, "rule", str(rule))),
-    }
-
-
-def _coerce_rule_string(rule: Any) -> str:
-    """
-    Convert ParsedRule or string to a rule string.
-    """
-    if isinstance(rule, str):
-        return rule
-
-    return str(getattr(rule, "rule", rule)).strip()
-
-
-def _validation_outcome_to_dict(outcome: Any) -> Dict[str, Any]:
-    """
-    Convert a RuleValidationOutcome to JSON-safe dict.
-    """
-    sandbox = getattr(outcome, "sandbox", None)
-
+def _serialize_outcome(outcome: Any) -> Dict[str, Any]:
     return {
         "rule": getattr(outcome, "rule", ""),
         "passed": bool(getattr(outcome, "passed", False)),
         "failure_stage": getattr(outcome, "failure_stage", ""),
         "failure_reason": getattr(outcome, "failure_reason", ""),
-        "syntax": _simple_result_to_dict(getattr(outcome, "syntax", None)),
-        "scope": _simple_result_to_dict(getattr(outcome, "scope", None)),
-        "sandbox": _sandbox_result_to_dict(sandbox),
+        "syntax": _serialize_syntax_result(getattr(outcome, "syntax", None)),
+        "scope": _serialize_scope_result(getattr(outcome, "scope", None)),
+        "policy": _serialize_policy_result(getattr(outcome, "policy", None)),
+        "sandbox": _serialize_sandbox_result(getattr(outcome, "sandbox", None)),
     }
 
 
-def _simple_result_to_dict(result: Any) -> Optional[Dict[str, Any]]:
-    """
-    Convert SyntaxResult / ScopeResult-style dataclass to JSON-safe dict.
-    """
+def _serialize_syntax_result(result: Any) -> Optional[Dict[str, Any]]:
     if result is None:
         return None
 
-    data = {}
-
-    for key in (
-        "rule",
-        "valid",
-        "error",
-        "safe",
-        "risk",
-        "detail",
-    ):
-        if hasattr(result, key):
-            data[key] = _make_json_safe(getattr(result, key))
-
-    return data
-
-
-def _sandbox_result_to_dict(sandbox: Any) -> Optional[Dict[str, Any]]:
-    """
-    Convert SandboxResult to JSON-safe dict without storing raw screenshot bytes.
-    """
-    if sandbox is None:
-        return None
-
-    fields = [
-        "url",
-        "passed",
-        "ads_blocked",
-        "page_functional",
-        "ticket_assertions_passed",
-        "ticket_assertion_errors",
-        "baseline_ticket_assertions_passed",
-        "baseline_ticket_assertion_errors",
-        "existing_rules_count",
-        "candidate_rules_count",
-        "layout_diff_pct",
-        "blocked_requests",
-        "candidate_blocked_requests",
-        "missing_ad_selectors",
-        "hidden_ad_selectors",
-        "broken_selectors",
-        "error",
-    ]
-
-    data = {}
-
-    for key in fields:
-        if hasattr(sandbox, key):
-            data[key] = _make_json_safe(getattr(sandbox, key))
-
-    if hasattr(sandbox, "tested_screenshot"):
-        data["tested_screenshot_saved"] = bool(getattr(sandbox, "tested_screenshot", b""))
-
-    return data
-
-
-def _first_sandbox_result(outcomes: List[Any]) -> Optional[Any]:
-    """
-    Return the first sandbox result attached to validation outcomes.
-    """
-    for outcome in outcomes:
-        sandbox = getattr(outcome, "sandbox", None)
-        if sandbox is not None:
-            return sandbox
-
-    return None
-
-
-def _safe_ticket_context(value: Any) -> Dict[str, Any]:
-    """
-    Ensure ticket_context is dict-like and JSON-safe.
-    """
-    if value is None:
-        return {}
-
-    if isinstance(value, Mapping):
-        return _make_json_safe(dict(value))
-
     return {
-        "raw": str(value),
-        "problem_type": "unknown",
+        "rule": getattr(result, "rule", ""),
+        "valid": bool(getattr(result, "valid", False)),
+        "error": getattr(result, "error", None),
     }
 
 
-def _make_json_safe(value: Any) -> Any:
-    """
-    Recursively convert values into JSON-safe data.
-    """
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
+def _serialize_scope_result(result: Any) -> Optional[Dict[str, Any]]:
+    if result is None:
+        return None
 
-    if isinstance(value, Mapping):
-        return {
-            str(key): _make_json_safe(item)
-            for key, item in value.items()
-        }
-
-    if isinstance(value, (list, tuple, set)):
-        return [
-            _make_json_safe(item)
-            for item in value
-        ]
-
-    return str(value)
+    return {
+        "rule": getattr(result, "rule", ""),
+        "safe": bool(getattr(result, "safe", False)),
+        "risk": getattr(result, "risk", None),
+        "detail": getattr(result, "detail", None),
+    }
 
 
-def _log_token_usage(token_usage: Optional[Dict[str, Any]]) -> None:
+def _serialize_policy_result(result: Any) -> Optional[Dict[str, Any]]:
+    if result is None:
+        return None
+
+    return {
+        "rule": getattr(result, "rule", ""),
+        "valid": bool(getattr(result, "valid", False)),
+        "problem_type": getattr(result, "problem_type", ""),
+        "resolution_strategy": getattr(result, "resolution_strategy", ""),
+        "rule_direction": getattr(result, "rule_direction", ""),
+        "error": getattr(result, "error", None),
+    }
+
+
+def _serialize_sandbox_result(result: Any) -> Optional[Dict[str, Any]]:
+    if result is None:
+        return None
+
+    tested_screenshot = getattr(result, "tested_screenshot", None)
+
+    return {
+        "url": getattr(result, "url", ""),
+        "passed": bool(getattr(result, "passed", False)),
+        "ads_blocked": bool(getattr(result, "ads_blocked", False)),
+        "page_functional": bool(getattr(result, "page_functional", False)),
+        "ticket_assertions_passed": bool(
+            getattr(result, "ticket_assertions_passed", True)
+        ),
+        "ticket_assertion_errors": list(
+            getattr(result, "ticket_assertion_errors", []) or []
+        ),
+        "baseline_ticket_assertions_passed": bool(
+            getattr(result, "baseline_ticket_assertions_passed", True)
+        ),
+        "baseline_ticket_assertion_errors": list(
+            getattr(result, "baseline_ticket_assertion_errors", []) or []
+        ),
+        "existing_rules_count": int(getattr(result, "existing_rules_count", 0) or 0),
+        "candidate_rules_count": int(getattr(result, "candidate_rules_count", 0) or 0),
+        "layout_diff_pct": float(getattr(result, "layout_diff_pct", 0.0) or 0.0),
+        "blocked_requests": list(getattr(result, "blocked_requests", []) or []),
+        "candidate_blocked_requests": list(
+            getattr(result, "candidate_blocked_requests", []) or []
+        ),
+        "missing_ad_selectors": list(
+            getattr(result, "missing_ad_selectors", []) or []
+        ),
+        "hidden_ad_selectors": list(
+            getattr(result, "hidden_ad_selectors", []) or []
+        ),
+        "broken_selectors": list(getattr(result, "broken_selectors", []) or []),
+        "error": getattr(result, "error", ""),
+        "tested_screenshot_saved": bool(tested_screenshot),
+    }
+
+
+def _save_first_sandbox_screenshot(outcomes: List[Any], report_id: str) -> None:
+    sandbox_result = next(
+        (
+            getattr(outcome, "sandbox", None)
+            for outcome in outcomes
+            if getattr(outcome, "sandbox", None) is not None
+        ),
+        None,
+    )
+
+    if not sandbox_result:
+        return
+
+    tested_screenshot = getattr(sandbox_result, "tested_screenshot", None)
+
+    if not tested_screenshot:
+        return
+
+    OUT_SCREENSHOTS.mkdir(parents=True, exist_ok=True)
+    screenshot_path = OUT_SCREENSHOTS / f"{report_id}_with_rules.png"
+    screenshot_path.write_bytes(tested_screenshot)
+
+    logger.info("Stage 2: sandbox screenshot → %s", screenshot_path)
+
+
+def _coerce_rule(rule: Any) -> str:
+    if hasattr(rule, "rule"):
+        return str(getattr(rule, "rule")).strip()
+
+    return str(rule).strip()
+
+
+def _get_problem_type(ticket_context: Any) -> str:
+    if isinstance(ticket_context, Mapping):
+        return str(ticket_context.get("problem_type", "unknown"))
+
+    return "unknown"
+
+
+def _get_resolution_strategy(ticket_context: Any) -> str:
+    if isinstance(ticket_context, Mapping):
+        return str(ticket_context.get("resolution_strategy", "unknown"))
+
+    return "unknown"
+
+
+def _log_token_usage(token_usage: Optional[Mapping[str, Any]]) -> None:
     """
     Log token usage after rule generation.
     """
@@ -571,15 +527,32 @@ def _log_token_usage(token_usage: Optional[Dict[str, Any]]) -> None:
     )
 
 
+def _make_json_safe(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+
+    if isinstance(value, Mapping):
+        return {
+            str(key): _make_json_safe(item)
+            for key, item in value.items()
+        }
+
+    if isinstance(value, (list, tuple, set)):
+        return [
+            _make_json_safe(item)
+            for item in value
+        ]
+
+    # Avoid serializing raw screenshot bytes into JSON.
+    if isinstance(value, (bytes, bytearray)):
+        return f"<{len(value)} bytes>"
+
+    return str(value)
+
+
 # ------------------------------------------------------------------
 # CLI entry point
-#
-# Usage from backend/:
-#   python -m app.services.workflow <report_id>
-#   python -m app.services.workflow <report_id> --no-sandbox
-#
-# Example:
-#   python -m app.services.workflow test-ticket-current-rules-ios --no-sandbox
+# Usage: python -m app.services.workflow <report_id> [--no-sandbox]
 # ------------------------------------------------------------------
 
 if __name__ == "__main__":
@@ -623,11 +596,13 @@ if __name__ == "__main__":
 
     if args.no_sandbox:
         _separator(
-            f"Done — {result['rules_generated']} rules generated "
-            f"| ticket: {result.get('problem_type', 'unknown')}"
+            f"Done — {result['rules_generated']} rules generated | "
+            f"ticket: {result.get('problem_type', 'unknown')} | "
+            f"strategy: {result.get('resolution_strategy', 'unknown')}"
         )
     else:
         _separator(
-            f"Done — {result['rules_passed']}/{result['rules_generated']} rules passed "
-            f"| ticket: {result.get('problem_type', 'unknown')}"
+            f"Done — {result['rules_passed']}/{result['rules_generated']} rules passed | "
+            f"ticket: {result.get('problem_type', 'unknown')} | "
+            f"strategy: {result.get('resolution_strategy', 'unknown')}"
         )

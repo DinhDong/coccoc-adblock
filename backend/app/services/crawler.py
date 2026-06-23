@@ -572,13 +572,14 @@ if __name__ == "__main__":
     last_result: Dict[str, Any] = {}
 
     for env in selected_envs:
-        report_id_env = f"{args.report_id}-{env}"
+        # DO NOT ADD THIS BACK — environment is stored inside the JSON, not in the filename.
+        # report_id_env = f"{args.report_id}-{env}"
 
         print(f"\n{'=' * 60}")
         print("  CocCoc Adblock Crawler")
         print(f"{'=' * 60}")
         print(f"  URL:         {args.url}")
-        print(f"  Report ID:   {report_id_env}")
+        print(f"  Report ID:   {args.report_id}")
         print(f"  Environment: {env}")
         print(
             "  Ticket type: "
@@ -588,7 +589,7 @@ if __name__ == "__main__":
 
         last_result = service.crawl_url(
             url=args.url,
-            report_id=report_id_env,
+            report_id=args.report_id,  # DO NOT change to report_id_env — env goes inside the JSON
             ticket_context=ticket_context,
             headless=True,
             enable_scroll=True,

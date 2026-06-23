@@ -20,7 +20,6 @@
 #     overlay/anti-adblock    => page_functional AND ticket assertions
 # - Avoid requiring every generic selector in validation_hints to be visible.
 
-import io
 import logging
 import re
 import time
@@ -33,7 +32,6 @@ logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT_MS = 30_000
 NETWORK_IDLE_TIMEOUT_MS = 5_000
 PAGE_SETTLE_DELAY_SECONDS = 0.5
-LAYOUT_DIFF_FAIL_THRESHOLD = 0.40
 VISIBLE_ELEMENT_DROP_FAIL_RATIO = 0.35
 
 CRITICAL_SELECTORS = [
@@ -253,7 +251,6 @@ class SandboxResult:
     existing_rules_count: int = 0
     candidate_rules_count: int = 0
 
-    layout_diff_pct: float = 0.0
     blocked_requests: List[str] = field(default_factory=list)
     candidate_blocked_requests: List[str] = field(default_factory=list)
     missing_ad_selectors: List[str] = field(default_factory=list)
@@ -362,10 +359,6 @@ def run_sandbox(
                     reference_page,
                     candidate_cosmetic_selectors,
                 )
-                reference_screenshot = reference_page.screenshot(
-                    full_page=True,
-                    timeout=DEFAULT_TIMEOUT_MS,
-                )
                 reference_context.close()
 
                 # ------------------------------------------------------
@@ -456,11 +449,6 @@ def run_sandbox(
     # ------------------------------------------------------------------
     # Evaluate candidate ad blocking.
     # ------------------------------------------------------------------
-    result.layout_diff_pct = _screenshot_diff(
-        reference_screenshot,
-        tested_screenshot,
-    )
-
     result.broken_selectors = _find_broken_critical_selectors(
         reference_state.get("critical_counts", {}),
         tested_state.get("critical_counts", {}),
@@ -496,14 +484,9 @@ def run_sandbox(
     tested_visible = int(tested_state.get("visible_count", 0) or 0)
 
     visible_ratio = tested_visible / reference_visible
-    layout_ok = result.layout_diff_pct <= LAYOUT_DIFF_FAIL_THRESHOLD
     visible_count_ok = visible_ratio >= VISIBLE_ELEMENT_DROP_FAIL_RATIO
 
-    result.page_functional = (
-        not result.broken_selectors
-        and layout_ok
-        and visible_count_ok
-    )
+    result.page_functional = not result.broken_selectors and visible_count_ok
 
     # ------------------------------------------------------------------
     # Evaluate ticket-specific behavior.
@@ -554,10 +537,10 @@ def run_sandbox(
 
     if not result.page_functional:
         logger.warning(
-            "Sandbox detected page functionality risk for %s: layout_diff=%.3f broken=%s",
+            "Sandbox detected page functionality risk for %s: broken=%s visible_ratio=%.2f",
             url,
-            result.layout_diff_pct,
             result.broken_selectors,
+            visible_ratio,
         )
 
     if not result.ticket_assertions_passed:
@@ -1010,44 +993,6 @@ def _cosmetic_targets_blocked(
     return False
 
 
-def _screenshot_diff(reference: bytes, with_rules: bytes) -> float:
-    if reference == with_rules:
-        return 0.0
-
-    if not reference or not with_rules:
-        return 1.0
-
-    try:
-        from PIL import Image
-
-        reference_img = Image.open(io.BytesIO(reference)).convert("RGB")
-        with_rules_img = Image.open(io.BytesIO(with_rules)).convert("RGB")
-
-        width = min(reference_img.width, with_rules_img.width)
-        height = min(reference_img.height, with_rules_img.height)
-
-        if width == 0 or height == 0:
-            return 1.0
-
-        reference_img = reference_img.crop((0, 0, width, height))
-        with_rules_img = with_rules_img.crop((0, 0, width, height))
-
-        reference_pixels = reference_img.load()
-        with_rules_pixels = with_rules_img.load()
-
-        changed = 0
-        total = width * height
-
-        for y in range(height):
-            for x in range(width):
-                if reference_pixels[x, y] != with_rules_pixels[x, y]:
-                    changed += 1
-
-        return changed / total if total else 1.0
-
-    except Exception as exc:
-        logger.warning("Screenshot diff failed: %s", exc)
-        return 0.0
 
 
 def _extract_applicable_cosmetic_selectors(

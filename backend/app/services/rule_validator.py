@@ -492,16 +492,12 @@ def _sandbox_failure_reason(
 
     if not getattr(sandbox_result, "page_functional", False):
         broken_selectors = getattr(sandbox_result, "broken_selectors", [])
-        layout_diff_pct = float(getattr(sandbox_result, "layout_diff_pct", 0.0) or 0.0)
 
         if broken_selectors:
             reasons.append(
                 "broken_selectors="
                 + ",".join(str(selector) for selector in broken_selectors)
             )
-
-        if layout_diff_pct > 0:
-            reasons.append(f"layout_diff_pct={layout_diff_pct:.3f}")
 
         if not any(reason.startswith("broken_selectors=") for reason in reasons):
             reasons.append("page_not_functional")

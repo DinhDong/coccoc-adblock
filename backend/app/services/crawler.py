@@ -191,6 +191,8 @@ class CrawlService:
             detector_input["network_requests"] = [
                 req.to_dict() for req in render_result.captured_requests
             ]
+            # Fixed/sticky elements captured by JS evaluation — invisible to HTML parsing
+            detector_input["fixed_elements"] = render_result.fixed_elements
 
             detection_result = detect_ads(detector_input)
         except Exception as exc:
@@ -544,6 +546,11 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
+        "--no-headless",
+        action="store_true",
+        help="Open a visible browser window (helps bypass Cloudflare connection resets on some sites)",
+    )
+    parser.add_argument(
         "--ticket-context-json",
         default="",
         help="Raw JSON string containing ticket context.",
@@ -553,6 +560,7 @@ if __name__ == "__main__":
         default="",
         help="Path to a JSON file containing ticket context.",
     )
+
 
     args = parser.parse_args()
 
@@ -591,7 +599,7 @@ if __name__ == "__main__":
             url=args.url,
             report_id=args.report_id,  # DO NOT change to report_id_env — env goes inside the JSON
             ticket_context=ticket_context,
-            headless=True,
+            headless=not args.no_headless,
             enable_scroll=True,
             environment=env,
         )

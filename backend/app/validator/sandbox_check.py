@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_MS = 30_000
 NETWORK_IDLE_TIMEOUT_MS = 5_000
-PAGE_SETTLE_DELAY_SECONDS = 0.5
+PAGE_SETTLE_DELAY_SECONDS = 2.0
 VISIBLE_ELEMENT_DROP_FAIL_RATIO = 0.35
 
 CRITICAL_SELECTORS = [
@@ -234,6 +234,26 @@ class _NetworkRule:
 
 
 @dataclass
+class _CosmeticRule:
+    original: str
+    selector: str
+    domain_prefix: str = ""
+    is_exception: bool = False
+
+
+_UNREACHABLE_PATTERNS = (
+    "ERR_CONNECTION_RESET",
+    "ERR_NAME_NOT_RESOLVED",
+    "ERR_NAME_RESOLUTION_FAILED",
+    "ERR_CONNECTION_REFUSED",
+    "ERR_CONNECTION_TIMED_OUT",
+    "ERR_INTERNET_DISCONNECTED",
+    "ERR_ABORTED",
+    "SSL connect error",
+)
+
+
+@dataclass
 class SandboxResult:
     """Result of testing one set of rules against a live page."""
     url: str
@@ -258,11 +278,13 @@ class SandboxResult:
     broken_selectors: List[str] = field(default_factory=list)
     tested_screenshot: bytes = field(default_factory=bytes)
     error: str = ""
+    unreachable: bool = False             # True when the target URL can't be loaded (bot-block, DNS, SSL)
 
 
 def run_sandbox(
     url: str,
     rules: List[str],
+    environment: str = "desktop",
     ticket_context: Optional[Dict[str, Any]] = None,
 ) -> SandboxResult:
     """
@@ -274,12 +296,28 @@ def run_sandbox(
     For breakage tickets such as image/video/content/UI hidden:
         passed = page_functional AND ticket_assertions_passed
 
-    ticket_context can include:
-        {
-            "problem_type": "content_broken_image",
-            "current_rules": ["||cdn.example.com^$image,domain=site.com"],
-            "validation_hints": {...}
-        }
+        3. Compare baseline vs. with-rules:
+           - ads_blocked: targeted selectors gone OR targeted requests aborted
+           - page_functional: critical nav/content selectors still present
+           - broken_selectors: non-ad selectors that disappeared (false positives)
+
+    Args:
+        url:         The original reported page URL.
+        rules:       List of rule strings that passed stages 1 and 2.
+        environment: Crawl environment name ("desktop", "android", "ios"). The sandbox
+                     uses the matching viewport and user-agent so the page renders the
+                     same layout as during the crawl. Always uses Chromium (page.route()
+                     is not available in WebKit), so iOS uses the iOS UA/viewport on
+                     Chromium as a best-effort match.
+        ticket_context: Optional ticket context. Can include:
+            {
+                "problem_type": "content_broken_image",
+                "current_rules": ["||cdn.example.com^$image,domain=site.com"],
+                "validation_hints": {...}
+            }
+
+    Returns:
+        SandboxResult. passed=True only if ads_blocked=True AND page_functional=True.
     """
     result = SandboxResult(url=url, passed=False)
 
@@ -314,7 +352,7 @@ def run_sandbox(
 
     try:
         from ..crawler.browser import (
-            _DEFAULT_USER_AGENT,
+            ENVIRONMENTS,
             _STEALTH_LAUNCH_ARGS,
             _apply_stealth,
             _import_playwright,
@@ -331,8 +369,25 @@ def run_sandbox(
         logger.exception("Playwright import failed")
         return result
 
+    profile = ENVIRONMENTS.get(environment, ENVIRONMENTS["desktop"])
+    ua = profile["user_agent"]
+    context_kwargs: Dict[str, Any] = {
+        "user_agent": ua,
+        "viewport": profile["viewport"],
+        "device_scale_factor": profile["device_scale_factor"],
+        "is_mobile": profile["is_mobile"],
+        "has_touch": profile["has_touch"],
+        "locale": "en-US",
+        "timezone_id": "America/New_York",
+        "extra_http_headers": {"Accept-Language": "en-US,en;q=0.9"},
+    }
+
+    logger.debug("Sandbox running in '%s' environment (viewport %s, mobile=%s)",
+                 environment, profile["viewport"], profile["is_mobile"])
+
     try:
         with sync_playwright() as playwright:
+            # Always use Chromium — WebKit does not support page.route() for network blocking
             browser = playwright.chromium.launch(
                 headless=True,
                 args=_STEALTH_LAUNCH_ARGS,
@@ -343,15 +398,9 @@ def run_sandbox(
                 # Reference page: no adblock rules.
                 # Used to detect whether candidate patch breaks normal page.
                 # ------------------------------------------------------
-                reference_context = browser.new_context(
-                    user_agent=_DEFAULT_USER_AGENT,
-                    viewport={"width": 1920, "height": 1080},
-                    locale="en-US",
-                    timezone_id="America/New_York",
-                    extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
-                )
+                reference_context = browser.new_context(**context_kwargs)
                 reference_page = reference_context.new_page()
-                _apply_stealth(reference_page, user_agent=_DEFAULT_USER_AGENT)
+                _apply_stealth(reference_page, user_agent=ua)
 
                 _load_page(reference_page, url, PlaywrightTimeoutError)
 
@@ -365,15 +414,9 @@ def run_sandbox(
                 # Baseline page: existing/current rules only.
                 # This helps reproduce breakage if current_rules are passed.
                 # ------------------------------------------------------
-                baseline_context = browser.new_context(
-                    user_agent=_DEFAULT_USER_AGENT,
-                    viewport={"width": 1920, "height": 1080},
-                    locale="en-US",
-                    timezone_id="America/New_York",
-                    extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
-                )
+                baseline_context = browser.new_context(**context_kwargs)
                 baseline_page = baseline_context.new_page()
-                _apply_stealth(baseline_page, user_agent=_DEFAULT_USER_AGENT)
+                _apply_stealth(baseline_page, user_agent=ua)
                 setattr(baseline_page, "_adblock_document_url", url)
 
                 if existing_rules:
@@ -394,15 +437,9 @@ def run_sandbox(
                 # Test page: existing/current rules + candidate patch.
                 # Candidate exception rules can now override existing blocks.
                 # ------------------------------------------------------
-                test_context = browser.new_context(
-                    user_agent=_DEFAULT_USER_AGENT,
-                    viewport={"width": 1920, "height": 1080},
-                    locale="en-US",
-                    timezone_id="America/New_York",
-                    extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
-                )
+                test_context = browser.new_context(**context_kwargs)
                 test_page = test_context.new_page()
-                _apply_stealth(test_page, user_agent=_DEFAULT_USER_AGENT)
+                _apply_stealth(test_page, user_agent=ua)
                 setattr(test_page, "_adblock_document_url", url)
 
                 _apply_network_rules(test_page, all_test_rules)
@@ -442,8 +479,13 @@ def run_sandbox(
                 browser.close()
 
     except Exception as exc:
-        result.error = f"sandbox runtime error: {exc}"
-        logger.exception(result.error)
+        error_str = str(exc)
+        result.error = f"sandbox browser failed for {url}: {exc}"
+        if any(pat in error_str for pat in _UNREACHABLE_PATTERNS):
+            result.unreachable = True
+            logger.warning("Sandbox unreachable (connection error) for %s: %s", url, error_str.splitlines()[0])
+        else:
+            logger.exception(result.error)
         return result
 
     # ------------------------------------------------------------------

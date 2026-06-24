@@ -201,7 +201,7 @@ def filter_uncovered(rules: list, skip: bool = False) -> Tuple[list, list]:
     """
     Split ParsedRule objects into (uncovered, externally_covered).
 
-    Pass skip=True to bypass all external list checks (--no-external flag).
+    Pass skip=True to bypass all external list checks and return all rules as uncovered.
     Loads lists on first call; subsequent calls use the in-memory sets.
     """
     if skip:

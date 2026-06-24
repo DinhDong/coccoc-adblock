@@ -24,9 +24,10 @@ Run from backend/:
     # Preview without crawling:
     python -m app.tests.test_crawl_batch --dry-run
 
-Output: data/crawl_outputs/results/<site>-<env>.json
-  The environment field is also stored inside each JSON so the AI rule
-  generator can identify it independently of the filename.
+Output: data/crawl_outputs/results/<site>.json
+  The environment is stored inside the JSON — the rule generator reads it
+  from there. Running multiple environments for the same site will overwrite
+  the previous result (last env wins).
 """
 
 import argparse

@@ -69,6 +69,7 @@ Ticket-aware behavior:
 - Prefer specific rules over broad rules.
 - Never generate broad rules like ||com^, ||net^, ||org^, ||.^, ##div, ##img, ##iframe, or unscoped generic selectors.
 - Do not generate rules that block first-party content images, videos, navigation, search, menu, forms, or download controls unless the ticket explicitly says they are ads.
+- The crawl environment (desktop/android/ios) tells you the viewport and UA used. Mobile crawls may expose different ad slots and selectors than desktop — generate rules matching what was actually observed.
 - Output one ABP rule per line only.
 - No markdown, no explanations, no comments, no numbering, no blank lines.\
 """
@@ -87,7 +88,7 @@ def build_prompt(
 
     url = crawl_signals.get("url", "unknown")
     title = crawl_signals.get("title", "")
-    environment = crawl_signals.get("environment", "")
+    environment = crawl_signals.get("environment", "desktop")
     page_domain = _hostname(url)
 
     ticket_context = crawl_signals.get("ticket_context", {})

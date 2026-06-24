@@ -74,6 +74,7 @@ class ValidationReport:
 def validate_rules(
     rules: list[str],
     page_url: str,
+    environment: str = "desktop",
     ticket_context: Optional[Dict[str, Any]] = None,
 ) -> ValidationReport:
     """
@@ -84,9 +85,22 @@ def validate_rules(
       2. Scope check syntax-valid rules.
       3. Sandbox each scope-safe rule individually.
 
+    Only rules that pass all three stages are included in ValidationReport.passing_rules().
+    Failed rules are logged with their failure stage and reason for the audit trail.
+
     This makes the validation result stricter:
       - A rule only passes if that exact rule passes sandbox.
       - A batch cannot pass because another rule did the useful work.
+
+    Args:
+        rules:       List of rule strings from rule_generator.generate_rules().
+        page_url:    The original reported URL (needed for the sandbox browser session).
+        environment: Crawl environment ("desktop", "android", "ios") — passed to the
+                     sandbox so it validates with the same viewport and UA as the crawl.
+        ticket_context: Optional ticket context for effect verification.
+
+    Returns:
+        ValidationReport. Pass report.passing_rules() to the moderator queue.
     """
     safe_ticket_context = _safe_ticket_context(ticket_context)
     rule_strings = [
@@ -212,6 +226,7 @@ def validate_rules(
             page_url=page_url,
             rule=rule,
             ticket_context=safe_ticket_context,
+            environment=environment,
         )
 
         sandbox_passed = bool(sandbox_result and sandbox_result.passed)
@@ -257,6 +272,7 @@ def _run_sandbox_for_one_rule(
     page_url: str,
     rule: str,
     ticket_context: Dict[str, Any],
+    environment: str = "desktop",
 ) -> SandboxResult:
     """
     Run sandbox for exactly one candidate rule.
@@ -266,6 +282,7 @@ def _run_sandbox_for_one_rule(
             page_url=page_url,
             rules=[rule],
             ticket_context=ticket_context,
+            environment=environment,
         )
     except Exception as exc:
         return SandboxResult(
@@ -279,31 +296,35 @@ def _call_run_sandbox(
     page_url: str,
     rules: list[str],
     ticket_context: Dict[str, Any],
+    environment: str = "desktop",
 ) -> SandboxResult:
     """
-    Call sandbox_check.run_sandbox() with ticket_context.
+    Call sandbox_check.run_sandbox() with ticket_context and environment.
 
     Backward-compatible if an older sandbox_check.py is still loaded.
     """
     try:
         signature = inspect.signature(run_sandbox)
+        kwargs: Dict[str, Any] = {}
 
         if "ticket_context" in signature.parameters:
-            return run_sandbox(
-                page_url,
-                rules,
-                ticket_context=ticket_context,
-            )
+            kwargs["ticket_context"] = ticket_context
+
+        if "environment" in signature.parameters:
+            kwargs["environment"] = environment
+
+        if kwargs:
+            return run_sandbox(page_url, rules, **kwargs)
 
         logger.warning(
-            "sandbox_check.run_sandbox() has no ticket_context parameter yet. "
+            "sandbox_check.run_sandbox() has no ticket_context or environment parameter yet. "
             "Calling old signature."
         )
         return run_sandbox(page_url, rules)
 
     except TypeError as exc:
         logger.warning(
-            "Failed to call run_sandbox with ticket_context. "
+            "Failed to call run_sandbox with extended params. "
             "Falling back to old signature: %s",
             exc,
         )

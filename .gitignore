@@ -43,3 +43,6 @@ htmlcov/
 **/data/crawl_outputs/
 **/data/rule_outputs/
 **/data/external_lists/
+
+# Docker
+docker-compose.override.yml

@@ -20,7 +20,6 @@
 #     overlay/anti-adblock    => page_functional AND ticket assertions
 # - Avoid requiring every generic selector in validation_hints to be visible.
 
-import io
 import logging
 import re
 import time
@@ -32,8 +31,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_MS = 30_000
 NETWORK_IDLE_TIMEOUT_MS = 5_000
-PAGE_SETTLE_DELAY_SECONDS = 0.5
-LAYOUT_DIFF_FAIL_THRESHOLD = 0.40
+PAGE_SETTLE_DELAY_SECONDS = 2.0
 VISIBLE_ELEMENT_DROP_FAIL_RATIO = 0.35
 
 CRITICAL_SELECTORS = [
@@ -236,6 +234,26 @@ class _NetworkRule:
 
 
 @dataclass
+class _CosmeticRule:
+    original: str
+    selector: str
+    domain_prefix: str = ""
+    is_exception: bool = False
+
+
+_UNREACHABLE_PATTERNS = (
+    "ERR_CONNECTION_RESET",
+    "ERR_NAME_NOT_RESOLVED",
+    "ERR_NAME_RESOLUTION_FAILED",
+    "ERR_CONNECTION_REFUSED",
+    "ERR_CONNECTION_TIMED_OUT",
+    "ERR_INTERNET_DISCONNECTED",
+    "ERR_ABORTED",
+    "SSL connect error",
+)
+
+
+@dataclass
 class SandboxResult:
     """Result of testing one set of rules against a live page."""
     url: str
@@ -253,7 +271,6 @@ class SandboxResult:
     existing_rules_count: int = 0
     candidate_rules_count: int = 0
 
-    layout_diff_pct: float = 0.0
     blocked_requests: List[str] = field(default_factory=list)
     candidate_blocked_requests: List[str] = field(default_factory=list)
     missing_ad_selectors: List[str] = field(default_factory=list)
@@ -261,11 +278,13 @@ class SandboxResult:
     broken_selectors: List[str] = field(default_factory=list)
     tested_screenshot: bytes = field(default_factory=bytes)
     error: str = ""
+    unreachable: bool = False             # True when the target URL can't be loaded (bot-block, DNS, SSL)
 
 
 def run_sandbox(
     url: str,
     rules: List[str],
+    environment: str = "desktop",
     ticket_context: Optional[Dict[str, Any]] = None,
 ) -> SandboxResult:
     """
@@ -277,12 +296,28 @@ def run_sandbox(
     For breakage tickets such as image/video/content/UI hidden:
         passed = page_functional AND ticket_assertions_passed
 
-    ticket_context can include:
-        {
-            "problem_type": "content_broken_image",
-            "current_rules": ["||cdn.example.com^$image,domain=site.com"],
-            "validation_hints": {...}
-        }
+        3. Compare baseline vs. with-rules:
+           - ads_blocked: targeted selectors gone OR targeted requests aborted
+           - page_functional: critical nav/content selectors still present
+           - broken_selectors: non-ad selectors that disappeared (false positives)
+
+    Args:
+        url:         The original reported page URL.
+        rules:       List of rule strings that passed stages 1 and 2.
+        environment: Crawl environment name ("desktop", "android", "ios"). The sandbox
+                     uses the matching viewport and user-agent so the page renders the
+                     same layout as during the crawl. Always uses Chromium (page.route()
+                     is not available in WebKit), so iOS uses the iOS UA/viewport on
+                     Chromium as a best-effort match.
+        ticket_context: Optional ticket context. Can include:
+            {
+                "problem_type": "content_broken_image",
+                "current_rules": ["||cdn.example.com^$image,domain=site.com"],
+                "validation_hints": {...}
+            }
+
+    Returns:
+        SandboxResult. passed=True only if ads_blocked=True AND page_functional=True.
     """
     result = SandboxResult(url=url, passed=False)
 
@@ -317,7 +352,7 @@ def run_sandbox(
 
     try:
         from ..crawler.browser import (
-            _DEFAULT_USER_AGENT,
+            ENVIRONMENTS,
             _STEALTH_LAUNCH_ARGS,
             _apply_stealth,
             _import_playwright,
@@ -334,8 +369,25 @@ def run_sandbox(
         logger.exception("Playwright import failed")
         return result
 
+    profile = ENVIRONMENTS.get(environment, ENVIRONMENTS["desktop"])
+    ua = profile["user_agent"]
+    context_kwargs: Dict[str, Any] = {
+        "user_agent": ua,
+        "viewport": profile["viewport"],
+        "device_scale_factor": profile["device_scale_factor"],
+        "is_mobile": profile["is_mobile"],
+        "has_touch": profile["has_touch"],
+        "locale": "en-US",
+        "timezone_id": "America/New_York",
+        "extra_http_headers": {"Accept-Language": "en-US,en;q=0.9"},
+    }
+
+    logger.debug("Sandbox running in '%s' environment (viewport %s, mobile=%s)",
+                 environment, profile["viewport"], profile["is_mobile"])
+
     try:
         with sync_playwright() as playwright:
+            # Always use Chromium — WebKit does not support page.route() for network blocking
             browser = playwright.chromium.launch(
                 headless=True,
                 args=_STEALTH_LAUNCH_ARGS,
@@ -346,15 +398,9 @@ def run_sandbox(
                 # Reference page: no adblock rules.
                 # Used to detect whether candidate patch breaks normal page.
                 # ------------------------------------------------------
-                reference_context = browser.new_context(
-                    user_agent=_DEFAULT_USER_AGENT,
-                    viewport={"width": 1920, "height": 1080},
-                    locale="en-US",
-                    timezone_id="America/New_York",
-                    extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
-                )
+                reference_context = browser.new_context(**context_kwargs)
                 reference_page = reference_context.new_page()
-                _apply_stealth(reference_page, user_agent=_DEFAULT_USER_AGENT)
+                _apply_stealth(reference_page, user_agent=ua)
 
                 _load_page(reference_page, url, PlaywrightTimeoutError)
 
@@ -362,25 +408,15 @@ def run_sandbox(
                     reference_page,
                     candidate_cosmetic_selectors,
                 )
-                reference_screenshot = reference_page.screenshot(
-                    full_page=True,
-                    timeout=DEFAULT_TIMEOUT_MS,
-                )
                 reference_context.close()
 
                 # ------------------------------------------------------
                 # Baseline page: existing/current rules only.
                 # This helps reproduce breakage if current_rules are passed.
                 # ------------------------------------------------------
-                baseline_context = browser.new_context(
-                    user_agent=_DEFAULT_USER_AGENT,
-                    viewport={"width": 1920, "height": 1080},
-                    locale="en-US",
-                    timezone_id="America/New_York",
-                    extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
-                )
+                baseline_context = browser.new_context(**context_kwargs)
                 baseline_page = baseline_context.new_page()
-                _apply_stealth(baseline_page, user_agent=_DEFAULT_USER_AGENT)
+                _apply_stealth(baseline_page, user_agent=ua)
                 setattr(baseline_page, "_adblock_document_url", url)
 
                 if existing_rules:
@@ -401,15 +437,9 @@ def run_sandbox(
                 # Test page: existing/current rules + candidate patch.
                 # Candidate exception rules can now override existing blocks.
                 # ------------------------------------------------------
-                test_context = browser.new_context(
-                    user_agent=_DEFAULT_USER_AGENT,
-                    viewport={"width": 1920, "height": 1080},
-                    locale="en-US",
-                    timezone_id="America/New_York",
-                    extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
-                )
+                test_context = browser.new_context(**context_kwargs)
                 test_page = test_context.new_page()
-                _apply_stealth(test_page, user_agent=_DEFAULT_USER_AGENT)
+                _apply_stealth(test_page, user_agent=ua)
                 setattr(test_page, "_adblock_document_url", url)
 
                 _apply_network_rules(test_page, all_test_rules)
@@ -449,18 +479,18 @@ def run_sandbox(
                 browser.close()
 
     except Exception as exc:
-        result.error = f"sandbox runtime error: {exc}"
-        logger.exception(result.error)
+        error_str = str(exc)
+        result.error = f"sandbox browser failed for {url}: {exc}"
+        if any(pat in error_str for pat in _UNREACHABLE_PATTERNS):
+            result.unreachable = True
+            logger.warning("Sandbox unreachable (connection error) for %s: %s", url, error_str.splitlines()[0])
+        else:
+            logger.exception(result.error)
         return result
 
     # ------------------------------------------------------------------
     # Evaluate candidate ad blocking.
     # ------------------------------------------------------------------
-    result.layout_diff_pct = _screenshot_diff(
-        reference_screenshot,
-        tested_screenshot,
-    )
-
     result.broken_selectors = _find_broken_critical_selectors(
         reference_state.get("critical_counts", {}),
         tested_state.get("critical_counts", {}),
@@ -496,14 +526,9 @@ def run_sandbox(
     tested_visible = int(tested_state.get("visible_count", 0) or 0)
 
     visible_ratio = tested_visible / reference_visible
-    layout_ok = result.layout_diff_pct <= LAYOUT_DIFF_FAIL_THRESHOLD
     visible_count_ok = visible_ratio >= VISIBLE_ELEMENT_DROP_FAIL_RATIO
 
-    result.page_functional = (
-        not result.broken_selectors
-        and layout_ok
-        and visible_count_ok
-    )
+    result.page_functional = not result.broken_selectors and visible_count_ok
 
     # ------------------------------------------------------------------
     # Evaluate ticket-specific behavior.
@@ -554,10 +579,10 @@ def run_sandbox(
 
     if not result.page_functional:
         logger.warning(
-            "Sandbox detected page functionality risk for %s: layout_diff=%.3f broken=%s",
+            "Sandbox detected page functionality risk for %s: broken=%s visible_ratio=%.2f",
             url,
-            result.layout_diff_pct,
             result.broken_selectors,
+            visible_ratio,
         )
 
     if not result.ticket_assertions_passed:
@@ -1010,44 +1035,6 @@ def _cosmetic_targets_blocked(
     return False
 
 
-def _screenshot_diff(reference: bytes, with_rules: bytes) -> float:
-    if reference == with_rules:
-        return 0.0
-
-    if not reference or not with_rules:
-        return 1.0
-
-    try:
-        from PIL import Image
-
-        reference_img = Image.open(io.BytesIO(reference)).convert("RGB")
-        with_rules_img = Image.open(io.BytesIO(with_rules)).convert("RGB")
-
-        width = min(reference_img.width, with_rules_img.width)
-        height = min(reference_img.height, with_rules_img.height)
-
-        if width == 0 or height == 0:
-            return 1.0
-
-        reference_img = reference_img.crop((0, 0, width, height))
-        with_rules_img = with_rules_img.crop((0, 0, width, height))
-
-        reference_pixels = reference_img.load()
-        with_rules_pixels = with_rules_img.load()
-
-        changed = 0
-        total = width * height
-
-        for y in range(height):
-            for x in range(width):
-                if reference_pixels[x, y] != with_rules_pixels[x, y]:
-                    changed += 1
-
-        return changed / total if total else 1.0
-
-    except Exception as exc:
-        logger.warning("Screenshot diff failed: %s", exc)
-        return 0.0
 
 
 def _extract_applicable_cosmetic_selectors(

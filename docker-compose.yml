@@ -1,0 +1,44 @@
+# ==========================================================================
+# docker-compose.yml — AdBlock Rule Engine Generator
+#
+# Usage:
+#   docker compose up --build -d          # start MySQL
+#   docker compose run --rm backend app.services.workflow <report_id>
+#   docker compose run --rm backend app.services.crawler <url> <id> --env desktop
+#   docker compose run --rm backend pytest app/tests/ -v
+#   docker compose down                   # stop; data preserved
+#   docker compose down -v                # stop + delete MySQL data
+# ==========================================================================
+
+services:
+  # ---- MySQL 8 database ----
+  db:
+    image: mysql:8.0
+    restart: unless-stopped
+    env_file: .env.local
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---- Python backend (Playwright + AI pipeline) ----
+  backend:
+    build: ./backend
+    env_file: .env.local
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./backend/data:/app/data
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+
+volumes:
+  mysql_data:

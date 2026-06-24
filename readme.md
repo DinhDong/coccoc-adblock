@@ -4,6 +4,65 @@ AI-assisted pipeline that crawls reported domestic websites, extracts ad signals
 
 ---
 
+## Docker quickstart
+
+### Prerequisites
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows / macOS) or Docker Engine + Docker Compose (Linux)
+
+### Setup
+
+```bash
+# 1. Clone the repo
+git clone <repo-url> && cd coccoc-adblock
+
+# 2. Create your environment file from the template
+cp .env.example .env.local
+# Edit .env.local — set your OPENAI_API_KEY and change the MySQL passwords
+
+# 3. Build and start all services (MySQL + backend)
+docker compose up --build -d
+
+# 4. Verify MySQL is healthy
+docker compose ps   # db should show "healthy"
+```
+
+### Running the pipeline
+
+```bash
+# Run the full workflow for a report
+docker compose run --rm backend app.services.workflow vnexpress-desktop
+
+# Run the crawler only
+docker compose run --rm backend app.services.crawler https://vnexpress.net vnexpress-desktop --env desktop
+
+# Run tests
+docker compose run --rm backend pytest app/tests/ -v
+```
+
+### Useful commands
+
+```bash
+# View logs
+docker compose logs -f backend
+
+# Connect to MySQL
+docker compose exec db mysql -u adblock -p adblock
+
+# Stop services (data preserved)
+docker compose down
+
+# Stop and delete MySQL data
+docker compose down -v
+
+# Rebuild after code changes
+docker compose build backend
+```
+
+> **Note:** Crawl outputs (screenshots, HTML, JSON results) are stored in `backend/data/` which is mounted as a volume — files persist on your host machine across container restarts.
+
+---
+
 ## Project structure
 
 ```

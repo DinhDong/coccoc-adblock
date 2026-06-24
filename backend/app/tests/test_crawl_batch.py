@@ -24,9 +24,10 @@ Run from backend/:
     # Preview without crawling:
     python -m app.tests.test_crawl_batch --dry-run
 
-Output: data/crawl_outputs/results/<site>-<env>.json
-  The environment field is also stored inside each JSON so the AI rule
-  generator can identify it independently of the filename.
+Output: data/crawl_outputs/results/<site>.json
+  The environment is stored inside the JSON — the rule generator reads it
+  from there. Running multiple environments for the same site will overwrite
+  the previous result (last env wins).
 """
 
 import argparse
@@ -96,15 +97,13 @@ def main() -> None:
         print(f"Unknown environment(s): {unknown_envs}. Valid: {ALL_ENVS}")
         sys.exit(1)
 
-    # Build job list: always use {site}-{env} so filenames are uniform
-    # The AI rule generator reads the 'environment' field inside the JSON;
-    # the suffix here is just for human readability and to prevent overwriting
-    # results when the same site is crawled in multiple environments.
     jobs: list[tuple[str, str, str]] = []  # (report_id, url, env)
     for label in args.sites:
         base_id, url = SITES[label]
         for env in selected_envs:
-            jobs.append((f"{base_id}-{env}", url, env))
+            # DO NOT ADD THIS BACK — environment is stored inside the JSON, not in the filename.
+            # jobs.append((f"{base_id}-{env}", url, env))
+            jobs.append((base_id, url, env))
 
     # Print plan
     separator(f"Crawl plan — {len(jobs)} job(s)")

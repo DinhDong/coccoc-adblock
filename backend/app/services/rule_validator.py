@@ -15,9 +15,10 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional
 
 from app.services.problem_policy import (
     LEGACY_DEFAULT_PROBLEM_TYPE,
@@ -86,6 +87,7 @@ class ValidationReport:
 def validate_rules(
     rules: list[Any],
     page_url: str,
+    environment: str = "desktop",
     ticket_context: Optional[Mapping[str, Any]] = None,
     run_sandbox_checks: bool = True,
     problem_type: Optional[str] = None,
@@ -100,17 +102,17 @@ def validate_rules(
       3. Ticket policy direction validation.
       4. Per-rule sandbox validation.
 
+    Only rules that pass all four stages are included in ValidationReport.passing_rules().
+    Failed rules are logged with their failure stage and reason for the audit trail.
+
     Args:
-        rules:
-            List of rule strings or ParsedRule-like objects.
-        page_url:
-            Original reported URL.
-        ticket_context:
-            Normalized ticket context from ticket_context.py.
-        run_sandbox_checks:
-            If False, skip live browser sandbox and pass rules that reached stage 3.
-        problem_type:
-            Optional override if caller cannot pass full ticket_context.
+        rules:            List of rule strings or ParsedRule-like objects.
+        page_url:         The original reported URL (needed for sandbox browser session).
+        environment:      Crawl environment ("desktop", "android", "ios") — passed to
+                          sandbox so it validates with the same viewport and UA as the crawl.
+        ticket_context:   Normalized ticket context from ticket_context.py.
+        run_sandbox_checks: If False, skip live browser sandbox.
+        problem_type:     Optional override if caller cannot pass full ticket_context.
 
     Supported compatibility kwargs:
         run_sandbox=True/False
@@ -118,7 +120,7 @@ def validate_rules(
         skip_sandbox=True/False
 
     Returns:
-        ValidationReport.
+        ValidationReport. Pass report.passing_rules() to the moderator queue.
     """
     if "run_sandbox" in kwargs:
         run_sandbox_checks = bool(kwargs["run_sandbox"])
@@ -336,6 +338,7 @@ def validate_rules(
                 page_url=page_url,
                 rule=rule,
                 ticket_context=context,
+                environment=environment,
             )
         except Exception as exc:
             sandbox_result = SandboxResult(
@@ -388,9 +391,7 @@ def _resolve_problem_type(
             fallback="unknown",
         )
 
-    # Backward compatibility:
-    # If older callers do not pass ticket_context, treat the run as legacy
-    # ad-blocking mode.
+    # Backward compatibility: no ticket_context → treat as legacy ad-blocking mode.
     return LEGACY_DEFAULT_PROBLEM_TYPE
 
 
@@ -460,25 +461,24 @@ def _run_sandbox_single_rule(
     page_url: str,
     rule: str,
     ticket_context: Mapping[str, Any],
+    environment: str = "desktop",
 ) -> SandboxResult:
     """
     Run sandbox for exactly one candidate rule.
 
-    This keeps validation honest:
-    one good rule cannot make unrelated rules pass.
+    This keeps validation honest: one good rule cannot make unrelated rules pass.
     """
-    rules = [rule]
+    sig = inspect.signature(run_sandbox)
+    kwargs: Dict[str, Any] = {}
+    if "ticket_context" in sig.parameters:
+        kwargs["ticket_context"] = dict(ticket_context)
+    if "environment" in sig.parameters:
+        kwargs["environment"] = environment
 
     try:
-        return run_sandbox(
-            page_url,
-            rules,
-            ticket_context=dict(ticket_context),
-        )
+        return run_sandbox(page_url, [rule], **kwargs)
     except TypeError:
-        # Backward compatibility with older sandbox_check.py that only accepts
-        # run_sandbox(url, rules).
-        return run_sandbox(page_url, rules)
+        return run_sandbox(page_url, [rule])
 
 
 def _sandbox_policy_result(
@@ -609,15 +609,12 @@ def _sandbox_failure_reason(sandbox_result: Optional[SandboxResult]) -> str:
 
     if not page_functional:
         broken_selectors = getattr(sandbox_result, "broken_selectors", []) or []
-        layout_diff_pct = float(getattr(sandbox_result, "layout_diff_pct", 0.0) or 0.0)
 
         if broken_selectors:
             reasons.append("broken_selectors=" + ",".join(map(str, broken_selectors)))
 
-        if layout_diff_pct > 0:
-            reasons.append(f"layout_diff_pct={layout_diff_pct:.3f}")
-
-        reasons.append("page_not_functional")
+        if not any(reason.startswith("broken_selectors=") for reason in reasons):
+            reasons.append("page_not_functional")
 
     if not ticket_assertions_passed:
         errors = getattr(sandbox_result, "ticket_assertion_errors", []) or []

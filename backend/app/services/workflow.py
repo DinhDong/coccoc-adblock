@@ -68,6 +68,8 @@ def _separator(title: str) -> None:
 def run_rule_generation(
     crawl_result: Dict[str, Any],
     report_id: str,
+    skip_external: bool = False,
+    discard_existing: bool = False,
 ) -> List[Any]:
     """
     Stage 1 — call the LLM, parse the response, dedupe candidates, and persist
@@ -79,18 +81,18 @@ def run_rule_generation(
       2. External public filter lists:
          skip rules already covered by ABPvn/EasyList/EasyPrivacy/etc.
 
-    The saved rules JSON includes:
-      - ticket_context
-      - problem_type
-      - resolution_strategy
-      - token usage
-      - prompt preview
-      - duplicate rules skipped
-      - generated rules
+    Args:
+        skip_external:    Skip external filter list (EasyList, etc.) checks.
+        discard_existing: Clear the domain's internal registry before deduping
+                          so all generated rules are treated as new.
+
+    Returns:
+        List of (non-duplicate) ParsedRule objects.
     """
     from app.services.external_filter_lists import filter_uncovered
     from app.services.rule_generator import generate_rules_with_metadata
     from app.services.rule_registry import (
+        clear_rules,
         filter_new_rules,
         get_domain,
         normalize_rule,
@@ -119,33 +121,37 @@ def run_rule_generation(
         if fallback_used is None:
             fallback_used = token_usage.get("fallback_used")
 
-    internal_dupes: List[Any] = []
-    external_dupes: List[Any] = []
-    rules: List[Any] = []
+    if not generated_rules:
+        logger.warning("Stage 1: no rules generated for %s", report_id)
+        return []
 
-    if generated_rules:
-        # Dedup 1: skip rules already generated for this domain.
-        rules, internal_dupes = filter_new_rules(url, generated_rules)
+    if discard_existing:
+        cleared = clear_rules(domain)
+        if cleared:
+            logger.info("Stage 1: cleared %d existing rule(s) for %s (discard mode)", cleared, domain)
 
-        if internal_dupes:
-            logger.info(
-                "Stage 1: skipped %d rule(s) already in internal registry for %s",
-                len(internal_dupes),
-                domain,
-            )
+    # Dedup 1: skip rules already generated for this domain.
+    rules, internal_dupes = filter_new_rules(url, generated_rules)
+    if internal_dupes:
+        logger.info(
+            "Stage 1: skipped %d rule(s) already in internal registry for %s",
+            len(internal_dupes), domain,
+        )
 
-        # Dedup 2: skip rules already covered by public filter lists.
-        rules, external_dupes = filter_uncovered(rules)
-
-        if external_dupes:
-            for rule, source in external_dupes:
-                logger.info(
-                    "Stage 1: skipped rule already in %s: %s",
-                    source,
-                    _coerce_rule(rule),
-                )
+    # Dedup 2: skip rules already covered by public filter lists.
+    rules, external_dupes = filter_uncovered(rules, skip=skip_external)
+    if external_dupes:
+        for rule, source in external_dupes:
+            logger.info("Stage 1: skipped rule already in %s: %s", source, _coerce_rule(rule))
 
     total_skipped = len(internal_dupes) + len(external_dupes)
+
+    if not rules:
+        logger.info(
+            "Stage 1: all %d generated rule(s) were duplicates for %s — nothing new to save",
+            len(generated_rules), report_id,
+        )
+        return []
 
     OUT_RESULTS.mkdir(parents=True, exist_ok=True)
     rules_path = OUT_RESULTS / f"{report_id}_rules.json"
@@ -158,7 +164,7 @@ def run_rule_generation(
         "problem_type": problem_type,
         "resolution_strategy": resolution_strategy,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "status": "generated" if rules else "no_rules",
+        "status": "generated",
         "rule_count": len(rules),
         "generated_rule_count": len(generated_rules),
         "token_usage": token_usage,
@@ -194,47 +200,17 @@ def run_rule_generation(
     with open(rules_path, "w", encoding="utf-8") as file:
         json.dump(_make_json_safe(rules_data), file, indent=2, ensure_ascii=False)
 
-    # Register only rules that survived dedup and were saved.
     if rules:
         register_rules(
             domain,
-            [
-                normalize_rule(_coerce_rule(rule))
-                for rule in rules
-            ],
+            [normalize_rule(_coerce_rule(rule)) for rule in rules],
         )
 
     _log_token_usage(token_usage)
 
-    if not generated_rules:
-        logger.warning(
-            "Stage 1: no rules generated for %s | problem_type=%s | strategy=%s",
-            report_id,
-            problem_type,
-            resolution_strategy,
-        )
-        return []
-
-    if not rules:
-        logger.info(
-            "Stage 1: all %d generated rule(s) were duplicates for %s "
-            "| skipped=%d | problem_type=%s | strategy=%s",
-            len(generated_rules),
-            report_id,
-            total_skipped,
-            problem_type,
-            resolution_strategy,
-        )
-        return []
-
     logger.info(
-        "Stage 1: %d/%d new rules saved → %s | skipped=%d | problem_type=%s | strategy=%s",
-        len(rules),
-        len(generated_rules),
-        rules_path,
-        total_skipped,
-        problem_type,
-        resolution_strategy,
+        "Stage 1: %d new rule(s) saved → %s  (%d duplicate(s) skipped) | problem_type=%s",
+        len(rules), rules_path, total_skipped, problem_type,
     )
 
     return rules
@@ -244,17 +220,17 @@ def run_rule_validation(
     rules: List[Any],
     url: str,
     report_id: str,
+    environment: str = "desktop",
     ticket_context: Optional[Mapping[str, Any]] = None,
     run_sandbox_checks: bool = True,
 ) -> Dict[str, Any]:
     """
     Stage 2 — run syntax, scope, policy, and sandbox checks.
 
-    The saved validation JSON includes:
-      - problem_type
-      - resolution_strategy
-      - policy result per rule
-      - syntax/scope/sandbox details per rule
+    Args:
+        environment:    Crawl environment ("desktop", "android", "ios") — forwarded to
+                        the sandbox so validation uses the same viewport/UA as the crawl.
+        ticket_context: Optional ticket metadata stored in the validation JSON output.
     """
     from app.services.rule_validator import validate_rules
     from app.services.ticket_context import normalize_ticket_context
@@ -272,6 +248,7 @@ def run_rule_validation(
     report = validate_rules(
         rule_strings,
         url,
+        environment=environment,
         ticket_context=normalized_ticket_context,
         run_sandbox_checks=run_sandbox_checks,
     )
@@ -328,20 +305,28 @@ def run_pipeline(
     report_id: str,
     verbose: bool = False,
     run_validation: bool = True,
+    skip_external: bool = False,
 ) -> Dict[str, Any]:
     """
     Full pipeline:
-        load crawl result
-        normalize ticket_context
-        generate rules
-        dedupe generated rules
-        optionally validate
-        return summary
+        load crawl result → normalize ticket context → generate rules
+        → optionally validate → return summary.
+
+    Args:
+        report_id:      Matches data/crawl_outputs/results/<report_id>.json
+        verbose:        Print stage headers and per-rule output to stdout.
+        run_validation: If False, skip validation/sandbox stage.
+        skip_external:  Skip external filter list (EasyList etc.) dedup check.
     """
+    from app.services.rule_registry import get_domain, get_existing_rules
+
     crawl_path = CRAWL_RESULTS / f"{report_id}.json"
 
     if not crawl_path.exists():
-        raise FileNotFoundError(f"Crawl result not found: {crawl_path}")
+        raise FileNotFoundError(
+            f"Crawl result not found: {crawl_path}\n"
+            f"Run: python -m app.services.crawler <url> {report_id} --env desktop"
+        )
 
     with open(crawl_path, encoding="utf-8") as file:
         crawl_result = json.load(file)
@@ -354,15 +339,53 @@ def run_pipeline(
     problem_type = _get_problem_type(ticket_context)
     resolution_strategy = _get_resolution_strategy(ticket_context)
 
+    crawl_screenshot = crawl_result.get("files", {}).get("screenshot", "")
+    if crawl_screenshot:
+        logger.info("Crawl screenshot → %s", crawl_screenshot)
+
     if verbose:
         _separator(f"Pipeline: {report_id}  |  {url}  |  env: {env}")
         print(f"  Problem type: {problem_type}")
         print(f"  Strategy: {resolution_strategy}")
 
+    # --- Check for existing rules in the registry and prompt the user ---
+    domain = get_domain(url)
+    existing = get_existing_rules(domain)
+    discard_existing = False
+
+    if existing and verbose:
+        print(f"  Domain '{domain}' already has {len(existing)} rule(s) in the registry.")
+        print("  [1] Discard old rules — overwrite with fresh generation")
+        print("  [2] Keep old rules — only add new ones  (default)")
+        print("  [3] Abort")
+        try:
+            choice = input("  Choice [1/2/3]: ").strip() or "2"
+        except (EOFError, KeyboardInterrupt):
+            choice = "2"
+
+        if choice == "1":
+            discard_existing = True
+            print()
+        elif choice == "3":
+            print("\n  Aborted.")
+            return {
+                "report_id": report_id, "url": url, "environment": env,
+                "ticket_context": ticket_context, "problem_type": problem_type,
+                "rules_generated": 0, "rules_passed": 0, "rules_failed": 0,
+                "passing_rules": [], "status": "aborted",
+            }
+        else:
+            print()
+
     if verbose:
         _separator(f"Stage 1: Rule Generation — {report_id}")
 
-    rules = run_rule_generation(crawl_result, report_id)
+    rules = run_rule_generation(
+        crawl_result,
+        report_id,
+        skip_external=skip_external,
+        discard_existing=discard_existing,
+    )
 
     if not rules:
         if verbose:
@@ -410,9 +433,10 @@ def run_pipeline(
         _separator(f"Stage 2: Rule Validation — {report_id}")
 
     validation = run_rule_validation(
-        rules,
-        url,
-        report_id,
+        rules=rules,
+        url=url,
+        report_id=report_id,
+        environment=env,
         ticket_context=ticket_context,
         run_sandbox_checks=True,
     )
@@ -535,7 +559,6 @@ def _serialize_sandbox_result(result: Any) -> Optional[Dict[str, Any]]:
         ),
         "existing_rules_count": int(getattr(result, "existing_rules_count", 0) or 0),
         "candidate_rules_count": int(getattr(result, "candidate_rules_count", 0) or 0),
-        "layout_diff_pct": float(getattr(result, "layout_diff_pct", 0.0) or 0.0),
         "blocked_requests": list(getattr(result, "blocked_requests", []) or []),
         "candidate_blocked_requests": list(
             getattr(result, "candidate_blocked_requests", []) or []
@@ -662,6 +685,12 @@ if __name__ == "__main__":
         help="Skip validation/sandbox stage for faster rule generation testing.",
     )
 
+    parser.add_argument(
+        "--no-external",
+        action="store_true",
+        help="Skip external filter list checks (EasyList, ABPvn, etc.) — useful when download fails.",
+    )
+
     args = parser.parse_args()
 
     try:
@@ -669,6 +698,7 @@ if __name__ == "__main__":
             report_id=args.report_id,
             verbose=True,
             run_validation=not args.no_sandbox,
+            skip_external=args.no_external,
         )
     except FileNotFoundError as exc:
         logger.error(str(exc))

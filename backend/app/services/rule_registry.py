@@ -90,6 +90,16 @@ def register_rules(domain: str, normalized_rules: List[str]) -> None:
     _save_registry(registry)
 
 
+def clear_rules(domain: str) -> int:
+    """Remove all known rules for a domain. Returns the count of removed rules."""
+    registry = _load_registry()
+    removed = len(registry.pop(domain, []))
+    if removed:
+        _save_registry(registry)
+        logger.info("Cleared %d rule(s) from registry for %s", removed, domain)
+    return removed
+
+
 def filter_new_rules(url: str, rules: List) -> Tuple[List, List]:
     """
     Split candidate ParsedRule objects into (new, duplicate) based on what's

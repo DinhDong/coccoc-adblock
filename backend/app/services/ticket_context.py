@@ -1,34 +1,18 @@
 import re
 from typing import Any, Dict, List, Mapping
 
+from app.services.problem_policy import (
+    LEGACY_DEFAULT_PROBLEM_TYPE,
+    get_default_targets_to_block,
+    get_default_targets_to_preserve,
+    get_default_validation_hints,
+    get_known_problem_types,
+    get_resolution_strategy,
+    normalize_problem_type,
+)
 
-KNOWN_PROBLEM_TYPES = {
-    "specific_ad_not_blocked",
-    "content_broken_image",
-    "content_broken_video",
-    "content_broken",
-    "ui_hidden",
-    "anti_adblock_or_overlay",
-    "unknown",
-}
 
-
-LEGACY_DEFAULT_PROBLEM_TYPE = "specific_ad_not_blocked"
-
-LEGACY_TARGET_TO_BLOCK = [
-    "detected ad containers",
-    "ad iframes",
-    "ad network requests",
-    "sponsored or popup ad elements",
-]
-
-LEGACY_TARGET_TO_PRESERVE = [
-    "main content",
-    "navigation",
-    "forms",
-    "media",
-    "user controls",
-]
+KNOWN_PROBLEM_TYPES = set(get_known_problem_types())
 
 
 def normalize_ticket_context(raw_context: Any) -> Dict[str, Any]:
@@ -38,6 +22,7 @@ def normalize_ticket_context(raw_context: Any) -> Dict[str, Any]:
     Important behavior:
     - If no ticket_context is provided, fallback to legacy ad-blocking mode:
         problem_type = specific_ad_not_blocked
+        resolution_strategy = block_visible_ad
 
       This keeps backward compatibility with the old pipeline:
         crawl URL -> detect ad signals -> generate block/hide rules.
@@ -48,16 +33,10 @@ def normalize_ticket_context(raw_context: Any) -> Dict[str, Any]:
       This prevents a second normalization pass from relabeling it as:
         url_only_best_effort
 
-    - If ticket_context is provided, use it to generate ticket-aware rule patches:
-        content_broken_image      -> prefer @@ image/CDN exceptions
-        content_broken_video      -> prefer @@ media/player exceptions
-        ui_hidden                 -> prefer #@# cosmetic exceptions
-        anti_adblock_or_overlay   -> prefer ## overlay hiding or narrow exceptions
-        specific_ad_not_blocked   -> prefer blocking/hiding rules
+    - Problem policy is centralized in:
+        app.services.problem_policy
 
-    - current_rules / matched_rules / blocked_resources are preserved because
-      exception rules are much more accurate when we know what existing rule
-      or resource caused the breakage.
+      So adding a new problem type should usually be done there first.
     """
     context = _coerce_dict(raw_context)
 
@@ -81,10 +60,10 @@ def normalize_ticket_context(raw_context: Any) -> Dict[str, Any]:
         ]
     ).strip()
 
-    problem_type = _clean_text(context.get("problem_type", "")).strip().lower()
-
-    if problem_type not in KNOWN_PROBLEM_TYPES:
-        problem_type = infer_problem_type(combined_text)
+    problem_type = _resolve_problem_type(
+        raw_problem_type=context.get("problem_type", ""),
+        combined_text=combined_text,
+    )
 
     # If context exists but does not give enough information to infer a ticket
     # type, fall back to legacy ad-blocking behavior.
@@ -92,10 +71,12 @@ def normalize_ticket_context(raw_context: Any) -> Dict[str, Any]:
     # Example:
     #   {"platform": "android"}
     #
-    # This should still behave like the old pipeline:
+    # This should still behave like:
     #   crawl -> detect ad signals -> generate block/hide rules.
     if problem_type == "unknown" and not combined_text:
         problem_type = LEGACY_DEFAULT_PROBLEM_TYPE
+
+    resolution_strategy = get_resolution_strategy(problem_type)
 
     target_to_block = _normalize_string_list(context.get("target_to_block", []))
     if not target_to_block:
@@ -105,15 +86,15 @@ def normalize_ticket_context(raw_context: Any) -> Dict[str, Any]:
     if not target_to_preserve:
         target_to_preserve = infer_targets_to_preserve(problem_type, combined_text)
 
-    validation_hints = context.get("validation_hints", {})
-    if not isinstance(validation_hints, Mapping):
-        validation_hints = {}
+    provided_validation_hints = context.get("validation_hints", {})
+    if not isinstance(provided_validation_hints, Mapping):
+        provided_validation_hints = {}
 
     inferred_hints = infer_validation_hints(problem_type, combined_text)
-    merged_hints = {
-        **inferred_hints,
-        **dict(validation_hints),
-    }
+    merged_hints = _merge_validation_hints(
+        inferred_hints,
+        dict(provided_validation_hints),
+    )
 
     current_rules = _collect_rule_list(
         context,
@@ -135,6 +116,7 @@ def normalize_ticket_context(raw_context: Any) -> Dict[str, Any]:
     normalized = {
         "platform": platform,
         "problem_type": problem_type,
+        "resolution_strategy": resolution_strategy,
         "request": request,
         "description": description,
         "steps": steps,
@@ -171,6 +153,8 @@ def normalize_ticket_context(raw_context: Any) -> Dict[str, Any]:
 def infer_problem_type(text: str) -> str:
     """
     Infer the ticket type from user-facing ticket text.
+
+    The returned type is normalized through problem_policy aliases.
     """
     normalized = _normalize_for_matching(text)
 
@@ -184,26 +168,30 @@ def infer_problem_type(text: str) -> str:
         r"\bphoto\b",
         r"\bpicture\b",
         r"\bthumbnail\b",
+        r"\bavatar\b",
+        r"\blazyload\b",
         r"\bảnh\b",
         r"không\s+hiện\s+ảnh",
         r"doesn'?t\s+display\s+images",
         r"not\s+display\s+images",
-        r"images?\s+(?:are\s+)?(?:not|missing|hidden|blank)",
+        r"images?\s+(?:are\s+)?(?:not|missing|hidden|blank|broken)",
     ]
     if _matches_any(normalized, image_patterns):
-        return "content_broken_image"
+        return normalize_problem_type("content_broken_image")
 
     video_patterns = [
         r"\bvideo\b",
         r"\bplayer\b",
         r"\bstream\b",
+        r"\bmedia\b",
         r"\bm3u8\b",
         r"\bmp4\b",
         r"không\s+xem\s+được",
         r"video\s+(?:is\s+)?(?:not|missing|broken|blank)",
+        r"player\s+(?:is\s+)?(?:not|missing|broken|blank)",
     ]
     if _matches_any(normalized, video_patterns):
-        return "content_broken_video"
+        return normalize_problem_type("content_broken_video")
 
     ui_hidden_patterns = [
         r"\bsearch\b",
@@ -211,6 +199,9 @@ def infer_problem_type(text: str) -> str:
         r"\bheader\b",
         r"\bnavbar\b",
         r"\bnavigation\b",
+        r"\bbutton\b",
+        r"\blogin\b",
+        r"\bsign\s*in\b",
         r"\bhidden\b",
         r"\bhide\b",
         r"\bmissing\b",
@@ -220,7 +211,7 @@ def infer_problem_type(text: str) -> str:
         r"search\s*&\s*menu",
     ]
     if _matches_any(normalized, ui_hidden_patterns):
-        return "ui_hidden"
+        return normalize_problem_type("ui_hidden")
 
     anti_adblock_patterns = [
         r"unable\s+to\s+close",
@@ -231,12 +222,15 @@ def infer_problem_type(text: str) -> str:
         r"disable\s+adblock",
         r"turn\s+off\s+adblock",
         r"anti[-\s]?adblock",
+        r"\boverlay\b",
+        r"\bpopup\b",
+        r"\binterstitial\b",
         r"không\s+đóng",
         r"không\s+tắt",
         r"tắt\s+adblock",
     ]
     if _matches_any(normalized, anti_adblock_patterns):
-        return "anti_adblock_or_overlay"
+        return normalize_problem_type("anti_adblock_or_overlay")
 
     ad_not_blocked_patterns = [
         r"\bads?\s+appear\b",
@@ -248,7 +242,7 @@ def infer_problem_type(text: str) -> str:
         r"quảng\s+cáo\s+(?:vẫn\s+)?(?:hiện|xuất\s+hiện)",
     ]
     if _matches_any(normalized, ad_not_blocked_patterns):
-        return "specific_ad_not_blocked"
+        return normalize_problem_type("specific_ad_not_blocked")
 
     broken_content_patterns = [
         r"\bbroken\b",
@@ -260,171 +254,33 @@ def infer_problem_type(text: str) -> str:
         r"lỗi",
     ]
     if _matches_any(normalized, broken_content_patterns):
-        return "content_broken"
+        return normalize_problem_type("content_broken")
 
     return "unknown"
 
 
 def infer_targets_to_block(problem_type: str, text: str) -> List[str]:
-    if problem_type == "specific_ad_not_blocked":
-        return list(LEGACY_TARGET_TO_BLOCK)
-
-    if problem_type == "anti_adblock_or_overlay":
-        return [
-            "ad overlay",
-            "popup ad",
-            "interstitial ad",
-            "anti-adblock overlay",
-        ]
-
-    return []
+    """
+    Get default block targets from centralized problem policy.
+    """
+    normalized_problem_type = normalize_problem_type(problem_type, fallback="unknown")
+    return get_default_targets_to_block(normalized_problem_type)
 
 
 def infer_targets_to_preserve(problem_type: str, text: str) -> List[str]:
-    if problem_type == "content_broken_image":
-        return [
-            "main content",
-            "chapter images",
-            "article images",
-            "content image CDN requests",
-        ]
-
-    if problem_type == "content_broken_video":
-        return [
-            "main content",
-            "video player",
-            "video stream requests",
-            "media controls",
-        ]
-
-    if problem_type == "ui_hidden":
-        return [
-            "header",
-            "navigation",
-            "search bar",
-            "menu bar",
-            "main content",
-        ]
-
-    if problem_type == "anti_adblock_or_overlay":
-        return [
-            "main content",
-            "download button",
-            "close button",
-            "form controls",
-            "quality selector",
-        ]
-
-    if problem_type == "specific_ad_not_blocked":
-        return list(LEGACY_TARGET_TO_PRESERVE)
-
-    return [
-        "main content",
-        "navigation",
-    ]
+    """
+    Get default preserve targets from centralized problem policy.
+    """
+    normalized_problem_type = normalize_problem_type(problem_type, fallback="unknown")
+    return get_default_targets_to_preserve(normalized_problem_type)
 
 
 def infer_validation_hints(problem_type: str, text: str) -> Dict[str, Any]:
     """
-    Build hints that sandbox validation can use.
-
-    Hint format:
-      - must_show_any_selector_groups: at least one selector in a group must show
-      - must_show_all_selectors: every selector must show
-      - must_hide_selectors: selectors that should be hidden/removed
-      - min_visible_images / max_broken_images
+    Get default validation hints from centralized problem policy.
     """
-    if problem_type == "content_broken_image":
-        return {
-            "min_visible_images": 1,
-            "max_broken_images": 0,
-        }
-
-    if problem_type == "content_broken_video":
-        return {
-            "min_visible_videos": 1,
-            "must_show_any_selector_groups": [
-                {
-                    "name": "video_or_player",
-                    "selectors": [
-                        "video",
-                        "iframe",
-                        ".player",
-                        ".video",
-                        "[class*='player']",
-                        "[class*='video']",
-                    ],
-                    "min": 1,
-                }
-            ],
-        }
-
-    if problem_type == "ui_hidden":
-        return {
-            "must_show_any_selector_groups": [
-                {
-                    "name": "search",
-                    "selectors": [
-                        ".search",
-                        ".search-box",
-                        "input[type='search']",
-                        "[class*='search']",
-                        "[id*='search']",
-                    ],
-                    "min": 1,
-                },
-                {
-                    "name": "menu_or_navigation",
-                    "selectors": [
-                        "header",
-                        "nav",
-                        ".header",
-                        ".navbar",
-                        ".menu",
-                        "[class*='menu']",
-                        "[class*='nav']",
-                        "[class*='header']",
-                    ],
-                    "min": 1,
-                },
-            ],
-        }
-
-    if problem_type == "anti_adblock_or_overlay":
-        return {
-            "must_show_any_selector_groups": [
-                {
-                    "name": "main_or_form",
-                    "selectors": [
-                        "main",
-                        "form",
-                        "button",
-                        "input",
-                        "select",
-                        "[class*='download']",
-                    ],
-                    "min": 1,
-                }
-            ],
-            "must_hide_selectors": [
-                ".ad-overlay",
-                ".popup-ad",
-                ".modal-ad",
-                "[class*='overlay'][class*='ad']",
-                "[class*='popup'][class*='ad']",
-                "[id*='overlay'][id*='ad']",
-                "[id*='popup'][id*='ad']",
-            ],
-        }
-
-    # Legacy ad-blocking mode does not need ticket-specific assertions.
-    # Sandbox still validates:
-    #   ads_blocked == true
-    #   page_functional == true
-    if problem_type == "specific_ad_not_blocked":
-        return {}
-
-    return {}
+    normalized_problem_type = normalize_problem_type(problem_type, fallback="unknown")
+    return get_default_validation_hints(normalized_problem_type)
 
 
 def _legacy_no_ticket_context() -> Dict[str, Any]:
@@ -434,23 +290,53 @@ def _legacy_no_ticket_context() -> Dict[str, Any]:
     This keeps the pipeline backward-compatible:
       URL only -> generate rules to block detected ad-related signals.
     """
+    problem_type = LEGACY_DEFAULT_PROBLEM_TYPE
+
     return {
         "platform": "",
-        "problem_type": LEGACY_DEFAULT_PROBLEM_TYPE,
+        "problem_type": problem_type,
+        "resolution_strategy": get_resolution_strategy(problem_type),
         "request": "",
         "description": "",
         "steps": [],
         "actual": "",
         "expected": "",
-        "target_to_block": list(LEGACY_TARGET_TO_BLOCK),
-        "target_to_preserve": list(LEGACY_TARGET_TO_PRESERVE),
-        "validation_hints": {},
+        "target_to_block": get_default_targets_to_block(problem_type),
+        "target_to_preserve": get_default_targets_to_preserve(problem_type),
+        "validation_hints": get_default_validation_hints(problem_type),
         "current_rules": [],
         "matched_rules": [],
         "blocked_resources": [],
         "evidence_level": "legacy_no_ticket_context",
         "raw": {},
     }
+
+
+def _resolve_problem_type(
+    raw_problem_type: Any,
+    combined_text: str,
+) -> str:
+    """
+    Resolve problem type from explicit ticket field first, then infer from text.
+    """
+    raw_text = _clean_text(raw_problem_type)
+
+    if raw_text:
+        normalized = normalize_problem_type(raw_text, fallback="unknown")
+
+        if normalized != "unknown":
+            return normalized
+
+        # If the provided type is unknown but there is useful text, infer from
+        # ticket content instead of keeping unknown.
+        if combined_text:
+            inferred = infer_problem_type(combined_text)
+            return normalize_problem_type(inferred, fallback="unknown")
+
+        return "unknown"
+
+    inferred = infer_problem_type(combined_text)
+    return normalize_problem_type(inferred, fallback="unknown")
 
 
 def _coerce_dict(value: Any) -> Dict[str, Any]:
@@ -476,6 +362,7 @@ def _is_empty_context(context: Mapping[str, Any]) -> bool:
     meaningful_keys = [
         "platform",
         "problem_type",
+        "resolution_strategy",
         "request",
         "description",
         "steps",
@@ -518,17 +405,6 @@ def _looks_like_legacy_default_context(context: Mapping[str, Any]) -> bool:
 
     This prevents a second normalization pass from relabeling:
       legacy_no_ticket_context -> url_only_best_effort
-
-    Example normalized legacy context:
-      {
-        "problem_type": "specific_ad_not_blocked",
-        "request": "",
-        "actual": "",
-        "expected": "",
-        "target_to_block": [...default...],
-        "target_to_preserve": [...default...],
-        "evidence_level": "legacy_no_ticket_context"
-      }
     """
     if not context:
         return True
@@ -538,9 +414,12 @@ def _looks_like_legacy_default_context(context: Mapping[str, Any]) -> bool:
     if evidence_level == "legacy_no_ticket_context":
         return True
 
-    problem_type = _clean_text(context.get("problem_type", "")).lower()
+    problem_type = normalize_problem_type(
+        context.get("problem_type", ""),
+        fallback="unknown",
+    )
 
-    if problem_type and problem_type != LEGACY_DEFAULT_PROBLEM_TYPE:
+    if problem_type and problem_type not in {"unknown", LEGACY_DEFAULT_PROBLEM_TYPE}:
         return False
 
     # If the user/report has actual text fields, this is explicit context,
@@ -564,7 +443,13 @@ def _looks_like_legacy_default_context(context: Mapping[str, Any]) -> bool:
         return False
 
     # If debug evidence exists, it is not legacy-empty context.
-    for key in ("current_rules", "existing_rules", "active_rules", "matched_rules", "blocked_resources"):
+    for key in (
+        "current_rules",
+        "existing_rules",
+        "active_rules",
+        "matched_rules",
+        "blocked_resources",
+    ):
         value = context.get(key)
 
         if isinstance(value, list) and value:
@@ -577,15 +462,18 @@ def _looks_like_legacy_default_context(context: Mapping[str, Any]) -> bool:
     if isinstance(raw, Mapping) and len(raw) > 0:
         return False
 
-    # Handle already-normalized legacy defaults that contain the default
-    # target lists. This is the common second-normalization case.
     target_to_block = _normalize_string_list(context.get("target_to_block", []))
     target_to_preserve = _normalize_string_list(context.get("target_to_preserve", []))
     validation_hints = context.get("validation_hints", {})
 
+    default_targets_to_block = get_default_targets_to_block(LEGACY_DEFAULT_PROBLEM_TYPE)
+    default_targets_to_preserve = get_default_targets_to_preserve(
+        LEGACY_DEFAULT_PROBLEM_TYPE
+    )
+
     has_default_targets = (
-        target_to_block == LEGACY_TARGET_TO_BLOCK
-        and target_to_preserve == LEGACY_TARGET_TO_PRESERVE
+        target_to_block == default_targets_to_block
+        and target_to_preserve == default_targets_to_preserve
     )
 
     hints_empty = not isinstance(validation_hints, Mapping) or len(validation_hints) == 0
@@ -594,6 +482,23 @@ def _looks_like_legacy_default_context(context: Mapping[str, Any]) -> bool:
         return True
 
     return False
+
+
+def _merge_validation_hints(
+    inferred_hints: Mapping[str, Any],
+    provided_hints: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """
+    Merge inferred/default validation hints with provided ticket hints.
+
+    Provided hints win because CMS/debug payload should be more specific.
+    """
+    merged = _make_json_safe(dict(inferred_hints))
+
+    for key, value in provided_hints.items():
+        merged[str(key)] = _make_json_safe(value)
+
+    return merged
 
 
 def _clean_text(value: Any) -> str:

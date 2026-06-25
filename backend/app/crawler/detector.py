@@ -26,6 +26,7 @@ class AdCandidate:
     urls: List[str] = field(default_factory=list)      # URLs that triggered this candidate
     selector: str = ""     # For element-based candidates: the CSS selector
     element_snippet: str = ""  # Truncated HTML for context
+    parent_chain: List[dict] = field(default_factory=list)  # Nearest DOM ancestors with id/class
 
     def to_dict(self) -> dict:
         d = {
@@ -42,6 +43,8 @@ class AdCandidate:
             d["selector"] = self.selector
         if self.element_snippet:
             d["element_snippet"] = self.element_snippet
+        if self.parent_chain:
+            d["parent_chain"] = self.parent_chain
         return d
 
 
@@ -322,12 +325,14 @@ class AdDetector:
                 element_id = elem.get("element_id", "")
                 snippet = elem.get("outer_html_snippet", "")
                 ad_attrs = elem.get("ad_attributes", {})
+                parent_chain = elem.get("parent_chain", [])
             else:
                 selector = getattr(elem, "selector", "")
                 reason = getattr(elem, "reason", "")
                 element_id = getattr(elem, "element_id", "")
                 snippet = getattr(elem, "outer_html_snippet", "")
                 ad_attrs = getattr(elem, "ad_attributes", {})
+                parent_chain = getattr(elem, "parent_chain", [])
 
             if not selector:
                 continue
@@ -352,6 +357,7 @@ class AdDetector:
                 reason=reason,
                 selector=selector,
                 element_snippet=snippet,
+                parent_chain=parent_chain if isinstance(parent_chain, list) else [],
             ))
 
         return candidates

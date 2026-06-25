@@ -69,6 +69,7 @@ class CrawlService:
         url: str,
         report_id: str,
         ticket_context: Optional[Dict[str, Any]] = None,
+        focus_region: Optional[str] = None,
         **render_kwargs,
     ) -> Dict[str, Any]:
         """
@@ -150,7 +151,22 @@ class CrawlService:
                 },
             )
 
-        # Step 2: Extract ad-relevant data from rendered HTML.
+        # Step 2 (optional): Scope HTML to a specific page region.
+        focus_selector = ""
+        focus_method = "none"
+        if focus_region:
+            from ..crawler.region_focus import focus_html
+            render_result.html, focus_selector, focus_method = focus_html(
+                render_result.html, focus_region
+            )
+            logger.info(
+                "Focus region '%s' applied via %s (selector: %s)",
+                focus_region,
+                focus_method,
+                focus_selector or "n/a",
+            )
+
+        # Step 3: Extract ad-relevant data from rendered HTML.
         try:
             logger.debug("Extracting ad-relevant data from HTML...")
             extractor = PageExtractor(render_result.html, page_url=url)
@@ -254,6 +270,11 @@ class CrawlService:
                     "elapsed_ms": render_result.elapsed_ms,
                     "html_length": len(render_result.html or ""),
                 },
+                "focus_region": {
+                    "requested": focus_region or "",
+                    "selector": focus_selector,
+                    "method": focus_method,
+                } if focus_region else None,
                 "title": extracted_data.title,
                 "network_requests": network_summary,
                 "ad_candidates": detection_result.get("ad_candidates", []),
@@ -560,7 +581,17 @@ if __name__ == "__main__":
         default="",
         help="Path to a JSON file containing ticket context.",
     )
-
+    parser.add_argument(
+        "--focus",
+        default="",
+        metavar="REGION",
+        help=(
+            "Scope extraction to a specific page region before analysis. "
+            "Accepts semantic keywords (header, footer, sidebar, main, nav) "
+            "or a free-form description (e.g. 'top banner area', 'right sidebar'). "
+            "Network requests are always captured from the full page."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -599,6 +630,7 @@ if __name__ == "__main__":
             url=args.url,
             report_id=args.report_id,  # DO NOT change to report_id_env — env goes inside the JSON
             ticket_context=ticket_context,
+            focus_region=args.focus or None,
             headless=not args.no_headless,
             enable_scroll=True,
             environment=env,

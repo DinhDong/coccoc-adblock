@@ -66,6 +66,7 @@ class AdElement:
     element_id: str = ""
     outer_html_snippet: str = ""  # First ~200 chars of outerHTML for context
     ad_attributes: dict = field(default_factory=dict)  # data-ad-* values
+    parent_chain: List[dict] = field(default_factory=list)  # Nearest ancestors with id/class
 
     def to_dict(self) -> dict:
         d = {
@@ -81,6 +82,8 @@ class AdElement:
             d["outer_html_snippet"] = self.outer_html_snippet
         if self.ad_attributes:
             d["ad_attributes"] = self.ad_attributes
+        if self.parent_chain:
+            d["parent_chain"] = self.parent_chain
         return d
 
 
@@ -307,9 +310,36 @@ class PageExtractor:
                 element_id=element_id,
                 outer_html_snippet=snippet,
                 ad_attributes=ad_attrs,
+                parent_chain=self._build_parent_chain(tag),
             ))
 
         return ad_elements
+
+    def _build_parent_chain(self, tag: Tag, max_depth: int = 4) -> List[dict]:
+        """
+        Walk up the DOM from tag and collect ancestors that have a meaningful
+        id or class.  Returns closest-first, stopping at <body>/<html>.
+        """
+        chain: List[dict] = []
+        current = tag.parent
+        depth = 0
+        while current and depth < max_depth and isinstance(current, Tag):
+            name = current.name
+            if name in ("html", "body", "head"):
+                break
+            pid = (current.get("id") or "").strip()
+            pclasses = current.get("class", [])
+            if isinstance(pclasses, str):
+                pclasses = pclasses.split()
+            if pid or pclasses:
+                chain.append({
+                    "tag": name,
+                    "id": pid,
+                    "classes": list(pclasses),
+                })
+            current = current.parent
+            depth += 1
+        return chain
 
     def _build_selector(self, tag: Tag, element_id: str, classes: List[str]) -> str:
         """

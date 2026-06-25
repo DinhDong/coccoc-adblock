@@ -281,6 +281,7 @@ def _extract_signals(crawl_result: Dict[str, Any]) -> Dict[str, Any]:
                 "reason": candidate.get("reason", ""),
                 "domain": candidate.get("domain", ""),
                 "element_snippet": _truncate(clean_snippet, 400),
+                "parent_chain": candidate.get("parent_chain", []),
             }
         )
 

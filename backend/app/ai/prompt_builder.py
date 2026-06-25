@@ -148,7 +148,13 @@ Strict safety limits:
 - Do not generate unscoped generic cosmetic selectors.
 - The crawl environment (desktop/android/ios) tells you the viewport and UA used. Mobile crawls may expose different ad slots and selectors than desktop — generate rules matching what was actually observed.
 - Output one ABP rule per line only.
-- No markdown, no explanations, no comments, no numbering, no blank lines.\
+- No markdown, no explanations, no comments, no numbering, no blank lines.
+
+Container targeting:
+- Each ad candidate may include a parent_chain showing its nearest DOM ancestors (closest first).
+- If a parent has a clearly ad-specific id or class, prefer targeting that container over the leaf element — it produces a safer, more complete block.
+- Example: leaf=ins.adsbygoogle inside parent div#ad-sidebar → prefer site.com###ad-sidebar over site.com##ins.adsbygoogle.
+- Do not blindly pick the outermost ancestor — pick the nearest one that is clearly ad-specific.\
 
 Resolution strategy behavior:
 - block_visible_ad:
@@ -521,6 +527,22 @@ def _append_ad_candidates(
 
         if snippet:
             parts.append(f"snippet={_truncate(str(snippet), 240)}")
+
+        parent_chain = candidate.get("parent_chain", [])
+        if isinstance(parent_chain, list) and parent_chain:
+            ancestry = " > ".join(
+                (
+                    f"{p.get('tag', 'div')}"
+                    + (f"#{p['id']}" if p.get("id") else "")
+                    + (
+                        "." + ".".join(p["classes"][:2])
+                        if p.get("classes")
+                        else ""
+                    )
+                )
+                for p in parent_chain
+            )
+            parts.append(f"parent_chain={_truncate(ancestry, 300)}")
 
         if parts:
             lines.append("  - " + " | ".join(parts))

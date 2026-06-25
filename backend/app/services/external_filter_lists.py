@@ -1,14 +1,12 @@
 """
-Downloads and caches well-known public ABP filter lists, then answers
-whether a generated rule is already covered by any of them.
+Downloads and caches the Adblock Plus filter list (EasyList), then answers
+whether a generated rule is already covered by it.
 
-Why this matters: users who already have uBlock Origin / AdBlock Plus
-installed are already applying EasyList, ABPvn, etc.  Generating the
-same rule in CocCoc's built-in blocker creates a double-block that can
-break page layout (e.g. a CDN domain blocked by both engines, causing
-missing images or broken scripts).
+Why this matters: if a rule is already in EasyList (the default Adblock Plus
+list), CocCoc's built-in blocker would apply it as a duplicate — which can
+cause double-blocking and break page layout.
 
-Lists are cached locally and refreshed automatically every CACHE_MAX_AGE_DAYS.
+The list is cached locally and refreshed automatically every CACHE_MAX_AGE_DAYS.
 
 Run from backend/ to inspect or refresh:
     python -m app.services.external_filter_lists           # show coverage stats
@@ -29,13 +27,11 @@ logger = logging.getLogger(__name__)
 CACHE_DIR = Path("data/external_lists")
 CACHE_MAX_AGE_DAYS = 7
 
-# ABP-format filter lists to check against. Key = short label shown in output.
-# Ordered by relevance: Vietnamese-specific lists first, then globals.
+# Adblock Plus default filter list (EasyList).
+# Only this list is checked for duplicates — company rules in rule_registry.py
+# handle the internal DB side.
 FILTER_LISTS: Dict[str, str] = {
-    "abpvn":       "https://raw.githubusercontent.com/abpvn/abpvn/master/filter/src/abpvn_vn.txt",
-    "easylist":    "https://easylist.to/easylist/easylist.txt",
-    "easyprivacy": "https://easylist.to/easylist/easyprivacy.txt",
-    "ublock-vn":   "https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/filters/filters.txt",
+    "easylist": "https://easylist.to/easylist/easylist.txt",
 }
 
 # Lines in an ABP filter file that are NOT rules

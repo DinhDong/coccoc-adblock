@@ -31,24 +31,24 @@ docker compose ps   # db should show "healthy"
 
 ```bash
 # Run the full workflow for a report
-docker compose run --rm backend app.services.workflow vnexpress-desktop
+docker compose run --rm backend app.services.workflow <report_id>
 
 # Run the crawler only
-docker compose run --rm backend app.services.crawler https://vnexpress.net vnexpress-desktop --env desktop
+docker compose run --rm backend app.services.crawler <url> <report_id> --env desktop
 
 # Run the crawler with focus on a specific page region
-docker compose run --rm backend app.services.crawler https://vnexpress.net vnexpress-desktop --focus "header"
-docker compose run --rm backend app.services.crawler https://vnexpress.net vnexpress-desktop --focus "right sidebar"
-docker compose run --rm backend app.services.crawler https://vnexpress.net vnexpress-desktop --focus "top banner area"
+docker compose run --rm backend app.services.crawler <url> <report_id> --focus "header"
+docker compose run --rm backend app.services.crawler <url> <report_id> --focus "right sidebar"
+docker compose run --rm backend app.services.crawler <url> <report_id> --focus "top banner area"
 
 # Preview a single rule — saves before.png (targets highlighted) + after.png (rule applied)
-docker compose run --rm backend app.validator.rule_preview https://vnexpress.net "||admicro.vn^"
+docker compose run --rm backend app.validator.rule_preview <url> "<rule>"
 
 # Preview multiple rules from a file, android viewport
-docker compose run --rm backend app.validator.rule_preview https://vnexpress.net --rules-file rules.txt --env android
+docker compose run --rm backend app.validator.rule_preview <url> --rules-file rules.txt --env android
 
 # Custom output dir
-docker compose run --rm backend app.validator.rule_preview https://vnexpress.net "||admicro.vn^" --out data/previews/motp
+docker compose run --rm backend app.validator.rule_preview <url> "<rule>" --out data/previews/motp
 
 # Run tests
 docker compose run --rm backend pytest app/tests/ -v

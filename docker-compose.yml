@@ -5,6 +5,14 @@
 #   docker compose up --build -d          # start MySQL
 #   docker compose run --rm backend app.services.workflow <report_id>
 #   docker compose run --rm backend app.services.crawler <url> <id> --env desktop
+#   docker compose run --rm backend app.services.crawler <url> <id> --focus "header"
+#   docker compose run --rm backend app.services.crawler <url> <id> --focus "right sidebar"
+#   docker compose run --rm backend app.services.crawler <url> <id> --focus "top banner area"
+#
+#   docker compose run --rm backend app.validator.rule_preview <url> "<rule>"
+#   docker compose run --rm backend app.validator.rule_preview <url> --rules-file rules.txt --env android
+#   docker compose run --rm backend app.validator.rule_preview <url> "<rule>" --out data/previews/motp
+#
 #   docker compose run --rm backend pytest app/tests/ -v
 #   docker compose down                   # stop; data preserved
 #   docker compose down -v                # stop + delete MySQL data

@@ -19,6 +19,11 @@
 #     UI hidden bug           => page_functional AND ticket assertions
 #     overlay/anti-adblock    => page_functional AND ticket assertions
 # - Avoid requiring every generic selector in validation_hints to be visible.
+# - Avoid false positives where analytics/tracking-only requests are counted as
+#   visible ad blocking.
+# - Persist cosmetic evidence:
+#     missing_ad_selectors
+#     hidden_ad_selectors
 
 import logging
 import re
@@ -252,6 +257,73 @@ _UNREACHABLE_PATTERNS = (
     "SSL connect error",
 )
 
+TRACKING_ONLY_DOMAINS = {
+    "google-analytics.com",
+    "www.google-analytics.com",
+    "googletagmanager.com",
+    "www.googletagmanager.com",
+    "static.cloudflareinsights.com",
+}
+
+VISIBLE_AD_DOMAINS = {
+    "doubleclick.net",
+    "googlesyndication.com",
+    "googleadservices.com",
+    "adservice.google.com",
+    "adnxs.com",
+    "adsrvr.org",
+    "criteo.com",
+    "criteo.net",
+    "taboola.com",
+    "outbrain.com",
+    "mgid.com",
+    "popads.net",
+    "propellerads.com",
+    "exoclick.com",
+    "trafficjunky.net",
+    "juicyads.com",
+    "adskeeper.com",
+}
+
+VISIBLE_AD_URL_PATTERNS = (
+    "/ad/",
+    "/ads/",
+    "/advert/",
+    "/advertise/",
+    "/advertisement/",
+    "/banner/",
+    "/banners/",
+    "/popup/",
+    "/popunder/",
+    "/sponsor/",
+    "/sponsored/",
+    "/promo/",
+    "/promotion/",
+    "/storage/ads/",
+    "ads%20",
+    "banner",
+    "popup",
+    "casino",
+    "bet",
+    "betting",
+    "affiliate",
+)
+
+VISIBLE_AD_RULE_PATTERNS = (
+    "/ad/",
+    "/ads/",
+    "/banner",
+    "/popup",
+    "/sponsor",
+    "/promo",
+    "/storage/ads/",
+    "adserver",
+    "banner",
+    "popup",
+    "casino",
+    "bet",
+)
+
 
 @dataclass
 class SandboxResult:
@@ -278,7 +350,7 @@ class SandboxResult:
     broken_selectors: List[str] = field(default_factory=list)
     tested_screenshot: bytes = field(default_factory=bytes)
     error: str = ""
-    unreachable: bool = False             # True when the target URL can't be loaded (bot-block, DNS, SSL)
+    unreachable: bool = False
 
 
 def run_sandbox(
@@ -296,28 +368,18 @@ def run_sandbox(
     For breakage tickets such as image/video/content/UI hidden:
         passed = page_functional AND ticket_assertions_passed
 
-        3. Compare baseline vs. with-rules:
-           - ads_blocked: targeted selectors gone OR targeted requests aborted
-           - page_functional: critical nav/content selectors still present
-           - broken_selectors: non-ad selectors that disappeared (false positives)
-
     Args:
-        url:         The original reported page URL.
-        rules:       List of rule strings that passed stages 1 and 2.
-        environment: Crawl environment name ("desktop", "android", "ios"). The sandbox
-                     uses the matching viewport and user-agent so the page renders the
-                     same layout as during the crawl. Always uses Chromium (page.route()
-                     is not available in WebKit), so iOS uses the iOS UA/viewport on
-                     Chromium as a best-effort match.
-        ticket_context: Optional ticket context. Can include:
-            {
-                "problem_type": "content_broken_image",
-                "current_rules": ["||cdn.example.com^$image,domain=site.com"],
-                "validation_hints": {...}
-            }
+        url:
+            The original reported page URL.
+        rules:
+            List of rule strings that passed syntax/scope/policy validation.
+        environment:
+            Crawl environment name ("desktop", "android", "ios").
+        ticket_context:
+            Optional ticket context. Can include current/existing rules and validation hints.
 
     Returns:
-        SandboxResult. passed=True only if ads_blocked=True AND page_functional=True.
+        SandboxResult.
     """
     result = SandboxResult(url=url, passed=False)
 
@@ -382,12 +444,15 @@ def run_sandbox(
         "extra_http_headers": {"Accept-Language": "en-US,en;q=0.9"},
     }
 
-    logger.debug("Sandbox running in '%s' environment (viewport %s, mobile=%s)",
-                 environment, profile["viewport"], profile["is_mobile"])
+    logger.debug(
+        "Sandbox running in '%s' environment (viewport %s, mobile=%s)",
+        environment,
+        profile["viewport"],
+        profile["is_mobile"],
+    )
 
     try:
         with sync_playwright() as playwright:
-            # Always use Chromium — WebKit does not support page.route() for network blocking
             browser = playwright.chromium.launch(
                 headless=True,
                 args=_STEALTH_LAUNCH_ARGS,
@@ -396,7 +461,6 @@ def run_sandbox(
             try:
                 # ------------------------------------------------------
                 # Reference page: no adblock rules.
-                # Used to detect whether candidate patch breaks normal page.
                 # ------------------------------------------------------
                 reference_context = browser.new_context(**context_kwargs)
                 reference_page = reference_context.new_page()
@@ -412,7 +476,6 @@ def run_sandbox(
 
                 # ------------------------------------------------------
                 # Baseline page: existing/current rules only.
-                # This helps reproduce breakage if current_rules are passed.
                 # ------------------------------------------------------
                 baseline_context = browser.new_context(**context_kwargs)
                 baseline_page = baseline_context.new_page()
@@ -435,7 +498,6 @@ def run_sandbox(
 
                 # ------------------------------------------------------
                 # Test page: existing/current rules + candidate patch.
-                # Candidate exception rules can now override existing blocks.
                 # ------------------------------------------------------
                 test_context = browser.new_context(**context_kwargs)
                 test_page = test_context.new_page()
@@ -481,11 +543,17 @@ def run_sandbox(
     except Exception as exc:
         error_str = str(exc)
         result.error = f"sandbox browser failed for {url}: {exc}"
+
         if any(pat in error_str for pat in _UNREACHABLE_PATTERNS):
             result.unreachable = True
-            logger.warning("Sandbox unreachable (connection error) for %s: %s", url, error_str.splitlines()[0])
+            logger.warning(
+                "Sandbox unreachable (connection error) for %s: %s",
+                url,
+                error_str.splitlines()[0],
+            )
         else:
             logger.exception(result.error)
+
         return result
 
     # ------------------------------------------------------------------
@@ -506,12 +574,16 @@ def run_sandbox(
         for selector in candidate_cosmetic_selectors
     )
 
-    cosmetic_targets_blocked = _cosmetic_targets_blocked(
+    cosmetic_result = _cosmetic_targets_blocked(
         candidate_cosmetic_selectors,
         reference_state.get("ad_dom_counts", {}),
         tested_state.get("ad_dom_counts", {}),
         tested_state.get("ad_visible_counts", {}),
     )
+
+    cosmetic_targets_blocked = bool(cosmetic_result.get("blocked"))
+    result.missing_ad_selectors = list(cosmetic_result.get("missing", []))
+    result.hidden_ad_selectors = list(cosmetic_result.get("hidden", []))
 
     result.ads_blocked = (
         bool(candidate_network_block_rules) and network_targets_blocked
@@ -575,7 +647,7 @@ def run_sandbox(
         "ui_hidden",
         "anti_adblock_or_overlay",
     }:
-        logger.warning("Sandbox did not verify any ad blocking for %s", url)
+        logger.warning("Sandbox did not verify any visible ad blocking for %s", url)
 
     if not result.page_functional:
         logger.warning(
@@ -991,13 +1063,29 @@ def _network_targets_blocked(
     network_rules: List[_NetworkRule],
     blocked_requests: List[str],
 ) -> bool:
-    if not network_rules:
+    """
+    Return True only when blocked requests look like visible ad resources.
+
+    Do not count analytics/tracking-only requests as successful visible ad blocking.
+    This prevents false positives such as:
+        ||googletagmanager.com^
+        ||www.google-analytics.com^
+    """
+    if not network_rules or not blocked_requests:
         return False
 
-    if not blocked_requests:
-        return False
+    for request_url in blocked_requests:
+        if _is_tracking_only_url(request_url):
+            continue
 
-    return True
+        if _looks_like_visible_ad_url(request_url):
+            return True
+
+        for rule in network_rules:
+            if _looks_like_visible_ad_rule(rule.original):
+                return True
+
+    return False
 
 
 def _candidate_blocked_requests(
@@ -1014,12 +1102,55 @@ def _candidate_blocked_requests(
     return blocked
 
 
+def _is_tracking_only_url(url: str) -> bool:
+    host = _hostname(url)
+
+    if not host:
+        return False
+
+    host = host.lower().strip(".")
+
+    return _host_in_domains(host, TRACKING_ONLY_DOMAINS)
+
+
+def _looks_like_visible_ad_url(url: str) -> bool:
+    text = str(url or "").lower()
+    host = _hostname(text)
+
+    if host and _host_in_domains(host, VISIBLE_AD_DOMAINS):
+        return True
+
+    return any(pattern in text for pattern in VISIBLE_AD_URL_PATTERNS)
+
+
+def _looks_like_visible_ad_rule(rule: str) -> bool:
+    text = str(rule or "").lower()
+
+    if any(domain in text for domain in TRACKING_ONLY_DOMAINS):
+        return False
+
+    if any(domain in text for domain in VISIBLE_AD_DOMAINS):
+        return True
+
+    return any(pattern in text for pattern in VISIBLE_AD_RULE_PATTERNS)
+
+
 def _cosmetic_targets_blocked(
     selectors: List[str],
     reference_dom_counts: Dict[str, int],
     tested_dom_counts: Dict[str, int],
     tested_visible_counts: Dict[str, int],
-) -> bool:
+) -> Dict[str, Any]:
+    """
+    Check whether cosmetic rules actually hid or removed targeted ad selectors.
+
+    Returns diagnostic details so validation output can show evidence:
+      - missing: selector existed before, no longer exists after
+      - hidden: selector existed before and remains in DOM, but is no longer visible
+    """
+    missing: List[str] = []
+    hidden: List[str] = []
+
     for selector in selectors:
         before = int(reference_dom_counts.get(selector, 0) or 0)
 
@@ -1029,12 +1160,18 @@ def _cosmetic_targets_blocked(
         after_dom = int(tested_dom_counts.get(selector, 0) or 0)
         after_visible = int(tested_visible_counts.get(selector, 0) or 0)
 
-        if after_dom == 0 or after_visible == 0:
-            return True
+        if after_dom == 0:
+            missing.append(selector)
+            continue
 
-    return False
+        if after_visible == 0:
+            hidden.append(selector)
 
-
+    return {
+        "blocked": bool(missing or hidden),
+        "missing": missing,
+        "hidden": hidden,
+    }
 
 
 def _extract_applicable_cosmetic_selectors(
@@ -1298,6 +1435,15 @@ def _host_matches_domain(host: str, domain: str) -> bool:
         return False
 
     return host == domain or host.endswith("." + domain)
+
+
+def _host_in_domains(host: str, domains: set[str]) -> bool:
+    host = (host or "").lower().strip(".")
+
+    if not host:
+        return False
+
+    return any(_host_matches_domain(host, domain) for domain in domains)
 
 
 def _safe_ticket_context(value: Any) -> Dict[str, Any]:

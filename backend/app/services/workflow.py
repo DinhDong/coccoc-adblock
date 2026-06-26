@@ -14,6 +14,12 @@ It also supports rule deduplication:
 - skips rules already generated for the same domain
 - skips rules already covered by public filter lists such as ABPvn/EasyList
 
+New in this version:
+- Saves the final review screenshot from a combined sandbox run that applies
+  all passing rules at the same time.
+- Falls back to the first per-rule sandbox screenshot only if combined sandbox
+  screenshot is unavailable.
+
 Run from backend/:
     .venv\\Scripts\\activate
     python -m app.services.workflow <report_id>
@@ -128,28 +134,38 @@ def run_rule_generation(
     if discard_existing:
         cleared = clear_rules(domain)
         if cleared:
-            logger.info("Stage 1: cleared %d existing rule(s) for %s (discard mode)", cleared, domain)
+            logger.info(
+                "Stage 1: cleared %d existing rule(s) for %s (discard mode)",
+                cleared,
+                domain,
+            )
 
     # Dedup 1: skip rules already generated for this domain.
     rules, internal_dupes = filter_new_rules(url, generated_rules)
     if internal_dupes:
         logger.info(
             "Stage 1: skipped %d rule(s) already in internal registry for %s",
-            len(internal_dupes), domain,
+            len(internal_dupes),
+            domain,
         )
 
     # Dedup 2: skip rules already covered by public filter lists.
     rules, external_dupes = filter_uncovered(rules, skip=skip_external)
     if external_dupes:
         for rule, source in external_dupes:
-            logger.info("Stage 1: skipped rule already in %s: %s", source, _coerce_rule(rule))
+            logger.info(
+                "Stage 1: skipped rule already in %s: %s",
+                source,
+                _coerce_rule(rule),
+            )
 
     total_skipped = len(internal_dupes) + len(external_dupes)
 
     if not rules:
         logger.info(
             "Stage 1: all %d generated rule(s) were duplicates for %s — nothing new to save",
-            len(generated_rules), report_id,
+            len(generated_rules),
+            report_id,
         )
         return []
 
@@ -210,7 +226,10 @@ def run_rule_generation(
 
     logger.info(
         "Stage 1: %d new rule(s) saved → %s  (%d duplicate(s) skipped) | problem_type=%s",
-        len(rules), rules_path, total_skipped, problem_type,
+        len(rules),
+        rules_path,
+        total_skipped,
+        problem_type,
     )
 
     return rules
@@ -225,7 +244,7 @@ def run_rule_validation(
     run_sandbox_checks: bool = True,
 ) -> Dict[str, Any]:
     """
-    Stage 2 — run syntax, scope, policy, and sandbox checks.
+    Stage 2 — run syntax, scope, policy, per-rule sandbox, and combined sandbox.
 
     Args:
         environment:    Crawl environment ("desktop", "android", "ios") — forwarded to
@@ -256,6 +275,18 @@ def run_rule_validation(
     OUT_VALIDATION.mkdir(parents=True, exist_ok=True)
     validation_path = OUT_VALIDATION / f"{report_id}_validation.json"
 
+    combined_sandbox = getattr(report, "combined_sandbox", None)
+    combined_screenshot_path = _save_combined_sandbox_screenshot(
+        combined_sandbox,
+        report_id,
+    )
+
+    if not combined_screenshot_path:
+        combined_screenshot_path = _save_first_sandbox_screenshot(
+            report.outcomes,
+            report_id,
+        )
+
     validation_data = {
         "report_id": report_id,
         "url": url,
@@ -271,6 +302,8 @@ def run_rule_validation(
         "passed": report.passed_count,
         "failed": report.failed,
         "passing_rules": report.passing_rules(),
+        "combined_screenshot": combined_screenshot_path,
+        "combined_sandbox": _serialize_sandbox_result(combined_sandbox),
         "outcomes": [
             _serialize_outcome(outcome)
             for outcome in report.outcomes
@@ -280,15 +313,14 @@ def run_rule_validation(
     with open(validation_path, "w", encoding="utf-8") as file:
         json.dump(_make_json_safe(validation_data), file, indent=2, ensure_ascii=False)
 
-    _save_first_sandbox_screenshot(report.outcomes, report_id)
-
     logger.info(
-        "Stage 2: %d/%d rules passed validation → %s | problem_type=%s | strategy=%s",
+        "Stage 2: %d/%d rules passed validation → %s | problem_type=%s | strategy=%s | combined_screenshot=%s",
         report.passed_count,
         report.total,
         validation_path,
         validation_data["problem_type"],
         validation_data["resolution_strategy"],
+        combined_screenshot_path or "n/a",
     )
 
     return {
@@ -298,6 +330,10 @@ def run_rule_validation(
         "passing_rules": report.passing_rules(),
         "problem_type": validation_data["problem_type"],
         "resolution_strategy": validation_data["resolution_strategy"],
+        "combined_screenshot": combined_screenshot_path,
+        "combined_sandbox_passed": bool(
+            getattr(combined_sandbox, "passed", False)
+        ) if combined_sandbox else False,
     }
 
 
@@ -369,10 +405,16 @@ def run_pipeline(
         elif choice == "3":
             print("\n  Aborted.")
             return {
-                "report_id": report_id, "url": url, "environment": env,
-                "ticket_context": ticket_context, "problem_type": problem_type,
-                "rules_generated": 0, "rules_passed": 0, "rules_failed": 0,
-                "passing_rules": [], "status": "aborted",
+                "report_id": report_id,
+                "url": url,
+                "environment": env,
+                "ticket_context": ticket_context,
+                "problem_type": problem_type,
+                "rules_generated": 0,
+                "rules_passed": 0,
+                "rules_failed": 0,
+                "passing_rules": [],
+                "status": "aborted",
             }
         else:
             print()
@@ -448,6 +490,10 @@ def run_pipeline(
             f"Failed: {validation['failed']}"
         )
 
+        combined_screenshot = validation.get("combined_screenshot", "")
+        if combined_screenshot:
+            print(f"  Combined screenshot: {combined_screenshot}")
+
         if validation["passed"] == 0:
             print("\n  No rules passed validation.")
         else:
@@ -466,6 +512,8 @@ def run_pipeline(
         "rules_passed": validation["passed"],
         "rules_failed": validation["failed"],
         "passing_rules": validation["passing_rules"],
+        "combined_screenshot": validation.get("combined_screenshot", ""),
+        "combined_sandbox_passed": validation.get("combined_sandbox_passed", False),
         "status": "ok",
     }
 
@@ -571,11 +619,44 @@ def _serialize_sandbox_result(result: Any) -> Optional[Dict[str, Any]]:
         ),
         "broken_selectors": list(getattr(result, "broken_selectors", []) or []),
         "error": getattr(result, "error", ""),
+        "unreachable": bool(getattr(result, "unreachable", False)),
         "tested_screenshot_saved": bool(tested_screenshot),
     }
 
 
-def _save_first_sandbox_screenshot(outcomes: List[Any], report_id: str) -> None:
+def _save_combined_sandbox_screenshot(
+    sandbox_result: Any,
+    report_id: str,
+) -> str:
+    """
+    Save screenshot from combined sandbox.
+
+    This is the primary review screenshot because it applies all passing rules
+    at the same time.
+    """
+    if not sandbox_result:
+        return ""
+
+    tested_screenshot = getattr(sandbox_result, "tested_screenshot", None)
+
+    if not tested_screenshot:
+        return ""
+
+    OUT_SCREENSHOTS.mkdir(parents=True, exist_ok=True)
+    screenshot_path = OUT_SCREENSHOTS / f"{report_id}_with_rules.png"
+    screenshot_path.write_bytes(tested_screenshot)
+
+    logger.info("Stage 2: combined sandbox screenshot → %s", screenshot_path)
+    return str(screenshot_path)
+
+
+def _save_first_sandbox_screenshot(outcomes: List[Any], report_id: str) -> str:
+    """
+    Fallback screenshot when combined sandbox is unavailable.
+
+    This should rarely be used. It keeps backward compatibility for cases where
+    no combined sandbox screenshot exists.
+    """
     sandbox_result = next(
         (
             getattr(outcome, "sandbox", None)
@@ -586,18 +667,19 @@ def _save_first_sandbox_screenshot(outcomes: List[Any], report_id: str) -> None:
     )
 
     if not sandbox_result:
-        return
+        return ""
 
     tested_screenshot = getattr(sandbox_result, "tested_screenshot", None)
 
     if not tested_screenshot:
-        return
+        return ""
 
     OUT_SCREENSHOTS.mkdir(parents=True, exist_ok=True)
     screenshot_path = OUT_SCREENSHOTS / f"{report_id}_with_rules.png"
     screenshot_path.write_bytes(tested_screenshot)
 
-    logger.info("Stage 2: sandbox screenshot → %s", screenshot_path)
+    logger.info("Stage 2: fallback per-rule sandbox screenshot → %s", screenshot_path)
+    return str(screenshot_path)
 
 
 def _coerce_rule(rule: Any) -> str:

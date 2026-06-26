@@ -33,7 +33,15 @@ logger = logging.getLogger(__name__)
 DEFAULT_SYSTEM_PROMPT = """\
 You are an AdBlock filter rule patch generator for the Coc Coc browser.
 
-Your job is to generate the smallest safe ABP rule patch that solves the reported issue.
+Your job is to generate a safe ABP rule patch that solves the reported issue.
+
+Important:
+- Prefer a small targeted patch, but do not omit necessary independent rules.
+- Correctness is more important than producing the fewest possible rules.
+- If the page has multiple distinct confirmed ad targets, output one safe rule for each target.
+- A popup overlay, an ad modal, an ad container, and an ad-image network path are distinct targets.
+- Do not drop a high-confidence network ad rule just because a cosmetic overlay rule is also present.
+- Do not drop a popup overlay/backdrop rule just because the ad image/container rule is also present.
 
 You will receive:
 - user/CMS ticket context,
@@ -49,7 +57,7 @@ You will receive:
 
 Core principle:
 - Generate a targeted rule patch, not a broad site-wide filter list.
-- Prefer the fewest rules that directly solve the reported problem.
+- Prefer the fewest rules that fully solve the issue, not the fewest rules at all cost.
 - Do not guess a specific root cause if the evidence is not provided.
 - When evidence is weak, generate conservative candidates only.
 - Preserve the user-reported expected behavior.
@@ -65,8 +73,9 @@ Evidence priority:
    - Medium priority.
    - Use them to infer what may need a narrow exception or cosmetic exception.
 4. ad_candidates
-   - Medium priority.
+   - Medium/high priority.
    - Use high-confidence candidates first.
+   - Treat high-confidence candidates with different categories or different suggested_rule targets as distinct confirmed targets.
    - Prefer suggested_rule only if it is domain-scoped and not too broad.
 5. third_party network domains
    - Lower priority.
@@ -75,12 +84,24 @@ Evidence priority:
    - Lowest priority.
    - Use only conservative rules.
 
+High-confidence candidate coverage:
+- For block_visible_ad and legacy visible-ad mode, include all necessary high-confidence distinct ad candidates.
+- Distinct candidate categories often need separate rules:
+  - popup_overlay: hides modal/backdrop that blocks page interaction.
+  - ad_container: hides DOM ad slots or parent ad wrappers.
+  - floating_ad: hides sticky/floating ad elements.
+  - ad_network_request: blocks ad images/scripts/iframes loaded from ad-specific paths.
+- If a parent ad_container safely covers a child ad_container, output only the parent.
+- If a network rule blocks ad image assets and a cosmetic rule hides the container, both can be necessary.
+- If a modal/backdrop remains after blocking the ad image, include the overlay/backdrop rule too.
+
 Allowed ABP rule formats:
 
 Network blocking:
   ||ads.example.com^
   ||ads.example.com/path^
   ||ads.example.com/path^$script,domain=site.com
+  ||ads.example.com/path^$image,domain=site.com
   ||ads.example.com/path^$third-party,domain=site.com
 
 Cosmetic hiding:
@@ -118,10 +139,11 @@ ABP formatting rules:
 - Domain-scope network rules with domain=target.com when appropriate.
 
 Rule budget:
-- Default target: 1-3 rules.
-- For legacy mode with no ticket context, up to 5 rules are allowed if there are multiple independent high-confidence ad candidates.
+- Default target: 1-6 rules.
+- For legacy mode with no ticket context, up to 8 rules are allowed if there are multiple independent high-confidence ad candidates.
+- For visible-ad fixes, generate more than 3 rules when each rule fixes a distinct confirmed target.
+- For overlay/popup cases, include both overlay/backdrop rules and ad content/container/network rules when needed.
 - For ticket-aware breakage fixes, prefer 1 rule when matched_rules or blocked_resources identify the cause.
-- Generate more than 3 rules only when each rule fixes a distinct confirmed target.
 - Do not output duplicate or redundant rules.
 - If one rule already covers another safely, output only the broader safe rule.
   Example:
@@ -151,14 +173,15 @@ Strict safety limits:
 - No markdown, no explanations, no comments, no numbering, no blank lines.
 
 Container targeting:
-- Each ad candidate may include a parent_chain showing its nearest DOM ancestors (closest first).
-- If a parent has a clearly ad-specific id or class, prefer targeting that container over the leaf element — it produces a safer, more complete block.
+- Each ad candidate may include a parent_chain showing its nearest DOM ancestors, closest first.
+- If a parent has a clearly ad-specific id or class, prefer targeting that container over the leaf element because it usually produces a safer, more complete block.
 - Example: leaf=ins.adsbygoogle inside parent div#ad-sidebar → prefer site.com###ad-sidebar over site.com##ins.adsbygoogle.
-- Do not blindly pick the outermost ancestor — pick the nearest one that is clearly ad-specific.\
+- Do not blindly pick the outermost ancestor — pick the nearest one that is clearly ad-specific.
 
 Resolution strategy behavior:
 - block_visible_ad:
   Generate narrow network blocking rules or cosmetic hiding rules for visible ads.
+  Include distinct confirmed overlay, container, floating, and network ad targets when needed.
 
 - allow_required_content:
   Generate narrow exception rules to restore images, videos, scripts, media, or normal content broken by Adblock.
@@ -183,6 +206,16 @@ Context sufficiency:
   crawl signals -> ad candidates -> block/hide ad-related signals.
 - If evidence_level is url_only_best_effort, be conservative and avoid broad rules.
 """
+
+
+CATEGORY_PRIORITY = {
+    "popup_overlay": 0,
+    "ad_network_request": 1,
+    "ad_container": 2,
+    "floating_ad": 3,
+    "ad_iframe": 4,
+    "tracking_script": 5,
+}
 
 
 def build_prompt(
@@ -264,6 +297,7 @@ def extract_signals(crawl_result: Dict[str, Any]) -> Dict[str, Any]:
                 "domain": candidate.get("domain", ""),
                 "element_snippet": candidate.get("element_snippet", "")
                 or candidate.get("outer_html_snippet", ""),
+                "parent_chain": candidate.get("parent_chain", []),
             }
         )
 
@@ -365,6 +399,12 @@ def _append_evidence_summary(
         else 0
     )
 
+    high_conf_count = sum(
+        1
+        for candidate in ad_candidates
+        if str(candidate.get("confidence", "")).strip().lower() == "high"
+    )
+
     lines.append("\nEvidence summary:")
     lines.append(f"  Evidence level: {evidence_level or 'unknown'}")
     lines.append(f"  Matched rules count: {len(matched_rules)}")
@@ -372,6 +412,7 @@ def _append_evidence_summary(
     lines.append(f"  Blocked resources count: {blocked_resources_count}")
     lines.append(f"  Third-party domains count: {len(third_party)}")
     lines.append(f"  Ad candidates count: {len(ad_candidates)}")
+    lines.append(f"  High-confidence ad candidates count: {high_conf_count}")
 
     lines.append("  Evidence priority to use:")
     lines.append("    1. matched_rules")
@@ -495,8 +536,14 @@ def _append_ad_candidates(
     lines.append(
         "  Prefer high-confidence candidates. Prefer suggested_rule only if it is domain-scoped and not broad."
     )
+    lines.append(
+        "  Coverage instruction: include every distinct high-confidence suggested_rule when it targets a different confirmed ad/overlay/network target."
+    )
+    lines.append(
+        "  Distinct examples: popup_overlay + ad_container + ad_network_request may all be needed together."
+    )
 
-    for candidate in ad_candidates[:40]:
+    for candidate in ad_candidates[:60]:
         confidence = candidate.get("confidence", "")
         category = candidate.get("category", "")
         suggested = candidate.get("suggested_rule", "")
@@ -523,26 +570,40 @@ def _append_ad_candidates(
             parts.append(f"selector={selector}")
 
         if reason:
-            parts.append(f"reason={_truncate(str(reason), 220)}")
+            parts.append(f"reason={_truncate(str(reason), 260)}")
 
         if snippet:
-            parts.append(f"snippet={_truncate(str(snippet), 240)}")
+            parts.append(f"snippet={_truncate(str(snippet), 280)}")
 
         parent_chain = candidate.get("parent_chain", [])
         if isinstance(parent_chain, list) and parent_chain:
-            ancestry = " > ".join(
-                (
-                    f"{p.get('tag', 'div')}"
-                    + (f"#{p['id']}" if p.get("id") else "")
-                    + (
-                        "." + ".".join(p["classes"][:2])
-                        if p.get("classes")
-                        else ""
-                    )
+            ancestry_parts = []
+            for parent in parent_chain:
+                if not isinstance(parent, Mapping):
+                    continue
+
+                tag = parent.get("tag", "div")
+                parent_id = parent.get("id", "")
+                classes = parent.get("classes", [])
+
+                if isinstance(classes, list):
+                    class_part = "." + ".".join(str(item) for item in classes[:3]) if classes else ""
+                elif isinstance(classes, str):
+                    class_items = [item for item in classes.split() if item]
+                    class_part = "." + ".".join(class_items[:3]) if class_items else ""
+                else:
+                    class_part = ""
+
+                ancestry_parts.append(
+                    f"{tag}"
+                    + (f"#{parent_id}" if parent_id else "")
+                    + class_part
                 )
-                for p in parent_chain
-            )
-            parts.append(f"parent_chain={_truncate(ancestry, 300)}")
+
+            if ancestry_parts:
+                parts.append(
+                    f"parent_chain={_truncate(' > '.join(ancestry_parts), 360)}"
+                )
 
         if parts:
             lines.append("  - " + " | ".join(parts))
@@ -585,7 +646,12 @@ def _append_generation_goal(
 
     _append_strategy_examples(lines, policy.strategy, problem_type)
 
-    lines.append("  Final output requirement: output only ABP rule lines.")
+    lines.append(
+        "  Completeness requirement: do not omit a safe high-confidence suggested_rule if it blocks a distinct confirmed target."
+    )
+    lines.append(
+        "  Final output requirement: output only ABP rule lines."
+    )
 
 
 def _append_rule_budget(
@@ -599,7 +665,13 @@ def _append_rule_budget(
         and evidence_level == "legacy_no_ticket_context"
     ):
         lines.append(
-            "  Rule budget: generate 1-5 rules. Use more than 3 only for distinct high-confidence ad targets."
+            "  Rule budget: generate 1-8 rules. Use more than 3 when each rule covers a distinct high-confidence ad/overlay/network target."
+        )
+        return
+
+    if strategy == STRATEGY_BLOCK_VISIBLE_AD:
+        lines.append(
+            "  Rule budget: generate 1-6 rules. Use enough rules to cover all distinct confirmed visible ad targets."
         )
         return
 
@@ -608,17 +680,17 @@ def _append_rule_budget(
         STRATEGY_RESTORE_HIDDEN_UI,
     }:
         lines.append(
-            "  Rule budget: prefer 1 rule. Generate 2-3 only if there are multiple distinct affected targets."
+            "  Rule budget: prefer 1 rule. Generate 2-4 only if there are multiple distinct affected targets."
         )
         return
 
     if strategy == STRATEGY_REMOVE_OVERLAY_OR_ALLOW_REQUIRED_RESOURCE:
         lines.append(
-            "  Rule budget: prefer 1-3 rules. Generate up to 5 only if multiple independent overlay/ad targets are confirmed."
+            "  Rule budget: generate 1-8 rules. Include overlay/backdrop, popup content, and ad network/container rules when each target is confirmed."
         )
         return
 
-    lines.append("  Rule budget: prefer 1-3 rules.")
+    lines.append("  Rule budget: prefer 1-6 rules.")
 
 
 def _append_strategy_examples(
@@ -629,8 +701,12 @@ def _append_strategy_examples(
     lines.append("  Strategy-specific syntax examples:")
 
     if strategy == STRATEGY_BLOCK_VISIBLE_AD:
+        lines.append("    - Popup backdrop hide: site.com##.modal-backdrop")
+        lines.append("    - Popup modal hide: site.com##.ad-modal")
+        lines.append("    - Parent ad container hide: site.com##.adserver")
         lines.append("    - Cosmetic hide: site.com##.ad-banner")
         lines.append("    - Cosmetic hide by id: site.com###ad-content")
+        lines.append("    - Network image block: ||cdn.example.com/ads/^$image,domain=site.com")
         lines.append("    - Network block: ||ads.example.com^$third-party,domain=site.com")
         lines.append("    - Avoid exceptions such as @@ or #@# for visible-ad tickets.")
         return
@@ -656,9 +732,11 @@ def _append_strategy_examples(
         return
 
     if strategy == STRATEGY_REMOVE_OVERLAY_OR_ALLOW_REQUIRED_RESOURCE:
+        lines.append("    - Overlay hide: site.com##.modal-backdrop")
+        lines.append("    - Popup modal hide: site.com##.ad-modal")
         lines.append("    - Overlay hide by id: site.com###ad-content")
-        lines.append("    - Overlay hide by id: site.com###ad-area-1")
         lines.append("    - Sticky ad hide: site.com##.sticky_ads")
+        lines.append("    - Network image block: ||cdn.example.com/ads/^$image,domain=site.com")
         lines.append("    - Required script exception if directly evidenced: @@||site.com/script.js^$script,domain=site.com")
         lines.append("    - Avoid broad selectors such as site.com##div, site.com##iframe, site.com##.modal.")
         return
@@ -705,10 +783,16 @@ def _sort_candidates(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         candidates,
         key=lambda item: (
             _confidence_rank(item.get("confidence", "")),
+            _category_rank(item.get("category", "")),
             0 if item.get("suggested_rule") else 1,
+            0 if _looks_like_narrow_network_rule(item.get("suggested_rule", "")) else 1,
             0 if item.get("selector") else 1,
         ),
     )
+
+
+def _category_rank(value: Any) -> int:
+    return CATEGORY_PRIORITY.get(str(value).strip().lower(), 99)
 
 
 def _confidence_rank(value: Any) -> int:
@@ -724,6 +808,17 @@ def _confidence_rank(value: Any) -> int:
         return 2
 
     return 3
+
+
+def _looks_like_narrow_network_rule(rule: Any) -> bool:
+    text = str(rule or "").lower()
+
+    return (
+        text.startswith("||")
+        and "/" in text[2:]
+        and "$" in text
+        and "domain=" in text
+    )
 
 
 def _hostname(url: str) -> str:

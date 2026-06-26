@@ -1,4 +1,4 @@
-#Handles the browser using Playwright:
+# Handles the browser using Playwright:
 # open URL
 # wait for page load
 # scroll the page
@@ -6,6 +6,13 @@
 # collect rendered HTML
 # capture network requests
 # handle timeout or page errors
+#
+# New in this version:
+# - Capture fixed/sticky floating elements.
+# - Capture fullscreen popup overlays/backdrops that block page interaction.
+# - Return richer fixed_elements data for detector.py:
+#     selector, position, size, z-index, background, opacity, pointer-events,
+#     whether it looks like a fullscreen overlay, whether it has a close button.
 
 """Browser automation helpers using Playwright."""
 
@@ -94,77 +101,382 @@ _FALLBACK_STEALTH_SCRIPT = """
     Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
 
     // Spoof notification permission so it doesn't return "denied" immediately
-    const origQuery = window.Notification
+    const origRequestPermission = window.Notification
         ? window.Notification.requestPermission.bind(window.Notification)
         : null;
-    if (origQuery) {
+    if (origRequestPermission) {
         window.Notification.requestPermission = () => Promise.resolve('default');
     }
 
     // WebGL vendor/renderer — headless exposes "SwiftShader" which is flagged
     const getParam = WebGLRenderingContext.prototype.getParameter;
     WebGLRenderingContext.prototype.getParameter = function(param) {
-        if (param === 37445) return 'Intel Inc.';         // VENDOR
-        if (param === 37446) return 'Intel Iris OpenGL Engine'; // RENDERER
+        if (param === 37445) return 'Intel Inc.';                // VENDOR
+        if (param === 37446) return 'Intel Iris OpenGL Engine';  // RENDERER
         return getParam.call(this, param);
     };
 })();
 """
 
-# Evaluates in the live browser to find position:fixed / position:sticky elements.
-# BeautifulSoup can't see computed styles, so floating ad banners are otherwise invisible.
+# Evaluates in the live browser to find:
+# - position:fixed / position:sticky floating ad banners
+# - fullscreen fixed overlays / backdrops that block user interaction
+#
+# BeautifulSoup can't see computed styles, so these are otherwise invisible.
 _FIXED_ELEMENT_SCRIPT = """
 () => {
-    const MIN_W = 100, MIN_H = 20;
+    const MIN_W = 100;
+    const MIN_H = 20;
     const results = [];
     const seen = new Set();
 
-    for (const el of document.querySelectorAll('*')) {
+    const viewportW = Math.max(window.innerWidth || 0, document.documentElement.clientWidth || 0, 1);
+    const viewportH = Math.max(window.innerHeight || 0, document.documentElement.clientHeight || 0, 1);
+    const viewportArea = Math.max(viewportW * viewportH, 1);
+
+    const GENERATED_CLASS_PREFIXES = [
+        'jsx-',
+        'css-',
+        'sc-',
+        'style-',
+        'chakra-',
+        'mantine-',
+        'ant-',
+    ];
+
+    const AD_OR_OVERLAY_RE = /(^|[-_\\s])(ad|ads|adserver|ad-server|adslot|ad-slot|adunit|ad-unit|banner|popup|pop|modal|overlay|backdrop|mask|interstitial|sponsor|sponsored|promo|advert|advertise|advertisement)([-_\\s]|$)/i;
+    const OVERLAY_RE = /(overlay|backdrop|modal|popup|dialog|mask|layer|interstitial)/i;
+    const SITE_CHROME_RE = /(header|navbar|navigation|nav-|menu|search|footer|breadcrumb)/i;
+    const IGNORE_TEXT_RE = /(cookie|consent|accept cookies|newsletter|subscribe|chat support)/i;
+
+    const escapeIdent = (value) => {
+        if (window.CSS && typeof window.CSS.escape === 'function') {
+            return window.CSS.escape(value);
+        }
+        return String(value).replace(/[^A-Za-z0-9_-]/g, (ch) => '\\\\' + ch);
+    };
+
+    const isVisible = (el) => {
+        if (!el || !(el instanceof Element)) return false;
         const st = window.getComputedStyle(el);
-        if (st.position !== 'fixed' && st.position !== 'sticky') continue;
-
+        if (!st) return false;
+        if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
         const rect = el.getBoundingClientRect();
-        if (rect.width < MIN_W || rect.height < MIN_H) continue;
+        return rect.width > 0 && rect.height > 0;
+    };
 
-        // Skip elements that are clearly nav / cookie / chat (not ads)
-        const text = (el.innerText || '').toLowerCase().slice(0, 200);
-        if (/cookie|consent|accept|chat|subscribe|newsletter/.test(text)) continue;
+    const parseZIndex = (value) => {
+        if (!value || value === 'auto') return 0;
+        const parsed = parseInt(value, 10);
+        return Number.isFinite(parsed) ? parsed : 0;
+    };
 
-        // Deduplicate by outerHTML prefix
-        const key = el.outerHTML.slice(0, 80);
-        if (seen.has(key)) continue;
-        seen.add(key);
+    const parseColor = (color) => {
+        const match = /rgba?\\(([^)]+)\\)/i.exec(color || '');
+        if (!match) {
+            return { r: 255, g: 255, b: 255, a: 0 };
+        }
 
-        // Collect external link hrefs inside this element
+        const parts = match[1].split(',').map((part) => part.trim());
+        const r = Number.parseFloat(parts[0] || '255');
+        const g = Number.parseFloat(parts[1] || '255');
+        const b = Number.parseFloat(parts[2] || '255');
+        const a = parts.length >= 4 ? Number.parseFloat(parts[3] || '1') : 1;
+
+        return {
+            r: Number.isFinite(r) ? r : 255,
+            g: Number.isFinite(g) ? g : 255,
+            b: Number.isFinite(b) ? b : 255,
+            a: Number.isFinite(a) ? a : 1,
+        };
+    };
+
+    const isDarkColor = (color) => {
+        const parsed = parseColor(color);
+        const luminance = (0.2126 * parsed.r) + (0.7152 * parsed.g) + (0.0722 * parsed.b);
+        return parsed.a >= 0.25 && luminance <= 130;
+    };
+
+    const classListOf = (el) => {
+        try {
+            return Array.from(el.classList || []).filter(Boolean);
+        } catch (_) {
+            const raw = typeof el.className === 'string' ? el.className : '';
+            return raw.split(/\\s+/).filter(Boolean);
+        }
+    };
+
+    const isGeneratedClass = (cls) => {
+        return GENERATED_CLASS_PREFIXES.some((prefix) => cls.startsWith(prefix));
+    };
+
+    const firstMeaningfulClass = (classes) => {
+        for (const cls of classes || []) {
+            if (!cls) continue;
+            if (isGeneratedClass(cls)) continue;
+            return cls;
+        }
+        return '';
+    };
+
+    const bestSemanticClass = (classes) => {
+        for (const cls of classes || []) {
+            if (!cls) continue;
+            if (isGeneratedClass(cls)) continue;
+            if (AD_OR_OVERLAY_RE.test(cls)) return cls;
+        }
+
+        return firstMeaningfulClass(classes);
+    };
+
+    const buildSelector = (el) => {
+        const tag = el.tagName.toLowerCase();
+
+        if (el.id) {
+            return `${tag}#${escapeIdent(el.id)}`;
+        }
+
+        const classes = classListOf(el);
+        const semanticClass = bestSemanticClass(classes);
+
+        if (semanticClass) {
+            return `${tag}.${escapeIdent(semanticClass)}`;
+        }
+
+        // Last resort: a structural selector. It is less stable than a class/id,
+        // but still safer than hiding every fixed div on the page.
+        const path = [];
+        let current = el;
+
+        while (
+            current &&
+            current.nodeType === 1 &&
+            current !== document.body &&
+            current !== document.documentElement &&
+            path.length < 5
+        ) {
+            const currentTag = current.tagName.toLowerCase();
+            let index = 1;
+            let sibling = current.previousElementSibling;
+
+            while (sibling) {
+                if (sibling.tagName === current.tagName) {
+                    index += 1;
+                }
+                sibling = sibling.previousElementSibling;
+            }
+
+            path.unshift(`${currentTag}:nth-of-type(${index})`);
+            current = current.parentElement;
+        }
+
+        if (path.length) {
+            return `body > ${path.join(' > ')}`;
+        }
+
+        return tag;
+    };
+
+    const hasCloseButton = (el) => {
+        try {
+            return Boolean(
+                el.querySelector(
+                    [
+                        'button',
+                        '[role="button"]',
+                        '[aria-label*="close" i]',
+                        '[title*="close" i]',
+                        '[class*="close" i]',
+                        '[id*="close" i]',
+                        '[class*="dismiss" i]',
+                        '[id*="dismiss" i]',
+                        '[class*="times" i]',
+                        '[class*="xmark" i]',
+                    ].join(',')
+                )
+            );
+        } catch (_) {
+            return false;
+        }
+    };
+
+    for (const el of document.querySelectorAll('*')) {
+        if (!isVisible(el)) continue;
+
+        const tag = el.tagName.toLowerCase();
+        if (tag === 'html' || tag === 'body') continue;
+
+        const st = window.getComputedStyle(el);
+        const position = st.position;
+        const rect = el.getBoundingClientRect();
+
+        const width = Math.round(rect.width);
+        const height = Math.round(rect.height);
+
+        if (width < MIN_W || height < MIN_H) continue;
+
+        const left = Math.round(rect.left);
+        const top = Math.round(rect.top);
+        const right = Math.round(rect.right);
+        const bottom = Math.round(rect.bottom);
+
+        const clippedW = Math.max(0, Math.min(rect.right, viewportW) - Math.max(rect.left, 0));
+        const clippedH = Math.max(0, Math.min(rect.bottom, viewportH) - Math.max(rect.top, 0));
+        const viewportCoverage = (clippedW * clippedH) / viewportArea;
+
+        const classes = classListOf(el);
+        const classText = classes.join(' ');
+        const attrsText = `${tag} ${el.id || ''} ${classText} ${el.getAttribute('role') || ''} ${el.getAttribute('aria-label') || ''}`;
+
+        const zIndex = parseZIndex(st.zIndex);
+        const backgroundColor = st.backgroundColor || '';
+        const opacity = Number.parseFloat(st.opacity || '1');
+        const pointerEvents = st.pointerEvents || '';
+
+        const overlayKeyword = OVERLAY_RE.test(attrsText);
+        const adKeyword = AD_OR_OVERLAY_RE.test(attrsText);
+        const siteChrome = (
+            tag === 'header' ||
+            tag === 'nav' ||
+            tag === 'footer' ||
+            SITE_CHROME_RE.test(attrsText)
+        );
+
+        const darkOverlay = isDarkColor(backgroundColor) || opacity < 0.95;
+        const closeButton = hasCloseButton(el);
+
+        const isFixedLike = position === 'fixed' || position === 'sticky';
+        const isAbsoluteOverlay = position === 'absolute' && viewportCoverage >= 0.65 && zIndex >= 10;
+
+        const isFullscreenOverlay = (
+            (position === 'fixed' || isAbsoluteOverlay) &&
+            viewportCoverage >= 0.65 &&
+            width >= viewportW * 0.70 &&
+            height >= viewportH * 0.60 &&
+            left <= viewportW * 0.20 &&
+            top <= viewportH * 0.25
+        );
+
+        if (!isFixedLike && !isAbsoluteOverlay) continue;
+
+        const text = (el.innerText || '').toLowerCase().slice(0, 300);
+
+        // Avoid noisy site UI candidates. Do not skip if it is a real overlay.
+        if (
+            siteChrome &&
+            !isFullscreenOverlay &&
+            !adKeyword &&
+            !overlayKeyword
+        ) {
+            continue;
+        }
+
+        // Avoid cookie/chat/newsletter bars unless they are full-screen overlays
+        // with ad/overlay signals.
+        if (
+            IGNORE_TEXT_RE.test(text) &&
+            !isFullscreenOverlay &&
+            !adKeyword &&
+            !overlayKeyword
+        ) {
+            continue;
+        }
+
         const links = [];
         for (const a of el.querySelectorAll('a[href]')) {
             try {
                 const href = new URL(a.href, location.href).href;
-                if (!href.startsWith(location.origin)) links.push(href);
-            } catch(_) {}
+                if (!href.startsWith(location.origin)) {
+                    links.push(href);
+                }
+            } catch (_) {}
         }
 
-        // Collect iframe sources
         const iframes = [];
-        for (const f of el.querySelectorAll('iframe[src]')) {
-            const src = f.getAttribute('src') || '';
-            if (src && !src.startsWith(location.origin)) iframes.push(src);
+        for (const frame of el.querySelectorAll('iframe[src]')) {
+            const src = frame.getAttribute('src') || '';
+            if (!src) continue;
+
+            try {
+                const fullSrc = new URL(src, location.href).href;
+                if (!fullSrc.startsWith(location.origin)) {
+                    iframes.push(fullSrc);
+                }
+            } catch (_) {
+                iframes.push(src);
+            }
         }
+
+        const isBannerShape = width >= 400 && height >= 20 && height <= 240;
+
+        const signals = [
+            Boolean(links.length),
+            Boolean(iframes.length),
+            adKeyword,
+            overlayKeyword,
+            isBannerShape,
+            isFullscreenOverlay,
+            darkOverlay,
+            closeButton,
+            zIndex >= 10,
+            pointerEvents !== 'none',
+        ].filter(Boolean).length;
+
+        if (!isFullscreenOverlay && signals < 1) {
+            continue;
+        }
+
+        const selector = buildSelector(el);
+        const key = `${selector}|${position}|${width}|${height}|${top}|${left}`;
+
+        if (seen.has(key)) continue;
+        seen.add(key);
 
         results.push({
-            tag:       el.tagName.toLowerCase(),
-            id:        el.id || '',
-            classes:   typeof el.className === 'string' ? el.className : '',
-            position:  st.position,
-            width:     Math.round(rect.width),
-            height:    Math.round(rect.height),
-            top:       Math.round(rect.top),
-            snippet:   el.outerHTML.slice(0, 300),
+            tag,
+            id: el.id || '',
+            classes: classText,
+            selector,
+            position,
+            width,
+            height,
+            top,
+            left,
+            right,
+            bottom,
+            viewport_width: viewportW,
+            viewport_height: viewportH,
+            viewport_coverage: Number(viewportCoverage.toFixed(3)),
+            z_index: zIndex,
+            background_color: backgroundColor,
+            opacity: Number.isFinite(opacity) ? opacity : 1,
+            pointer_events: pointerEvents,
+            is_fullscreen_overlay: Boolean(isFullscreenOverlay),
+            is_dark_overlay: Boolean(darkOverlay),
+            has_close_button: Boolean(closeButton),
+            overlay_keyword: Boolean(overlayKeyword),
+            ad_keyword: Boolean(adKeyword),
+            site_chrome: Boolean(siteChrome),
+            snippet: el.outerHTML.slice(0, 500),
+            text_sample: text.slice(0, 200),
             ext_links: links.slice(0, 5),
-            iframes:   iframes.slice(0, 3),
+            iframes: iframes.slice(0, 3),
         });
     }
-    return results;
+
+    // Higher priority candidates first: fullscreen overlay, then high z-index,
+    // then larger viewport coverage.
+    results.sort((a, b) => {
+        if (a.is_fullscreen_overlay !== b.is_fullscreen_overlay) {
+            return a.is_fullscreen_overlay ? -1 : 1;
+        }
+        if (a.z_index !== b.z_index) {
+            return b.z_index - a.z_index;
+        }
+        return b.viewport_coverage - a.viewport_coverage;
+    });
+
+    return results.slice(0, 30);
 }
 """
 
@@ -173,7 +485,7 @@ _FIXED_ELEMENT_SCRIPT = """
 class CapturedRequest:
     """A single network request captured during page load."""
     url: str
-    resource_type: str   # "script", "stylesheet", "image", "xhr", "fetch", "document", etc.
+    resource_type: str
     method: str = "GET"
 
     def to_dict(self) -> dict:
@@ -217,6 +529,7 @@ def _apply_stealth(page: Any, user_agent: Optional[str] = None) -> None:
     """Apply stealth patches to a Playwright page to suppress bot-detection signals."""
     try:
         from playwright_stealth import Stealth
+
         Stealth(
             chrome_runtime=True,
             navigator_user_agent_override=user_agent or _DEFAULT_USER_AGENT,
@@ -227,15 +540,23 @@ def _apply_stealth(page: Any, user_agent: Optional[str] = None) -> None:
         page.add_init_script(_FALLBACK_STEALTH_SCRIPT)
 
 
-def _scroll_page(page: Any, scroll_step: int = 1000, max_scrolls: int = 30, delay_seconds: float = 0.1) -> None:
+def _scroll_page(
+    page: Any,
+    scroll_step: int = 1000,
+    max_scrolls: int = 30,
+    delay_seconds: float = 0.1,
+) -> None:
     """Scroll the page gradually to load lazy content."""
     previous_height = page.evaluate("() => document.documentElement.scrollHeight")
+
     for _ in range(max_scrolls):
         page.evaluate("(step) => window.scrollBy(0, step)", scroll_step)
         time.sleep(delay_seconds)
+
         current_height = page.evaluate("() => document.documentElement.scrollHeight")
         if current_height == previous_height:
             break
+
         previous_height = current_height
 
 
@@ -260,10 +581,8 @@ def render_url(
     sync_playwright, PlaywrightError, PlaywrightTimeoutError = _import_playwright()
     start_time = time.perf_counter()
 
-    # Resolve environment profile; fall back to desktop if unknown
     profile = ENVIRONMENTS.get(environment, ENVIRONMENTS["desktop"])
     effective_ua = user_agent or profile["user_agent"]
-    # Always use the profile's engine; the legacy browser_type param predates environments
     effective_browser_type = profile["browser_type"]
 
     result = RenderResult(url=url, status="failed", environment=environment)
@@ -271,6 +590,7 @@ def render_url(
     try:
         with sync_playwright() as playwright:
             launch_kwargs: Dict[str, Any] = {"headless": headless}
+
             if stealth and effective_browser_type == "chromium":
                 launch_kwargs["args"] = _STEALTH_LAUNCH_ARGS
 
@@ -285,69 +605,84 @@ def render_url(
                 "locale": "en-US",
                 "timezone_id": "America/New_York",
                 "extra_http_headers": {"Accept-Language": "en-US,en;q=0.9"},
-                # WebKit on Windows ships without the full system CA bundle; many HTTPS
-                # sites fail SSL handshakes. Safe to ignore here — we're read-only crawling.
+                # WebKit on Windows may fail SSL handshakes on some sites.
+                # Safe to ignore here — this crawler is read-only.
                 "ignore_https_errors": effective_browser_type == "webkit",
             }
 
             context = browser.new_context(**context_kwargs)
             page = context.new_page()
 
-            # Stealth patches are Chromium-specific; skip for WebKit (iOS)
             if stealth and effective_browser_type == "chromium":
                 _apply_stealth(page, user_agent=effective_ua)
 
-            # Capture all network requests during page load
             seen_urls: set = set()
 
             if capture_requests:
                 def _on_request(request):
                     req_url = request.url
-                    if req_url not in seen_urls:
-                        seen_urls.add(req_url)
-                        result.captured_requests.append(CapturedRequest(
+
+                    if req_url in seen_urls:
+                        return
+
+                    seen_urls.add(req_url)
+                    result.captured_requests.append(
+                        CapturedRequest(
                             url=req_url,
                             resource_type=request.resource_type,
                             method=request.method,
-                        ))
+                        )
+                    )
 
                 page.on("request", _on_request)
 
             page.goto(url, wait_until=wait_until, timeout=timeout_ms)
 
-            # Wait for network to settle (async ad scripts, lazy JS)
             try:
                 idle_timeout = network_idle_timeout_ms or timeout_ms
                 page.wait_for_load_state("networkidle", timeout=idle_timeout)
             except Exception:
                 logger.debug("networkidle timeout — continuing with what we have")
 
-            # Extra delay to let remaining async content fire (ads, trackers)
             if page_load_delay_ms > 0:
                 delay_sec = page_load_delay_ms / 1000
-                logger.debug(f"Waiting {delay_sec:.1f}s for async content to load...")
+                logger.debug("Waiting %.1fs for async content to load...", delay_sec)
                 time.sleep(delay_sec)
 
             if enable_scroll:
-                _scroll_page(page, scroll_step=scroll_step, max_scrolls=max_scrolls)
+                _scroll_page(
+                    page,
+                    scroll_step=scroll_step,
+                    max_scrolls=max_scrolls,
+                )
                 page.evaluate("window.scrollTo(0, 0)")
                 time.sleep(0.3)
 
             html = page.content()
-            try:
-                screenshot_bytes = page.screenshot(full_page=True, timeout=timeout_ms)
-            except Exception:
-                logger.debug("full_page screenshot failed (page too tall?), falling back to viewport")
-                screenshot_bytes = page.screenshot(full_page=False, timeout=timeout_ms)
 
-            # Capture fixed/sticky positioned elements — invisible to HTML parsing
-            # because position is a computed style, not a static attribute.
+            try:
+                screenshot_bytes = page.screenshot(
+                    full_page=True,
+                    timeout=timeout_ms,
+                )
+            except Exception:
+                logger.debug(
+                    "full_page screenshot failed; falling back to viewport screenshot"
+                )
+                screenshot_bytes = page.screenshot(
+                    full_page=False,
+                    timeout=timeout_ms,
+                )
+
             try:
                 result.fixed_elements = page.evaluate(_FIXED_ELEMENT_SCRIPT) or []
                 if result.fixed_elements:
-                    logger.debug("Found %d fixed/sticky element(s)", len(result.fixed_elements))
+                    logger.debug(
+                        "Found %d fixed/sticky/overlay element(s)",
+                        len(result.fixed_elements),
+                    )
             except Exception as exc:
-                logger.debug("Fixed element scan failed: %s", exc)
+                logger.debug("Fixed/overlay element scan failed: %s", exc)
 
             if screenshot_path:
                 screenshot_file = Path(screenshot_path)
@@ -358,6 +693,9 @@ def render_url(
             result.html = html
             result.screenshot_bytes = screenshot_bytes
             result.status = "success"
+
+            context.close()
+            browser.close()
 
     except PlaywrightTimeoutError as exc:
         error_message = f"Timeout while loading {url}: {exc}"
@@ -375,4 +713,3 @@ def render_url(
         result.elapsed_ms = int((time.perf_counter() - start_time) * 1000)
 
     return result
-

@@ -3,6 +3,7 @@
 # Stage 2 — rule_scope.py: reject rules that are too broad or likely to cause false positives
 # Stage 3 — problem_policy.py: reject rules with the wrong direction for the ticket strategy
 # Stage 4 — sandbox_check.py: test each surviving rule in a live Playwright browser session
+# Stage 5 — combined sandbox: test the whole passing patch together for final screenshot/review
 #
 # This validator is ticket-aware:
 # - visible ad / legacy mode      -> rule must block or hide an ad target
@@ -78,6 +79,7 @@ class ValidationReport:
     passed_count: int = 0
     failed: int = 0
     outcomes: list[RuleValidationOutcome] = field(default_factory=list)
+    combined_sandbox: Optional[SandboxResult] = None
 
     def passing_rules(self) -> list[str]:
         """Return only the rule strings that passed all validation stages."""
@@ -101,9 +103,12 @@ def validate_rules(
       2. Scope / broadness validation.
       3. Ticket policy direction validation.
       4. Per-rule sandbox validation.
+      5. Combined sandbox validation for all passing rules.
 
-    Only rules that pass all four stages are included in ValidationReport.passing_rules().
-    Failed rules are logged with their failure stage and reason for the audit trail.
+    Only rules that pass stages 1-4 are included in ValidationReport.passing_rules().
+    Combined sandbox is stored separately as ValidationReport.combined_sandbox so
+    workflow.py can save the final review screenshot that applies all passing
+    rules at the same time.
 
     Args:
         rules:            List of rule strings or ParsedRule-like objects.
@@ -366,7 +371,39 @@ def validate_rules(
         if not passed:
             _log_failure(rule, "sandbox", failure_reason)
 
-    return _finalize_report(report, outcomes)
+    report = _finalize_report(report, outcomes)
+
+    # ============================================================
+    # Stage 5: Combined sandbox for final screenshot / patch review
+    # ============================================================
+
+    passing_rules = report.passing_rules()
+
+    if run_sandbox_checks and passing_rules:
+        try:
+            report.combined_sandbox = _run_sandbox_rule_set(
+                page_url=page_url,
+                rules=passing_rules,
+                ticket_context=context,
+                environment=environment,
+            )
+            logger.info(
+                "Combined sandbox finished | url=%s | rules=%d | passed=%s | ads_blocked=%s | page_functional=%s",
+                page_url,
+                len(passing_rules),
+                getattr(report.combined_sandbox, "passed", False),
+                getattr(report.combined_sandbox, "ads_blocked", False),
+                getattr(report.combined_sandbox, "page_functional", False),
+            )
+        except Exception as exc:
+            report.combined_sandbox = SandboxResult(
+                url=page_url,
+                passed=False,
+                error=f"combined sandbox validator error: {exc}",
+            )
+            logger.exception("Combined sandbox failed for %s: %s", page_url, exc)
+
+    return report
 
 
 def _normalize_context(
@@ -470,8 +507,10 @@ def _run_sandbox_single_rule(
     """
     sig = inspect.signature(run_sandbox)
     kwargs: Dict[str, Any] = {}
+
     if "ticket_context" in sig.parameters:
         kwargs["ticket_context"] = dict(ticket_context)
+
     if "environment" in sig.parameters:
         kwargs["environment"] = environment
 
@@ -479,6 +518,34 @@ def _run_sandbox_single_rule(
         return run_sandbox(page_url, [rule], **kwargs)
     except TypeError:
         return run_sandbox(page_url, [rule])
+
+
+def _run_sandbox_rule_set(
+    page_url: str,
+    rules: list[str],
+    ticket_context: Mapping[str, Any],
+    environment: str = "desktop",
+) -> SandboxResult:
+    """
+    Run sandbox for the whole passing rule patch.
+
+    Per-rule sandbox proves each rule can work independently.
+    Combined sandbox proves the final saved screenshot reflects all passing rules
+    applied at the same time.
+    """
+    sig = inspect.signature(run_sandbox)
+    kwargs: Dict[str, Any] = {}
+
+    if "ticket_context" in sig.parameters:
+        kwargs["ticket_context"] = dict(ticket_context)
+
+    if "environment" in sig.parameters:
+        kwargs["environment"] = environment
+
+    try:
+        return run_sandbox(page_url, list(rules), **kwargs)
+    except TypeError:
+        return run_sandbox(page_url, list(rules))
 
 
 def _sandbox_policy_result(
@@ -625,7 +692,7 @@ def _sandbox_failure_reason(sandbox_result: Optional[SandboxResult]) -> str:
 
     return "; ".join(reasons) or "sandbox failed"
 
-    
+
 def _log_failure(rule: str, stage: str, reason: str) -> None:
     logger.warning(
         "Rule validation failed at %s for %r: %s",

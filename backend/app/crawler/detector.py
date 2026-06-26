@@ -2,12 +2,26 @@
 #
 # Input: extracted page data + captured network requests
 # Output: ad_candidates with suggested adblock rules, grouped by domain/element
-
+#
+# Improvements in this version:
+# - Promote ad-like parent containers from parent_chain, e.g.
+#     child:  div.banner-bottom-double
+#     parent: div.adserver
+#   => candidate: site.com##div.adserver
+# - Generate narrow network rules for ad asset paths, e.g.
+#     cdn.example.com/storage/ads/banner.png
+#   => ||cdn.example.com/storage/ads/^$image,domain=site.com
+# - Stop treating analytics-only domains like Google Analytics / GTM as visible
+#   ad-blocking candidates.
+# - Detect fullscreen popup overlays/backdrops from browser fixed_elements.
+# - Avoid noisy header/nav candidates such as header.fly unless there are real
+#   ad/overlay signals.
+# - Prefer meaningful ad classes over generated classes like jsx-xxxxx.
 
 import re
 from collections import defaultdict
-from dataclasses import dataclass, field, asdict
-from typing import List, Optional
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 
@@ -18,34 +32,36 @@ from urllib.parse import urlparse
 @dataclass
 class AdCandidate:
     """A single detected ad candidate — ready for rule generation."""
-    category: str          # "ad_network_request", "ad_container", "tracking_script", "ad_iframe"
-    confidence: str        # "high", "medium", "low"
-    suggested_rule: str    # Draft adblock rule, e.g. "||doubleclick.net^" or "example.com##div.ad-slot"
-    reason: str            # Human-readable explanation
-    domain: str = ""       # For network-based candidates: the third-party domain
-    urls: List[str] = field(default_factory=list)      # URLs that triggered this candidate
-    selector: str = ""     # For element-based candidates: the CSS selector
-    element_snippet: str = ""  # Truncated HTML for context
-    parent_chain: List[dict] = field(default_factory=list)  # Nearest DOM ancestors with id/class
+    category: str
+    confidence: str
+    suggested_rule: str
+    reason: str
+    domain: str = ""
+    urls: List[str] = field(default_factory=list)
+    selector: str = ""
+    element_snippet: str = ""
+    parent_chain: List[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
-        d = {
+        data = {
             "category": self.category,
             "confidence": self.confidence,
             "suggested_rule": self.suggested_rule,
             "reason": self.reason,
         }
+
         if self.domain:
-            d["domain"] = self.domain
+            data["domain"] = self.domain
         if self.urls:
-            d["urls"] = self.urls
+            data["urls"] = self.urls
         if self.selector:
-            d["selector"] = self.selector
+            data["selector"] = self.selector
         if self.element_snippet:
-            d["element_snippet"] = self.element_snippet
+            data["element_snippet"] = self.element_snippet
         if self.parent_chain:
-            d["parent_chain"] = self.parent_chain
-        return d
+            data["parent_chain"] = self.parent_chain
+
+        return data
 
 
 @dataclass
@@ -60,7 +76,7 @@ class DetectionResult:
     def to_dict(self) -> dict:
         return {
             "url": self.url,
-            "ad_candidates": [c.to_dict() for c in self.ad_candidates],
+            "ad_candidates": [candidate.to_dict() for candidate in self.ad_candidates],
             "has_ads": self.has_ads,
             "summary": self.summary,
             "errors": self.errors,
@@ -68,19 +84,21 @@ class DetectionResult:
 
 
 # ---------------------------------------------------------------------------
-# Known ad network domains
+# Domain / selector knowledge
 # ---------------------------------------------------------------------------
 
 AD_NETWORK_DOMAINS = [
     "doubleclick.net",
     "googlesyndication.com",
-    "googletagmanager.com",
     "googletagservices.com",
+    "googleadservices.com",
+    "adservice.google.com",
     "adnxs.com",
     "moatads.com",
     "taboola.com",
     "outbrain.com",
     "criteo.com",
+    "criteo.net",
     "rubiconproject.com",
     "openx.net",
     "pubmatic.com",
@@ -102,12 +120,21 @@ AD_NETWORK_DOMAINS = [
     "serving-sys.com",
     "ssp.yahoo.com",
     "contextweb.com",
+    "mgid.com",
+    "popads.net",
+    "propellerads.com",
+    "exoclick.com",
+    "trafficjunky.net",
+    "juicyads.com",
+    "adskeeper.com",
 ]
 
-# Tracking / analytics domains (separate from ads — lower confidence)
-TRACKING_DOMAINS = [
+TRACKING_ONLY_DOMAINS = [
     "google-analytics.com",
+    "www.google-analytics.com",
     "googletagmanager.com",
+    "www.googletagmanager.com",
+    "static.cloudflareinsights.com",
     "facebook.net",
     "hotjar.com",
     "mouseflow.com",
@@ -117,12 +144,11 @@ TRACKING_DOMAINS = [
     "amplitude.com",
 ]
 
-# Domains that are NOT ads — suppress false positives
 SAFE_DOMAINS = [
-    "cloudflareinsights.com",   # Cloudflare analytics (not ads)
+    "cloudflareinsights.com",
     "cloudflare.com",
-    "googleapis.com",           # Google Fonts, APIs
-    "gstatic.com",              # Google static content
+    "googleapis.com",
+    "gstatic.com",
     "jquery.com",
     "jsdelivr.net",
     "cdnjs.cloudflare.com",
@@ -134,13 +160,127 @@ SAFE_DOMAINS = [
     "fonts.gstatic.com",
 ]
 
-# Ad-related URL path keywords (must appear in path/query, not just hostname)
 AD_URL_PATH_KEYWORDS = [
-    "adserver", "adservice", "adunit", "adslot", "ad-slot",
-    "pagead", "show_ads", "ad_iframe",
-    "prebid", "dfp", "gpt", "adsense",
-    "interstitial", "popup", "popunder",
+    "/ad/",
+    "/ads/",
+    "/advert/",
+    "/advertise/",
+    "/advertisement/",
+    "/banner/",
+    "/banners/",
+    "/popup/",
+    "/popunder/",
+    "/sponsor/",
+    "/sponsored/",
+    "/promo/",
+    "/promotion/",
+    "/storage/ads/",
+    "ads%20",
+    "adserver",
+    "adservice",
+    "adunit",
+    "adslot",
+    "ad-slot",
+    "pagead",
+    "show_ads",
+    "ad_iframe",
+    "prebid",
+    "dfp",
+    "gpt",
+    "adsense",
+    "interstitial",
+    "popup",
+    "popunder",
+    "casino",
+    "betting",
+    "affiliate",
 ]
+
+NARROW_AD_PATH_PREFIXES = [
+    "/storage/ads/",
+    "/ads/",
+    "/ad/",
+    "/advert/",
+    "/advertise/",
+    "/advertisement/",
+    "/banner/",
+    "/banners/",
+    "/popup/",
+    "/popunder/",
+    "/sponsor/",
+    "/sponsored/",
+    "/promo/",
+    "/promotion/",
+]
+
+AD_CLASS_ID_PATTERNS = [
+    re.compile(pattern, re.I)
+    for pattern in [
+        r"(^|[-_])ad($|[-_])",
+        r"(^|[-_])ads($|[-_])",
+        r"adserver",
+        r"ad-server",
+        r"ad_container",
+        r"ad-container",
+        r"adslot",
+        r"ad-slot",
+        r"adunit",
+        r"ad-unit",
+        r"adsbygoogle",
+        r"gpt-ad",
+        r"banner",
+        r"popup",
+        r"popunder",
+        r"interstitial",
+        r"sponsor",
+        r"sponsored",
+        r"promo",
+        r"advert",
+        r"advertise",
+        r"advertisement",
+        r"sticky_ads",
+        r"floating_ad",
+        r"float-ad",
+    ]
+]
+
+OVERLAY_CLASS_ID_PATTERNS = [
+    re.compile(pattern, re.I)
+    for pattern in [
+        r"overlay",
+        r"backdrop",
+        r"modal",
+        r"popup",
+        r"dialog",
+        r"mask",
+        r"layer",
+        r"interstitial",
+    ]
+]
+
+SITE_CHROME_PATTERNS = [
+    re.compile(pattern, re.I)
+    for pattern in [
+        r"header",
+        r"navbar",
+        r"navigation",
+        r"nav-",
+        r"menu",
+        r"search",
+        r"footer",
+        r"breadcrumb",
+    ]
+]
+
+GENERATED_CLASS_PREFIXES = (
+    "jsx-",
+    "css-",
+    "sc-",
+    "style-",
+    "chakra-",
+    "mantine-",
+    "ant-",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -156,8 +296,9 @@ class AdDetector:
         "url": "https://example.com",
         "scripts": [...],
         "iframes": [...],
-        "ad_elements": [...],           # From extractor's ad element scan
-        "network_requests": [...],      # From browser's request capture
+        "ad_elements": [...],
+        "network_requests": [...],
+        "fixed_elements": [...],
     }
     """
 
@@ -165,66 +306,89 @@ class AdDetector:
         self.ad_domains = AD_NETWORK_DOMAINS + (custom_domains or [])
 
     def detect(self, extracted_data: dict) -> DetectionResult:
-        """
-        Main method. Pass the combined dict from extractor + browser, receive DetectionResult.
-        """
         url = extracted_data.get("url", "")
         network_requests = extracted_data.get("network_requests", [])
         ad_elements = extracted_data.get("ad_elements", [])
         scripts = extracted_data.get("scripts", [])
         iframes = extracted_data.get("iframes", [])
+        fixed_elements = extracted_data.get("fixed_elements", [])
+
         errors: List[str] = []
         candidates: List[AdCandidate] = []
 
-        page_domain = ""
-        try:
-            page_domain = urlparse(url).hostname or ""
-        except Exception:
-            pass
+        page_domain = _hostname(url)
 
-        # 1. Analyse network requests — group by third-party domain
         try:
-            candidates += self._analyse_network_requests(network_requests, page_domain, url)
+            candidates += self._analyse_network_requests(
+                requests=network_requests,
+                page_domain=page_domain,
+                page_url=url,
+            )
         except Exception as exc:
             errors.append(f"network_analysis_error: {exc}")
 
-        # 2. Analyse ad elements from the DOM
         try:
-            candidates += self._analyse_ad_elements(ad_elements, url)
+            candidates += self._analyse_ad_elements(
+                ad_elements=ad_elements,
+                page_url=url,
+            )
         except Exception as exc:
             errors.append(f"ad_element_analysis_error: {exc}")
 
-        # 3. Analyse script URLs (from HTML parsing — backup for network capture)
         try:
-            candidates += self._analyse_script_urls(scripts, page_domain, url)
+            candidates += self._analyse_script_urls(
+                scripts=scripts,
+                page_domain=page_domain,
+                page_url=url,
+            )
         except Exception as exc:
             errors.append(f"script_analysis_error: {exc}")
 
-        # 4. Analyse iframe URLs
         try:
-            candidates += self._analyse_iframe_urls(iframes, page_domain, url)
+            candidates += self._analyse_iframe_urls(
+                iframes=iframes,
+                page_domain=page_domain,
+                page_url=url,
+            )
         except Exception as exc:
             errors.append(f"iframe_analysis_error: {exc}")
 
-        # 5. Analyse fixed/sticky overlay elements (floating banners, interstitials)
         try:
-            fixed_elements = extracted_data.get("fixed_elements", [])
-            candidates += self._analyse_fixed_elements(fixed_elements, page_domain, url)
+            candidates += self._analyse_fixed_elements(
+                fixed_elements=fixed_elements,
+                page_domain=page_domain,
+                page_url=url,
+            )
         except Exception as exc:
             errors.append(f"fixed_element_analysis_error: {exc}")
 
-        # Deduplicate candidates
         candidates = self._deduplicate(candidates)
 
-        # Build summary
-        ad_networks = sorted(set(c.domain for c in candidates if c.domain))
         confidence_breakdown = {"high": 0, "medium": 0, "low": 0}
-        for c in candidates:
-            confidence_breakdown[c.confidence] = confidence_breakdown.get(c.confidence, 0) + 1
+        for candidate in candidates:
+            confidence_breakdown[candidate.confidence] = (
+                confidence_breakdown.get(candidate.confidence, 0) + 1
+            )
+
+        ad_networks = sorted(
+            {
+                candidate.domain
+                for candidate in candidates
+                if candidate.domain
+            }
+        )
 
         summary = {
             "ad_networks_found": ad_networks,
-            "ad_containers_found": sum(1 for c in candidates if c.category == "ad_container"),
+            "ad_containers_found": sum(
+                1
+                for candidate in candidates
+                if candidate.category in {
+                    "ad_container",
+                    "floating_ad",
+                    "popup_overlay",
+                }
+            ),
             "suggested_rules_count": len(candidates),
             "confidence_breakdown": confidence_breakdown,
         }
@@ -238,340 +402,870 @@ class AdDetector:
         )
 
     # ------------------------------------------------------------------
-    # Analysis methods
+    # Network analysis
     # ------------------------------------------------------------------
 
-    def _analyse_network_requests(self, requests: list, page_domain: str, page_url: str) -> List[AdCandidate]:
-        """Group third-party network requests by domain and identify ad networks."""
-        candidates = []
+    def _analyse_network_requests(
+        self,
+        requests: list,
+        page_domain: str,
+        page_url: str,
+    ) -> List[AdCandidate]:
+        candidates: List[AdCandidate] = []
+        clean_page_domain = _clean_domain(page_domain)
 
-        # Group requests by domain
-        domain_requests: dict[str, list] = defaultdict(list)
-        for req in requests:
-            req_url = req.get("url", "") if isinstance(req, dict) else getattr(req, "url", "")
-            if not req_url or req_url.startswith("data:"):
-                continue
-            try:
-                req_host = urlparse(req_url).hostname or ""
-            except Exception:
-                continue
+        domain_requests: Dict[str, List[Dict[str, str]]] = defaultdict(list)
 
-            # Skip first-party requests
-            if req_host and page_domain and (
-                req_host == page_domain or
-                req_host.endswith("." + page_domain) or
-                page_domain.endswith("." + req_host)
-            ):
+        for req in requests or []:
+            req_url = _get_field(req, "url", "")
+            resource_type = _get_field(req, "resource_type", "other")
+
+            if not req_url or str(req_url).startswith("data:"):
                 continue
 
-            # Skip safe domains
-            if any(safe in req_host for safe in SAFE_DOMAINS):
+            req_host = _hostname(req_url)
+            if not req_host:
                 continue
 
-            domain_requests[req_host].append(req_url)
+            if _is_first_party(req_host=req_host, page_domain=page_domain):
+                continue
 
-        # Check each third-party domain
-        for domain, urls in domain_requests.items():
+            if _host_in_domains(req_host, SAFE_DOMAINS):
+                continue
+
+            domain_requests[req_host].append(
+                {
+                    "url": str(req_url),
+                    "resource_type": str(resource_type or "other").lower(),
+                }
+            )
+
+        for domain, items in sorted(domain_requests.items()):
+            urls = [item["url"] for item in items]
+
+            # Do not produce visible-ad candidates for analytics-only traffic.
+            if _host_in_domains(domain, TRACKING_ONLY_DOMAINS):
+                if not self._has_ad_path_keywords(urls):
+                    continue
+
+            narrow_rule, matched_urls = self._build_narrow_ad_path_rule(
+                domain=domain,
+                items=items,
+                page_domain=clean_page_domain,
+            )
+
+            if narrow_rule:
+                candidates.append(
+                    AdCandidate(
+                        category="ad_network_request",
+                        confidence="high",
+                        suggested_rule=narrow_rule,
+                        reason=(
+                            "Network requests contain a narrow ad asset path "
+                            f"on '{domain}' ({len(matched_urls)} matched request(s))"
+                        ),
+                        domain=domain,
+                        urls=matched_urls[:5],
+                    )
+                )
+                continue
+
             ad_match = self._match_ad_domain(domain)
             if ad_match:
-                # Known ad network — high confidence
-                candidates.append(AdCandidate(
-                    category="ad_network_request",
-                    confidence="high",
-                    suggested_rule=f"||{ad_match}^",
-                    reason=f"Requests to known ad network '{ad_match}' ({len(urls)} requests)",
-                    domain=ad_match,
-                    urls=urls[:5],  # Cap at 5 example URLs
-                ))
-            elif self._has_ad_path_keywords(urls):
-                # URL paths suggest ad traffic
-                candidates.append(AdCandidate(
-                    category="ad_network_request",
-                    confidence="medium",
-                    suggested_rule=f"||{domain}^",
-                    reason=f"URL paths contain ad-related keywords ({len(urls)} requests)",
-                    domain=domain,
-                    urls=urls[:5],
-                ))
-            elif any(t in domain for t in TRACKING_DOMAINS):
-                # Tracking domain
-                candidates.append(AdCandidate(
-                    category="tracking_script",
-                    confidence="medium",
-                    suggested_rule=f"||{domain}^",
-                    reason=f"Known tracking/analytics domain ({len(urls)} requests)",
-                    domain=domain,
-                    urls=urls[:3],
-                ))
+                candidates.append(
+                    AdCandidate(
+                        category="ad_network_request",
+                        confidence="high",
+                        suggested_rule=f"||{ad_match}^",
+                        reason=(
+                            f"Requests to known ad network '{ad_match}' "
+                            f"({len(urls)} requests)"
+                        ),
+                        domain=ad_match,
+                        urls=urls[:5],
+                    )
+                )
+                continue
+
+            if self._has_ad_path_keywords(urls):
+                suggested_rule = f"||{domain}^$third-party"
+                if clean_page_domain:
+                    suggested_rule += f",domain={clean_page_domain}"
+
+                candidates.append(
+                    AdCandidate(
+                        category="ad_network_request",
+                        confidence="medium",
+                        suggested_rule=suggested_rule,
+                        reason=(
+                            "URL paths contain ad-related keywords "
+                            f"({len(urls)} requests)"
+                        ),
+                        domain=domain,
+                        urls=urls[:5],
+                    )
+                )
 
         return candidates
 
-    def _analyse_ad_elements(self, ad_elements: list, page_url: str) -> List[AdCandidate]:
-        """Convert ad elements from the extractor into ad candidates."""
-        candidates = []
-        page_domain = ""
-        try:
-            page_domain = urlparse(page_url).hostname or ""
-            # Strip www. for cleaner rules
-            if page_domain.startswith("www."):
-                page_domain = page_domain[4:]
-        except Exception:
-            pass
+    def _build_narrow_ad_path_rule(
+        self,
+        domain: str,
+        items: List[Dict[str, str]],
+        page_domain: str,
+    ) -> Tuple[str, List[str]]:
+        """
+        Build a narrow ABP network rule for ad asset paths.
 
-        for elem in ad_elements:
-            if isinstance(elem, dict):
-                selector = elem.get("selector", "")
-                reason = elem.get("reason", "")
-                element_id = elem.get("element_id", "")
-                snippet = elem.get("outer_html_snippet", "")
-                ad_attrs = elem.get("ad_attributes", {})
-                parent_chain = elem.get("parent_chain", [])
-            else:
-                selector = getattr(elem, "selector", "")
-                reason = getattr(elem, "reason", "")
-                element_id = getattr(elem, "element_id", "")
-                snippet = getattr(elem, "outer_html_snippet", "")
-                ad_attrs = getattr(elem, "ad_attributes", {})
-                parent_chain = getattr(elem, "parent_chain", [])
+        Example:
+            https://cdn.rophim.co.com/storage/ads/foo.png
+        becomes:
+            ||cdn.rophim.co.com/storage/ads/^$image,domain=rophim10.live
+        """
+        best_prefix = ""
+        matched_urls: List[str] = []
+        matched_resource_types: set[str] = set()
+
+        for item in items:
+            req_url = item.get("url", "")
+            parsed = urlparse(req_url)
+            path = (parsed.path or "").lower()
+
+            matched_prefix = ""
+
+            for prefix in NARROW_AD_PATH_PREFIXES:
+                if prefix in path:
+                    matched_prefix = prefix
+                    break
+
+            if not matched_prefix:
+                continue
+
+            if not best_prefix:
+                best_prefix = matched_prefix
+
+            if matched_prefix == best_prefix:
+                matched_urls.append(req_url)
+                matched_resource_types.add(
+                    str(item.get("resource_type", "other")).lower()
+                )
+
+        if not best_prefix or not matched_urls:
+            return "", []
+
+        options: List[str] = []
+
+        if "image" in matched_resource_types:
+            options.append("image")
+        elif "script" in matched_resource_types:
+            options.append("script")
+        elif "media" in matched_resource_types:
+            options.append("media")
+
+        if page_domain:
+            options.append(f"domain={page_domain}")
+
+        options_text = ""
+        if options:
+            options_text = "$" + ",".join(options)
+
+        return f"||{domain}{best_prefix}^{options_text}", matched_urls
+
+    # ------------------------------------------------------------------
+    # DOM element analysis
+    # ------------------------------------------------------------------
+
+    def _analyse_ad_elements(
+        self,
+        ad_elements: list,
+        page_url: str,
+    ) -> List[AdCandidate]:
+        candidates: List[AdCandidate] = []
+        page_domain = _clean_domain(_hostname(page_url))
+
+        for elem in ad_elements or []:
+            selector = _get_field(elem, "selector", "")
+            reason = _get_field(elem, "reason", "")
+            element_id = _get_field(elem, "element_id", "")
+            snippet = _get_field(elem, "outer_html_snippet", "")
+            ad_attrs = _get_field(elem, "ad_attributes", {}) or {}
+            parent_chain = _get_field(elem, "parent_chain", []) or []
 
             if not selector:
                 continue
 
-            # Determine confidence based on signals
+            candidates += self._promote_parent_ad_containers(
+                page_domain=page_domain,
+                parent_chain=parent_chain,
+                child_selector=str(selector),
+                child_reason=str(reason),
+            )
+
             confidence = "medium"
-            if ad_attrs:  # Has data-ad-* attributes — very strong signal
-                confidence = "high"
-            if element_id and re.search(r'gpt-ad|adsense|adsbygoogle', element_id, re.I):
+
+            if ad_attrs:
                 confidence = "high"
 
-            # Build suggested rule
+            if element_id and re.search(r"gpt-ad|adsense|adsbygoogle", str(element_id), re.I):
+                confidence = "high"
+
             if element_id:
                 suggested_rule = f"{page_domain}###{element_id}"
             else:
                 suggested_rule = f"{page_domain}##{selector}"
 
-            candidates.append(AdCandidate(
-                category="ad_container",
-                confidence=confidence,
-                suggested_rule=suggested_rule,
-                reason=reason,
-                selector=selector,
-                element_snippet=snippet,
-                parent_chain=parent_chain if isinstance(parent_chain, list) else [],
-            ))
+            candidates.append(
+                AdCandidate(
+                    category="ad_container",
+                    confidence=confidence,
+                    suggested_rule=suggested_rule,
+                    reason=str(reason),
+                    selector=str(selector),
+                    element_snippet=str(snippet),
+                    parent_chain=parent_chain if isinstance(parent_chain, list) else [],
+                )
+            )
 
         return candidates
 
-    def _analyse_script_urls(self, scripts: list, page_domain: str, page_url: str) -> List[AdCandidate]:
-        """Check script src URLs against ad network domains (backup for network capture)."""
-        candidates = []
-        for src in scripts:
+    def _promote_parent_ad_containers(
+        self,
+        page_domain: str,
+        parent_chain: Any,
+        child_selector: str,
+        child_reason: str,
+    ) -> List[AdCandidate]:
+        candidates: List[AdCandidate] = []
+
+        if not isinstance(parent_chain, list):
+            return candidates
+
+        for parent in parent_chain:
+            if not isinstance(parent, dict):
+                continue
+
+            tag = str(parent.get("tag", "div") or "div").lower()
+            parent_id = str(parent.get("id", "") or "")
+            classes = parent.get("classes", [])
+
+            if isinstance(classes, str):
+                class_list = [item for item in classes.split() if item]
+            elif isinstance(classes, list):
+                class_list = [str(item) for item in classes if str(item)]
+            else:
+                class_list = []
+
+            selector = ""
+            reason_signal = ""
+
+            if parent_id and _is_ad_like_token(parent_id):
+                selector = f"{tag}#{parent_id}"
+                reason_signal = f"parent id '{parent_id}' matches ad pattern"
+            else:
+                best_class = _best_ad_like_class(class_list)
+                if best_class:
+                    selector = f"{tag}.{best_class}"
+                    reason_signal = f"parent class '{best_class}' matches ad pattern"
+
+            if not selector:
+                continue
+
+            candidates.append(
+                AdCandidate(
+                    category="ad_container",
+                    confidence="high",
+                    suggested_rule=f"{page_domain}##{selector}",
+                    reason=(
+                        f"{reason_signal}; wraps detected ad element "
+                        f"'{child_selector}'. Original reason: {child_reason}"
+                    ),
+                    selector=selector,
+                    parent_chain=parent_chain,
+                )
+            )
+
+            break
+
+        return candidates
+
+    # ------------------------------------------------------------------
+    # Script / iframe analysis
+    # ------------------------------------------------------------------
+
+    def _analyse_script_urls(
+        self,
+        scripts: list,
+        page_domain: str,
+        page_url: str,
+    ) -> List[AdCandidate]:
+        candidates: List[AdCandidate] = []
+
+        for src in scripts or []:
             if not isinstance(src, str) or not src.strip():
                 continue
 
-            try:
-                host = urlparse(src).hostname or ""
-            except Exception:
+            host = _hostname(src)
+            if not host:
                 continue
 
-            # Skip first-party
-            if host and page_domain and (
-                host == page_domain or host.endswith("." + page_domain)
-            ):
+            if _is_first_party(req_host=host, page_domain=page_domain):
                 continue
 
-            # Skip safe domains
-            if any(safe in host for safe in SAFE_DOMAINS):
+            if _host_in_domains(host, SAFE_DOMAINS):
+                continue
+
+            if _host_in_domains(host, TRACKING_ONLY_DOMAINS):
                 continue
 
             ad_match = self._match_ad_domain(host)
             if ad_match:
-                candidates.append(AdCandidate(
-                    category="ad_network_request",
-                    confidence="high",
-                    suggested_rule=f"||{ad_match}^",
-                    reason=f"Script from known ad network '{ad_match}'",
-                    domain=ad_match,
-                    urls=[src],
-                ))
+                candidates.append(
+                    AdCandidate(
+                        category="ad_network_request",
+                        confidence="high",
+                        suggested_rule=f"||{ad_match}^",
+                        reason=f"Script from known ad network '{ad_match}'",
+                        domain=ad_match,
+                        urls=[src],
+                    )
+                )
 
         return candidates
 
-    def _analyse_iframe_urls(self, iframes: list, page_domain: str, page_url: str) -> List[AdCandidate]:
-        """Check iframe src URLs against ad network domains."""
-        candidates = []
-        for src in iframes:
+    def _analyse_iframe_urls(
+        self,
+        iframes: list,
+        page_domain: str,
+        page_url: str,
+    ) -> List[AdCandidate]:
+        candidates: List[AdCandidate] = []
+        clean_page_domain = _clean_domain(page_domain)
+
+        for src in iframes or []:
             if not isinstance(src, str) or not src.strip():
                 continue
 
-            try:
-                host = urlparse(src).hostname or ""
-            except Exception:
+            host = _hostname(src)
+            if not host:
                 continue
 
-            # Skip first-party
-            if host and page_domain and (
-                host == page_domain or host.endswith("." + page_domain)
-            ):
+            if _is_first_party(req_host=host, page_domain=page_domain):
+                continue
+
+            if _host_in_domains(host, SAFE_DOMAINS):
+                continue
+
+            if _host_in_domains(host, TRACKING_ONLY_DOMAINS):
                 continue
 
             ad_match = self._match_ad_domain(host)
             if ad_match:
-                candidates.append(AdCandidate(
-                    category="ad_iframe",
-                    confidence="high",
-                    suggested_rule=f"||{ad_match}^",
-                    reason=f"Iframe from known ad network '{ad_match}'",
-                    domain=ad_match,
-                    urls=[src],
-                ))
-            elif any(kw in src.lower() for kw in AD_URL_PATH_KEYWORDS):
-                candidates.append(AdCandidate(
-                    category="ad_iframe",
-                    confidence="medium",
-                    suggested_rule=f"||{host}^",
-                    reason=f"Iframe URL contains ad-related keywords",
-                    domain=host,
-                    urls=[src],
-                ))
+                candidates.append(
+                    AdCandidate(
+                        category="ad_iframe",
+                        confidence="high",
+                        suggested_rule=f"||{ad_match}^",
+                        reason=f"Iframe from known ad network '{ad_match}'",
+                        domain=ad_match,
+                        urls=[src],
+                    )
+                )
+                continue
+
+            if self._has_ad_path_keywords([src]):
+                suggested_rule = f"||{host}^$subdocument"
+                if clean_page_domain:
+                    suggested_rule += f",domain={clean_page_domain}"
+
+                candidates.append(
+                    AdCandidate(
+                        category="ad_iframe",
+                        confidence="medium",
+                        suggested_rule=suggested_rule,
+                        reason="Iframe URL contains ad-related keywords",
+                        domain=host,
+                        urls=[src],
+                    )
+                )
 
         return candidates
 
-    def _analyse_fixed_elements(self, fixed_elements: list, page_domain: str, page_url: str) -> List[AdCandidate]:
-        """
-        Detect ad banners that use position:fixed / position:sticky.
+    # ------------------------------------------------------------------
+    # Fixed / sticky / overlay element analysis
+    # ------------------------------------------------------------------
 
-        These are invisible to BeautifulSoup because position is a computed
-        style set by CSS or JavaScript, not an HTML attribute.  The browser
-        captures them via _FIXED_ELEMENT_SCRIPT during render.
+    def _analyse_fixed_elements(
+        self,
+        fixed_elements: list,
+        page_domain: str,
+        page_url: str,
+    ) -> List[AdCandidate]:
         """
-        candidates = []
-        clean_domain = page_domain.lstrip("www.")
+        Detect:
+        - floating ad banners,
+        - sticky ad containers,
+        - fullscreen popup overlays/backdrops.
 
-        for el in fixed_elements:
+        These are invisible to BeautifulSoup because position/background/z-index
+        are computed styles, not static HTML attributes.
+        """
+        candidates: List[AdCandidate] = []
+        clean_domain = _clean_domain(page_domain)
+
+        for el in fixed_elements or []:
             if not isinstance(el, dict):
                 continue
 
-            el_id      = el.get("id", "")
-            el_classes = el.get("classes", "")
-            ext_links  = el.get("ext_links", [])
-            iframes    = el.get("iframes", [])
-            width      = el.get("width", 0)
-            height     = el.get("height", 0)
-            snippet    = el.get("snippet", "")
-            position   = el.get("position", "fixed")
+            tag = str(el.get("tag", "div") or "div").lower()
+            el_id = str(el.get("id", "") or "")
+            el_classes = str(el.get("classes", "") or "")
+            browser_selector = str(el.get("selector", "") or "")
+            ext_links = el.get("ext_links", []) or []
+            iframes = el.get("iframes", []) or []
+            width = int(el.get("width", 0) or 0)
+            height = int(el.get("height", 0) or 0)
+            snippet = str(el.get("snippet", "") or "")
+            position = str(el.get("position", "fixed") or "fixed")
+            z_index = int(el.get("z_index", 0) or 0)
+            viewport_coverage = float(el.get("viewport_coverage", 0.0) or 0.0)
+            is_fullscreen_overlay = bool(el.get("is_fullscreen_overlay", False))
+            is_dark_overlay = bool(el.get("is_dark_overlay", False))
+            has_close_button = bool(el.get("has_close_button", False))
+            overlay_keyword = bool(el.get("overlay_keyword", False))
+            ad_keyword = bool(el.get("ad_keyword", False))
+            site_chrome = bool(el.get("site_chrome", False))
 
-            # --- Signal 1: external links inside the element ---
-            # Floating banners almost always link out to ad/gambling sites.
             external_domains = []
             for href in ext_links:
-                try:
-                    h = urlparse(href).hostname or ""
-                    if h and not h.endswith(page_domain):
-                        external_domains.append(h)
-                except Exception:
-                    pass
+                host = _hostname(str(href))
+                if host and not _is_first_party(req_host=host, page_domain=page_domain):
+                    external_domains.append(host)
 
-            # --- Signal 2: class/ID matches known ad patterns ---
-            attrs_text = f"{el_id} {el_classes}"
-            class_match = any(p.search(attrs_text) for p in AD_CLASS_ID_PATTERNS)
+            has_ad_iframe = False
+            for src in iframes:
+                host = _hostname(str(src))
+                if host and not _is_first_party(req_host=host, page_domain=page_domain):
+                    has_ad_iframe = True
+                    break
 
-            # --- Signal 3: iframes from third-party domains ---
-            has_ad_iframe = any(
-                not urlparse(src).hostname.endswith(page_domain)
-                for src in iframes
-                if urlparse(src).hostname
+            attrs_text = f"{tag} {el_id} {el_classes} {browser_selector}"
+            class_or_id_ad_match = _is_ad_like_token(attrs_text)
+            class_or_id_overlay_match = _is_overlay_like_token(attrs_text)
+            site_chrome_match = site_chrome or _is_site_chrome_token(attrs_text)
+
+            # Avoid noisy fixed headers/nav bars like header.fly.
+            # Only keep them if they also have real ad/overlay evidence.
+            if (
+                site_chrome_match
+                and not is_fullscreen_overlay
+                and not class_or_id_ad_match
+                and not class_or_id_overlay_match
+                and not external_domains
+                and not has_ad_iframe
+            ):
+                continue
+
+            # First priority: page-blocking overlay/backdrop.
+            if self._looks_like_popup_overlay(
+                is_fullscreen_overlay=is_fullscreen_overlay,
+                is_dark_overlay=is_dark_overlay,
+                has_close_button=has_close_button,
+                overlay_keyword=overlay_keyword or class_or_id_overlay_match,
+                z_index=z_index,
+                viewport_coverage=viewport_coverage,
+            ):
+                selector = self._selector_from_fixed_element(
+                    el=el,
+                    tag=tag,
+                    element_id=el_id,
+                    classes=el_classes,
+                    browser_selector=browser_selector,
+                    prefer_overlay=True,
+                )
+
+                if not selector:
+                    continue
+
+                reason_parts = [
+                    f"fullscreen/blocking overlay coverage={viewport_coverage:.2f}",
+                    f"position:{position}",
+                ]
+
+                if is_dark_overlay:
+                    reason_parts.append("dark backdrop")
+                if has_close_button:
+                    reason_parts.append("contains close button")
+                if overlay_keyword or class_or_id_overlay_match:
+                    reason_parts.append("class/id matches overlay pattern")
+                if z_index:
+                    reason_parts.append(f"z-index={z_index}")
+
+                candidates.append(
+                    AdCandidate(
+                        category="popup_overlay",
+                        confidence="high",
+                        suggested_rule=f"{clean_domain}##{selector}",
+                        reason="; ".join(reason_parts),
+                        selector=selector,
+                        element_snippet=snippet[:500],
+                    )
+                )
+                continue
+
+            # Second priority: fixed/sticky floating ad.
+            is_banner_shape = width >= 400 and 20 <= height <= 240
+
+            signals = sum(
+                [
+                    bool(external_domains),
+                    class_or_id_ad_match,
+                    has_ad_iframe,
+                    is_banner_shape,
+                ]
             )
 
-            # --- Signal 4: banner proportions (wide + short = horizontal ad) ---
-            is_banner_shape = width >= 400 and 20 <= height <= 200
-
-            # Require at least one strong signal to avoid blocking nav/cookie bars
-            signals = sum([
-                bool(external_domains),
-                class_match,
-                has_ad_iframe,
-                is_banner_shape,
-            ])
             if signals < 1:
+                continue
+
+            selector = self._selector_from_fixed_element(
+                el=el,
+                tag=tag,
+                element_id=el_id,
+                classes=el_classes,
+                browser_selector=browser_selector,
+                prefer_overlay=False,
+            )
+
+            if not selector:
                 continue
 
             confidence = "high" if signals >= 2 else "medium"
 
-            # Build the most specific selector available
-            if el_id:
-                selector = f"#{el_id}"
-                suggested_rule = f"{clean_domain}###{el_id}"
-            elif el_classes:
-                # Use first meaningful class (skip whitespace-only tokens)
-                first_class = next((c for c in el_classes.split() if c), None)
-                selector = f".{first_class}" if first_class else el.get("tag", "div")
-                suggested_rule = f"{clean_domain}##{selector}"
-            else:
-                selector = el.get("tag", "div")
-                suggested_rule = f"{clean_domain}##{selector}[style*='position:{position}']"
-
             reason_parts = []
             if external_domains:
-                reason_parts.append(f"links to external domains: {', '.join(external_domains[:3])}")
-            if class_match:
+                reason_parts.append(
+                    f"links to external domains: {', '.join(external_domains[:3])}"
+                )
+            if class_or_id_ad_match:
                 reason_parts.append("class/id matches ad pattern")
             if has_ad_iframe:
                 reason_parts.append("contains third-party iframe")
             if is_banner_shape:
                 reason_parts.append(f"banner proportions ({width}×{height}px)")
+            if z_index:
+                reason_parts.append(f"z-index={z_index}")
 
-            candidates.append(AdCandidate(
-                category="floating_ad",
-                confidence=confidence,
-                suggested_rule=suggested_rule,
-                reason=f"position:{position} overlay — {'; '.join(reason_parts)}",
-                selector=selector,
-                element_snippet=snippet[:300],
-            ))
+            candidates.append(
+                AdCandidate(
+                    category="floating_ad",
+                    confidence=confidence,
+                    suggested_rule=f"{clean_domain}##{selector}",
+                    reason=f"position:{position} floating element — {'; '.join(reason_parts)}",
+                    selector=selector,
+                    element_snippet=snippet[:500],
+                )
+            )
 
         return candidates
+
+    def _looks_like_popup_overlay(
+        self,
+        is_fullscreen_overlay: bool,
+        is_dark_overlay: bool,
+        has_close_button: bool,
+        overlay_keyword: bool,
+        z_index: int,
+        viewport_coverage: float,
+    ) -> bool:
+        if not is_fullscreen_overlay:
+            return False
+
+        strong_signals = sum(
+            [
+                is_dark_overlay,
+                has_close_button,
+                overlay_keyword,
+                z_index >= 10,
+                viewport_coverage >= 0.75,
+            ]
+        )
+
+        return strong_signals >= 2
+
+    def _selector_from_fixed_element(
+        self,
+        el: Dict[str, Any],
+        tag: str,
+        element_id: str,
+        classes: str,
+        browser_selector: str,
+        prefer_overlay: bool,
+    ) -> str:
+        if element_id and _is_safe_css_identifier(element_id):
+            return f"{tag}#{element_id}"
+
+        class_list = [
+            item
+            for item in str(classes or "").split()
+            if item
+        ]
+
+        best_class = ""
+
+        if prefer_overlay:
+            best_class = _best_overlay_like_class(class_list)
+
+        if not best_class:
+            best_class = _best_ad_like_class(class_list)
+
+        if not best_class:
+            best_class = _first_meaningful_class(class_list)
+
+        if best_class:
+            return f"{tag}.{best_class}"
+
+        # Browser already built a bounded structural selector such as:
+        #   body > div:nth-of-type(2) > div:nth-of-type(1)
+        # This is better than broad div[style*='position:fixed'] rules.
+        if browser_selector and not _is_too_broad_selector(browser_selector):
+            return browser_selector
+
+        return ""
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
     def _match_ad_domain(self, hostname: str) -> Optional[str]:
-        """Return the matched ad domain string, or None."""
-        hostname = hostname.lower()
+        hostname = str(hostname or "").lower().strip(".")
+
         for domain in self.ad_domains:
-            if hostname == domain or hostname.endswith("." + domain):
+            if _host_matches_domain(hostname, domain):
                 return domain
+
         return None
 
     def _has_ad_path_keywords(self, urls: list) -> bool:
-        """Check if any URLs in the list have ad-related path keywords."""
-        for url in urls:
-            url_lower = url.lower()
-            for kw in AD_URL_PATH_KEYWORDS:
-                if kw in url_lower:
+        for url in urls or []:
+            text = str(url or "").lower()
+            for keyword in AD_URL_PATH_KEYWORDS:
+                if keyword in text:
                     return True
+
         return False
 
     @staticmethod
     def _deduplicate(candidates: List[AdCandidate]) -> List[AdCandidate]:
-        """Remove duplicate candidates with the same suggested_rule."""
-        seen: set = set()
-        unique = []
-        for c in candidates:
-            key = c.suggested_rule
-            if key not in seen:
-                seen.add(key)
-                unique.append(c)
+        """
+        Remove duplicate candidates with the same suggested rule.
+
+        Higher confidence and more important categories are kept first.
+        """
+        category_rank = {
+            "popup_overlay": 0,
+            "ad_container": 1,
+            "floating_ad": 2,
+            "ad_iframe": 3,
+            "ad_network_request": 4,
+            "tracking_script": 5,
+        }
+
+        confidence_rank = {
+            "high": 0,
+            "medium": 1,
+            "low": 2,
+        }
+
+        sorted_candidates = sorted(
+            candidates,
+            key=lambda candidate: (
+                category_rank.get(candidate.category, 9),
+                confidence_rank.get(candidate.confidence, 9),
+                candidate.suggested_rule,
+            ),
+        )
+
+        seen: set[str] = set()
+        unique: List[AdCandidate] = []
+
+        for candidate in sorted_candidates:
+            key = candidate.suggested_rule
+            if key in seen:
+                continue
+
+            seen.add(key)
+            unique.append(candidate)
+
         return unique
 
 
 # ---------------------------------------------------------------------------
-# Module-level convenience function (matches pipeline call convention)
+# Module-level helpers
 # ---------------------------------------------------------------------------
 
-def detect_ads(extracted_data: dict,
-               custom_domains: Optional[List[str]] = None) -> dict:
+def _get_field(obj: Any, key: str, default: Any = None) -> Any:
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+
+    return getattr(obj, key, default)
+
+
+def _hostname(url: str) -> str:
+    try:
+        return urlparse(str(url or "")).hostname or ""
+    except Exception:
+        return ""
+
+
+def _clean_domain(domain: str) -> str:
+    domain = str(domain or "").lower().strip(".")
+
+    if domain.startswith("www."):
+        return domain[4:]
+
+    return domain
+
+
+def _host_matches_domain(host: str, domain: str) -> bool:
+    host = str(host or "").lower().strip(".")
+    domain = str(domain or "").lower().strip(".")
+
+    if not host or not domain:
+        return False
+
+    return host == domain or host.endswith("." + domain)
+
+
+def _host_in_domains(host: str, domains: List[str]) -> bool:
+    return any(_host_matches_domain(host, domain) for domain in domains)
+
+
+def _is_first_party(req_host: str, page_domain: str) -> bool:
+    req_host = str(req_host or "").lower().strip(".")
+    page_domain = str(page_domain or "").lower().strip(".")
+
+    if not req_host or not page_domain:
+        return False
+
+    return (
+        req_host == page_domain
+        or req_host.endswith("." + page_domain)
+        or page_domain.endswith("." + req_host)
+    )
+
+
+def _is_ad_like_token(text: str) -> bool:
+    value = str(text or "")
+
+    if not value:
+        return False
+
+    return any(pattern.search(value) for pattern in AD_CLASS_ID_PATTERNS)
+
+
+def _is_overlay_like_token(text: str) -> bool:
+    value = str(text or "")
+
+    if not value:
+        return False
+
+    return any(pattern.search(value) for pattern in OVERLAY_CLASS_ID_PATTERNS)
+
+
+def _is_site_chrome_token(text: str) -> bool:
+    value = str(text or "")
+
+    if not value:
+        return False
+
+    return any(pattern.search(value) for pattern in SITE_CHROME_PATTERNS)
+
+
+def _is_safe_css_identifier(value: str) -> bool:
+    return bool(re.match(r"^[A-Za-z_-][A-Za-z0-9_-]*$", str(value or "")))
+
+
+def _first_meaningful_class(classes: List[str]) -> str:
+    for cls in classes or []:
+        cls = str(cls or "").strip()
+
+        if not cls:
+            continue
+
+        if not _is_safe_css_identifier(cls):
+            continue
+
+        if cls.startswith(GENERATED_CLASS_PREFIXES):
+            continue
+
+        return cls
+
+    return ""
+
+
+def _best_ad_like_class(classes: List[str]) -> str:
+    for cls in classes or []:
+        cls = str(cls or "").strip()
+
+        if not cls:
+            continue
+
+        if not _is_safe_css_identifier(cls):
+            continue
+
+        if cls.startswith(GENERATED_CLASS_PREFIXES):
+            continue
+
+        if _is_ad_like_token(cls):
+            return cls
+
+    return ""
+
+
+def _best_overlay_like_class(classes: List[str]) -> str:
+    for cls in classes or []:
+        cls = str(cls or "").strip()
+
+        if not cls:
+            continue
+
+        if not _is_safe_css_identifier(cls):
+            continue
+
+        if cls.startswith(GENERATED_CLASS_PREFIXES):
+            continue
+
+        if _is_overlay_like_token(cls):
+            return cls
+
+    return ""
+
+
+def _is_too_broad_selector(selector: str) -> bool:
+    value = str(selector or "").strip().lower()
+
+    return value in {
+        "",
+        "html",
+        "body",
+        "div",
+        "span",
+        "section",
+        "main",
+        "header",
+        "footer",
+        "nav",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Module-level convenience function
+# ---------------------------------------------------------------------------
+
+def detect_ads(
+    extracted_data: dict,
+    custom_domains: Optional[List[str]] = None,
+) -> dict:
     """
     Convenience wrapper used by crawler_service.py in the pipeline.
 
@@ -579,53 +1273,7 @@ def detect_ads(extracted_data: dict,
         from app.crawler.detector import detect_ads
         result = detect_ads(extractor_output)
 
-    Returns a plain dict (JSON-serialisable) with ad_candidates and summary.
+    Returns a plain dict with ad_candidates and summary.
     """
     detector = AdDetector(custom_domains=custom_domains)
     return detector.detect(extracted_data).to_dict()
-
-
-# ---------------------------------------------------------------------------
-# Quick smoke-test (run: python -m app.crawler.detector)
-# ---------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    import json
-
-    sample_data = {
-        "url": "https://example-news.com",
-        "scripts": [
-            "https://example-news.com/main.js",
-            "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js",
-        ],
-        "iframes": [
-            "https://ad.doubleclick.net/ad.html",
-        ],
-        "ad_elements": [
-            {
-                "tag": "div",
-                "selector": "div#div-gpt-ad-1234567890-0",
-                "reason": "id 'div-gpt-ad-1234567890-0' matches ad pattern",
-                "element_id": "div-gpt-ad-1234567890-0",
-                "outer_html_snippet": '<div id="div-gpt-ad-1234567890-0">',
-                "ad_attributes": {},
-            },
-            {
-                "tag": "ins",
-                "selector": "ins.adsbygoogle",
-                "reason": "class 'adsbygoogle' matches ad pattern",
-                "element_id": "",
-                "outer_html_snippet": '<ins class="adsbygoogle" data-ad-slot="1234">',
-                "ad_attributes": {"data-ad-slot": "1234", "data-ad-client": "ca-pub-xxx"},
-            },
-        ],
-        "network_requests": [
-            {"url": "https://example-news.com/main.js", "resource_type": "script"},
-            {"url": "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js", "resource_type": "script"},
-            {"url": "https://ad.doubleclick.net/ddm/activity", "resource_type": "xhr"},
-            {"url": "https://static.cloudflareinsights.com/beacon.min.js", "resource_type": "script"},
-        ],
-    }
-
-    result = detect_ads(sample_data)
-    print(json.dumps(result, indent=2))

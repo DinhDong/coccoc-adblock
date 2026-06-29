@@ -30,7 +30,10 @@ docker compose ps   # db should show "healthy"
 ### Running the pipeline
 
 ```bash
-# Run the full workflow for a report
+# Crawl a website AND generate rules for it in one command
+docker compose run --rm backend app.services.workflow <report_id> --url <url> --env desktop
+
+# Run the full workflow for an already-crawled report
 docker compose run --rm backend app.services.workflow <report_id>
 
 # Run the crawler only

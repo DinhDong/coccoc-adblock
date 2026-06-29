@@ -20,13 +20,24 @@ New in this version:
 - Falls back to the first per-rule sandbox screenshot only if combined sandbox
   screenshot is unavailable.
 
+This workflow can also crawl the target itself, so a single command can crawl a
+website and generate rules for it in one pass:
+- pass --url to crawl first, then generate + validate rules for that crawl
+- without --url, it reuses an existing crawl result (legacy behaviour)
+
 Run from backend/:
     .venv\\Scripts\\activate
+
+    # Crawl + generate + validate in one command:
+    python -m app.services.workflow <report_id> --url https://example.com --env desktop
+
+    # Reuse an existing crawl result:
     python -m app.services.workflow <report_id>
     python -m app.services.workflow <report_id> --no-sandbox
 
 Input:
     data/crawl_outputs/results/<report_id>.json
+    (created automatically when --url is provided)
 
 Output:
     data/rule_outputs/results/<report_id>_rules.json
@@ -337,31 +348,145 @@ def run_rule_validation(
     }
 
 
+def run_crawl(
+    url: str,
+    report_id: str,
+    environment: str = "desktop",
+    ticket_context: Optional[Mapping[str, Any]] = None,
+    focus_region: Optional[str] = None,
+    verbose: bool = False,
+    **render_kwargs: Any,
+) -> Dict[str, Any]:
+    """
+    Stage 0 — crawl ``url`` and persist the crawl result so the rest of the
+    pipeline can consume it.
+
+    This wraps ``CrawlService.crawl_url`` and writes
+    ``data/crawl_outputs/results/<report_id>.json`` (same file the legacy
+    ``--report_id``-only mode reads). The returned dict is the crawl result;
+    callers should check ``status`` before continuing.
+
+    Args:
+        environment:    Crawl environment ("desktop", "android", "ios"). Stored
+                        inside the crawl JSON and reused by validation.
+        focus_region:   Optional region scope forwarded to the crawler.
+        **render_kwargs: Extra render options (e.g. headless, enable_scroll).
+    """
+    from app.services.crawler import CrawlService
+
+    if verbose:
+        _separator(f"Stage 0: Crawl — {report_id}  |  {url}  |  env: {environment}")
+
+    service = CrawlService()
+    result = service.crawl_url(
+        url=url,
+        report_id=report_id,
+        ticket_context=dict(ticket_context) if ticket_context else None,
+        focus_region=focus_region or None,
+        environment=environment,
+        **render_kwargs,
+    )
+
+    status = result.get("status", "unknown")
+    if status == "success":
+        logger.info(
+            "Stage 0: crawl succeeded for %s (report_id: %s, env: %s)",
+            url,
+            report_id,
+            result.get("environment", environment),
+        )
+        if verbose:
+            screenshot = result.get("files", {}).get("screenshot", "")
+            candidates = len(result.get("ad_candidates", []) or [])
+            print(f"  Crawl OK — {candidates} ad candidate(s) detected")
+            if screenshot:
+                print(f"  Crawl screenshot: {screenshot}")
+    else:
+        logger.error(
+            "Stage 0: crawl failed for %s (stage: %s): %s",
+            url,
+            result.get("stage", "unknown"),
+            result.get("error", "unknown error"),
+        )
+        if verbose:
+            print(
+                f"  Crawl FAILED at stage '{result.get('stage', 'unknown')}': "
+                f"{result.get('error', 'unknown error')}"
+            )
+
+    return result
+
+
 def run_pipeline(
     report_id: str,
     verbose: bool = False,
     run_validation: bool = True,
     skip_external: bool = False,
+    url: Optional[str] = None,
+    environment: str = "desktop",
+    ticket_context: Optional[Mapping[str, Any]] = None,
+    focus_region: Optional[str] = None,
+    **render_kwargs: Any,
 ) -> Dict[str, Any]:
     """
     Full pipeline:
-        load crawl result → normalize ticket context → generate rules
-        → optionally validate → return summary.
+        (optionally crawl url) → load crawl result → normalize ticket context
+        → generate rules → optionally validate → return summary.
 
     Args:
         report_id:      Matches data/crawl_outputs/results/<report_id>.json
         verbose:        Print stage headers and per-rule output to stdout.
         run_validation: If False, skip validation/sandbox stage.
         skip_external:  Skip external filter list (EasyList etc.) dedup check.
+        url:            If provided, crawl this URL first (Stage 0) and generate
+                        rules for the resulting crawl. If omitted, an existing
+                        crawl result for report_id is reused.
+        environment:    Crawl environment used when url is provided.
+        ticket_context: Ticket metadata forwarded to the crawl when url is
+                        provided.
+        focus_region:   Optional region scope forwarded to the crawl.
+        **render_kwargs: Extra render options forwarded to the crawler.
     """
     from app.services.rule_registry import get_domain, get_existing_rules
 
     crawl_path = CRAWL_RESULTS / f"{report_id}.json"
 
+    # Stage 0 (optional): crawl the URL so crawl + rule generation happen in one
+    # pass for the same website.
+    if url:
+        crawl_outcome = run_crawl(
+            url=url,
+            report_id=report_id,
+            environment=environment,
+            ticket_context=ticket_context,
+            focus_region=focus_region,
+            verbose=verbose,
+            **render_kwargs,
+        )
+
+        if crawl_outcome.get("status") != "success":
+            return {
+                "report_id": report_id,
+                "url": url,
+                "environment": environment,
+                "ticket_context": dict(ticket_context) if ticket_context else {},
+                "problem_type": _get_problem_type(ticket_context),
+                "resolution_strategy": _get_resolution_strategy(ticket_context),
+                "rules_generated": 0,
+                "rules_passed": 0,
+                "rules_failed": 0,
+                "passing_rules": [],
+                "status": "crawl_failed",
+                "crawl_stage": crawl_outcome.get("stage", "unknown"),
+                "crawl_error": crawl_outcome.get("error", "unknown error"),
+            }
+
     if not crawl_path.exists():
         raise FileNotFoundError(
             f"Crawl result not found: {crawl_path}\n"
-            f"Run: python -m app.services.crawler <url> {report_id} --env desktop"
+            f"Run: python -m app.services.crawler <url> {report_id} --env desktop\n"
+            f"Or crawl + generate in one step: "
+            f"python -m app.services.workflow {report_id} --url <url> --env desktop"
         )
 
     with open(crawl_path, encoding="utf-8") as file:
@@ -752,13 +877,70 @@ if __name__ == "__main__":
         datefmt="%H:%M:%S",
     )
 
+    from app.crawler.browser import ENVIRONMENTS
+    from app.services.crawler import _load_ticket_context_from_cli
+
+    VALID_ENVS = list(ENVIRONMENTS.keys())
+
     parser = argparse.ArgumentParser(
-        description="Run the rule generation + validation pipeline for a crawl result.",
+        description=(
+            "Crawl a URL (optional) and run the rule generation + validation "
+            "pipeline for the resulting crawl."
+        ),
     )
 
     parser.add_argument(
         "report_id",
         help="Report ID matching data/crawl_outputs/results/<report_id>.json",
+    )
+
+    parser.add_argument(
+        "--url",
+        default="",
+        help=(
+            "URL to crawl first. When provided, the crawler runs and the "
+            "pipeline generates rules for that crawl in a single command. "
+            "When omitted, an existing crawl result for report_id is reused."
+        ),
+    )
+
+    parser.add_argument(
+        "--env",
+        default="desktop",
+        choices=VALID_ENVS,
+        metavar="ENV",
+        help=(
+            f"Crawl environment when --url is provided: {', '.join(VALID_ENVS)} "
+            "(default: desktop)."
+        ),
+    )
+
+    parser.add_argument(
+        "--focus",
+        default="",
+        metavar="REGION",
+        help=(
+            "Scope crawl extraction to a page region (e.g. 'header', "
+            "'right sidebar'). Only used with --url."
+        ),
+    )
+
+    parser.add_argument(
+        "--no-headless",
+        action="store_true",
+        help="Open a visible browser window during crawl (helps bypass some Cloudflare resets).",
+    )
+
+    parser.add_argument(
+        "--ticket-context-json",
+        default="",
+        help="Raw JSON string containing ticket context (used with --url).",
+    )
+
+    parser.add_argument(
+        "--ticket-context-file",
+        default="",
+        help="Path to a JSON file containing ticket context (used with --url).",
     )
 
     parser.add_argument(
@@ -775,12 +957,23 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    cli_ticket_context = _load_ticket_context_from_cli(
+        ticket_context_json=args.ticket_context_json,
+        ticket_context_file=args.ticket_context_file,
+    )
+
     try:
         result = run_pipeline(
             report_id=args.report_id,
             verbose=True,
             run_validation=not args.no_sandbox,
             skip_external=args.no_external,
+            url=args.url or None,
+            environment=args.env,
+            ticket_context=cli_ticket_context or None,
+            focus_region=args.focus or None,
+            headless=not args.no_headless,
+            enable_scroll=True,
         )
     except FileNotFoundError as exc:
         logger.error(str(exc))

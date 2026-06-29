@@ -3,6 +3,7 @@
 #
 # Usage:
 #   docker compose up --build -d          # start MySQL
+#   docker compose run --rm backend app.services.workflow <report_id> --url <url> --env desktop
 #   docker compose run --rm backend app.services.workflow <report_id>
 #   docker compose run --rm backend app.services.crawler <url> <id> --env desktop
 #   docker compose run --rm backend app.services.crawler <url> <id> --focus "header"

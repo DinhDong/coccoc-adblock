@@ -26,6 +26,7 @@ COPY . .
 ENV PYTHONPATH=/app
 
 # Default entrypoint lets callers pick any module:
+#   docker compose run --rm backend app.services.workflow vnexpress-desktop --url https://... --env desktop
 #   docker compose run --rm backend app.services.workflow vnexpress-desktop
 #   docker compose run --rm backend app.services.crawler https://... id --env desktop
 #   docker compose run --rm backend app.services.crawler https://... id --focus "header"

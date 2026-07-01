@@ -921,7 +921,8 @@ if __name__ == "__main__":
         metavar="REGION",
         help=(
             "Scope crawl extraction to a page region (e.g. 'header', "
-            "'right sidebar'). Only used with --url."
+            "'right sidebar'). Only used with --url. Convenience shortcut for "
+            "setting focus_region in the ticket context."
         ),
     )
 
@@ -962,6 +963,12 @@ if __name__ == "__main__":
         ticket_context_file=args.ticket_context_file,
     )
 
+    # Focus is a property of the ticket context. A --focus flag is a shortcut
+    # that populates focus_region unless the ticket context already sets one.
+    if args.focus:
+        cli_ticket_context = dict(cli_ticket_context or {})
+        cli_ticket_context.setdefault("focus_region", args.focus)
+
     try:
         result = run_pipeline(
             report_id=args.report_id,
@@ -971,7 +978,6 @@ if __name__ == "__main__":
             url=args.url or None,
             environment=args.env,
             ticket_context=cli_ticket_context or None,
-            focus_region=args.focus or None,
             headless=not args.no_headless,
             enable_scroll=True,
         )

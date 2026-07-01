@@ -332,6 +332,7 @@ def _append_ticket_context(
 
     evidence_level = ticket_context.get("evidence_level", "")
     platform = ticket_context.get("platform", "")
+    focus_region = ticket_context.get("focus_region", "")
     request = ticket_context.get("request", "")
     description = ticket_context.get("description", "")
     actual = ticket_context.get("actual", "")
@@ -349,6 +350,14 @@ def _append_ticket_context(
 
     if platform:
         lines.append(f"  Platform: {platform}")
+
+    if focus_region:
+        lines.append(f"  Focus region: {_truncate(str(focus_region), 160)}")
+        lines.append(
+            "    The crawl was scoped to this region. The page signals, DOM ad "
+            "candidates, and overlays below come from that region only — target "
+            "rules there and do not generate rules for other parts of the page."
+        )
 
     if request:
         lines.append(f"  Request: {_truncate(str(request), 500)}")

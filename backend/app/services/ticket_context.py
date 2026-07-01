@@ -40,8 +40,16 @@ def normalize_ticket_context(raw_context: Any) -> Dict[str, Any]:
     """
     context = _coerce_dict(raw_context)
 
+    # Focus region is orthogonal to problem classification: it scopes which
+    # part of the page the crawler analyses. Extract it up front so it survives
+    # even when the rest of the context falls back to the legacy default.
+    focus_region = _extract_focus_region(context)
+
     if _is_empty_context(context) or _looks_like_legacy_default_context(context):
-        return _legacy_no_ticket_context()
+        legacy = _legacy_no_ticket_context()
+        if focus_region:
+            legacy["focus_region"] = focus_region
+        return legacy
 
     request = _clean_text(context.get("request", ""))
     description = _clean_text(context.get("description", ""))
@@ -117,6 +125,7 @@ def normalize_ticket_context(raw_context: Any) -> Dict[str, Any]:
         "platform": platform,
         "problem_type": problem_type,
         "resolution_strategy": resolution_strategy,
+        "focus_region": focus_region,
         "request": request,
         "description": description,
         "steps": steps,
@@ -296,6 +305,7 @@ def _legacy_no_ticket_context() -> Dict[str, Any]:
         "platform": "",
         "problem_type": problem_type,
         "resolution_strategy": get_resolution_strategy(problem_type),
+        "focus_region": "",
         "request": "",
         "description": "",
         "steps": [],
@@ -337,6 +347,16 @@ def _resolve_problem_type(
 
     inferred = infer_problem_type(combined_text)
     return normalize_problem_type(inferred, fallback="unknown")
+
+
+def _extract_focus_region(context: Mapping[str, Any]) -> str:
+    """
+    Read the page region the crawl should focus on from the ticket context.
+
+    Accepts either ``focus_region`` (preferred) or the shorter ``focus`` alias,
+    e.g. {"focus_region": "top bar"} or {"focus": "right sidebar"}.
+    """
+    return _clean_text(context.get("focus_region", "") or context.get("focus", ""))
 
 
 def _coerce_dict(value: Any) -> Dict[str, Any]:

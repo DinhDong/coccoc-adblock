@@ -1,0 +1,67 @@
+{
+  "platform": "desktop",
+  "problem_type": "specific_ad_not_blocked",
+  "request": "[Desktop][Adblock] - rophim10.live/phimhay: Block popup and floating ads only",
+  "description": "This is a simple ticket-context test case. The goal is to verify that ticket_context is passed through crawler, prompt_builder, rule_generator, rule_validator, and sandbox_check. Only popup/modal/floating ads should be blocked. Do not try to block all banner/native/bookmaker ads in this test.",
+  "steps": [
+    "Open https://rophim10.live/phimhay",
+    "Enable Adblock mode",
+    "Observe the popup modal/backdrop and floating ad containers",
+    "Verify the page remains usable after these popup/floating ads are hidden"
+  ],
+  "actual": "Popup/modal/floating ads may appear on the page.",
+  "expected": "Popup/modal/floating ads are hidden while normal page content remains visible.",
+  "target_to_block": [
+    "popup modal",
+    "modal backdrop",
+    "fullscreen overlay",
+    "floating ad container",
+    "sticky floating ad"
+  ],
+  "target_to_preserve": [
+    "Nhà cái uy tín section",
+    "movie cards",
+    "main hero area",
+    "category/topic cards",
+    "navigation/header/search",
+    "footer",
+    "main content"
+  ],
+  "current_rules": [],
+  "matched_rules": [
+    {
+      "rule": "rophim10.live##div.adserver",
+      "problem": "too broad for this ticket; this test only wants popup/floating ads"
+    }
+  ],
+  "blocked_resources": [],
+  "validation_hints": {
+    "must_preserve_text": [
+      "Nhà cái uy tín",
+      "Bạn đang quan tâm gì?",
+      "Phim Trung Quốc mới"
+    ],
+    "must_not_generate_rules": [
+      "rophim10.live##div.adserver",
+      "rophim10.live##div.banner-bottom-double",
+      "rophim10.live##div.banner-bottom-double__item",
+      "rophim10.live##div.banner-middle-single",
+      "rophim10.live##div.banner-middle-single__item",
+      "rophim10.live##div.intro",
+      "rophim10.live##div.lim-2",
+      "rophim10.live##div#top_slider",
+      "rophim10.live##div.swiper",
+      "rophim10.live##div.swiper-wrapper",
+      "rophim10.live##div.swiper-slide",
+      "||cdn.rophim.co.com/storage/ads/^$image,domain=rophim10.live"
+    ],
+    "prefer_narrow_rules": [
+      "rophim10.live##div.modal-backdrop",
+      "rophim10.live##div.v-modal",
+      "rophim10.live##div.sspp-area"
+    ]
+  },
+  "raw": {
+    "test_goal": "This ticket is intentionally narrow. It is used to verify ticket_context flow, not to solve the full region-aware bookmaker-ad case."
+  }
+}

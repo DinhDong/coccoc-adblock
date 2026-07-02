@@ -1,5 +1,6 @@
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional
 from urllib.parse import urlparse
@@ -203,6 +204,11 @@ def generate_rules_with_metadata(
         else:
             parsed_rules = parse_llm_response(response_text)
 
+        parsed_rules = _filter_ticket_forbidden_parsed_rules(
+            parsed_rules,
+            compact_signals.get("ticket_context", {}),
+        )
+
         token_usage = _build_token_usage_payload(llm_response)
 
         if token_usage:
@@ -283,6 +289,7 @@ def _merge_high_confidence_detector_rules(
         strategy=strategy,
         problem_type=problem_type,
         evidence_level=evidence_level,
+        ticket_context=ticket_context,
     )
 
     if not auto_rules:
@@ -300,6 +307,36 @@ def _merge_high_confidence_detector_rules(
     return _dedupe_parsed_rules(parsed_rules + auto_parsed)
 
 
+def _filter_ticket_forbidden_parsed_rules(
+    rules: List[ParsedRule],
+    ticket_context: Any,
+) -> List[ParsedRule]:
+    if not rules:
+        return []
+
+    if not isinstance(ticket_context, Mapping):
+        return rules
+
+    kept: List[ParsedRule] = []
+    removed: List[str] = []
+
+    for rule in rules:
+        rule_text = str(getattr(rule, "rule", "") or "").strip()
+        if _rule_is_forbidden_by_ticket(rule_text, ticket_context):
+            removed.append(rule_text)
+            continue
+        kept.append(rule)
+
+    if removed:
+        logger.warning(
+            "Removed %d LLM rule(s) forbidden by ticket_context: %s",
+            len(removed),
+            removed,
+        )
+
+    return kept
+
+
 def _select_detector_backfill_rules(
     compact_signals: Dict[str, Any],
     existing_rules: List[str],
@@ -307,6 +344,7 @@ def _select_detector_backfill_rules(
     strategy: str,
     problem_type: str,
     evidence_level: str,
+    ticket_context: Mapping[str, Any],
 ) -> List[str]:
     candidates = compact_signals.get("ad_candidates", [])
     if not isinstance(candidates, list):
@@ -334,6 +372,14 @@ def _select_detector_backfill_rules(
         if rule in existing_set or rule in selected:
             continue
 
+        if _rule_is_forbidden_by_ticket(rule, ticket_context):
+            logger.info("Skipped detector backfill rule forbidden by ticket_context: %s", rule)
+            continue
+
+        if _candidate_mentions_preserved_context(candidate, ticket_context):
+            logger.info("Skipped detector backfill rule because candidate overlaps preserve context: %s", rule)
+            continue
+
         if not _candidate_is_backfillable(candidate):
             continue
 
@@ -350,6 +396,190 @@ def _select_detector_backfill_rules(
         selected.append(rule)
 
     return selected
+
+
+def _rule_is_forbidden_by_ticket(rule: str, ticket_context: Mapping[str, Any]) -> bool:
+    forbidden_rules = _ticket_forbidden_rules(ticket_context)
+    if not forbidden_rules:
+        return False
+
+    normalized_rule = _normalize_rule_for_ticket_compare(rule)
+    if not normalized_rule:
+        return False
+
+    for forbidden in forbidden_rules:
+        normalized_forbidden = _normalize_rule_for_ticket_compare(forbidden)
+        if not normalized_forbidden:
+            continue
+
+        if normalized_rule == normalized_forbidden:
+            return True
+
+        # Allow simple wildcard-style deny entries, e.g. "rophim10.live##div.swiper*".
+        if "*" in normalized_forbidden:
+            pattern = re.escape(normalized_forbidden).replace("\\*", ".*")
+            if re.fullmatch(pattern, normalized_rule):
+                return True
+
+    return False
+
+
+def _ticket_forbidden_rules(ticket_context: Mapping[str, Any]) -> List[str]:
+    hints = ticket_context.get("validation_hints", {})
+    if not isinstance(hints, Mapping):
+        return []
+
+    result: List[str] = []
+    for key in ("must_not_generate_rules", "forbidden_rules", "disallowed_rules"):
+        result.extend(_as_string_list(hints.get(key, [])))
+
+    return result
+
+
+def _candidate_mentions_preserved_context(
+    candidate: Mapping[str, Any],
+    ticket_context: Mapping[str, Any],
+) -> bool:
+    protected_terms = _ticket_preserve_terms(ticket_context)
+    if not protected_terms:
+        return False
+
+    candidate_text = " ".join(
+        str(candidate.get(key, "") or "")
+        for key in ("suggested_rule", "selector", "reason", "element_snippet")
+    )
+
+    parent_chain = candidate.get("parent_chain", [])
+    if isinstance(parent_chain, list):
+        candidate_text += " " + " ".join(str(item) for item in parent_chain)
+
+    normalized_candidate_text = _normalize_human_text(candidate_text)
+
+    for term in protected_terms:
+        normalized_term = _normalize_human_text(term)
+        if len(normalized_term) < 4:
+            continue
+        if normalized_term in normalized_candidate_text:
+            return True
+
+    return False
+
+
+def _ticket_preserve_terms(ticket_context: Mapping[str, Any]) -> List[str]:
+    terms: List[str] = []
+    terms.extend(_as_string_list(ticket_context.get("target_to_preserve", [])))
+
+    # Region-level preserve metadata is owned by region_focus, but the generator
+    # can still use its human-readable labels/text as a safety signal when
+    # deciding whether to auto-append detector rules.
+    for key in ("preserve_regions", "focus_selectors"):
+        terms.extend(_extract_region_terms(ticket_context.get(key)))
+
+    region_focus = ticket_context.get("region_focus")
+    if _region_value_looks_preserved(region_focus):
+        terms.extend(_extract_region_terms(region_focus))
+
+    hints = ticket_context.get("validation_hints", {})
+    if isinstance(hints, Mapping):
+        for key in ("must_preserve_text", "preserve_text", "must_contain_text"):
+            terms.extend(_as_string_list(hints.get(key, [])))
+        for key in ("allowed_ad_region", "allowed_regions", "preserve_regions"):
+            terms.extend(_extract_region_terms(hints.get(key)))
+
+    # Deduplicate while preserving order.
+    seen = set()
+    unique: List[str] = []
+    for term in terms:
+        cleaned = str(term or "").strip()
+        if not cleaned:
+            continue
+        normalized = _normalize_human_text(cleaned)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(cleaned)
+
+    return unique
+
+
+def _extract_region_terms(value: Any) -> List[str]:
+    terms: List[str] = []
+
+    if value in (None, "", [], {}):
+        return terms
+
+    if isinstance(value, str):
+        return _as_string_list(value)
+
+    if isinstance(value, Mapping):
+        for key in (
+            "name",
+            "label",
+            "title",
+            "text",
+            "must_contain_text",
+            "description",
+            "selector",
+            "selectors",
+            "region",
+            "focus_region",
+        ):
+            terms.extend(_extract_region_terms(value.get(key)))
+        return terms
+
+    if isinstance(value, list):
+        for item in value:
+            terms.extend(_extract_region_terms(item))
+        return terms
+
+    return _as_string_list(value)
+
+
+def _region_value_looks_preserved(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+
+    mode = _normalize_human_text(
+        value.get("mode")
+        or value.get("type")
+        or value.get("role")
+        or value.get("intent")
+        or ""
+    )
+
+    return any(token in mode for token in ("preserve", "allow", "protect", "safe"))
+
+
+def _as_string_list(value: Any) -> List[str]:
+    if value is None:
+        return []
+
+    if isinstance(value, str):
+        return [
+            item.strip()
+            for item in re.split(r"[,;\n]+", value)
+            if item.strip()
+        ]
+
+    if isinstance(value, list):
+        return [
+            str(item).strip()
+            for item in value
+            if str(item).strip()
+        ]
+
+    return [str(value).strip()] if str(value).strip() else []
+
+
+def _normalize_rule_for_ticket_compare(rule: Any) -> str:
+    return str(rule or "").strip().lower()
+
+
+def _normalize_human_text(value: Any) -> str:
+    text = str(value or "").lower()
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def _candidate_backfill_sort_key(candidate: Mapping[str, Any]) -> tuple[int, int, int, str]:

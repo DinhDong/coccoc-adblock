@@ -36,10 +36,15 @@ class CrawlService:
         deeply. It only stores it with the crawl output so later stages can
         generate ticket-aware rules.
 
+        It may also carry a "focus_region" (or "focus") field that scopes which
+        part of the page the crawler analyses. This overrides nothing else; it
+        only narrows the HTML fed to extraction/detection.
+
         Example:
             {
                 "platform": "ios",
                 "problem_type": "content_broken_image",
+                "focus_region": "top bar",
                 "request": "[iOS][Adblock] - sayhentai.sh: images not displayed",
                 "actual": "Images are not displayed when Adblock is enabled",
                 "expected": "Images should be displayed",
@@ -87,19 +92,35 @@ class CrawlService:
         """
         safe_ticket_context = _normalise_ticket_context(ticket_context)
 
+        # Focus region is a property of the ticket context. An explicit
+        # focus_region argument (e.g. from a CLI flag) overrides it, and the
+        # effective value is written back so it is persisted with the crawl.
+        effective_focus = (
+            focus_region
+            or safe_ticket_context.get("focus_region")
+            or safe_ticket_context.get("focus")
+            or ""
+        )
+        if effective_focus:
+            safe_ticket_context["focus_region"] = effective_focus
+
         logger.info(
-            "Starting crawl for URL: %s (report_id: %s, ticket_type: %s)",
+            "Starting crawl for URL: %s (report_id: %s, ticket_type: %s, focus: %s)",
             url,
             report_id,
             safe_ticket_context.get("problem_type", "unknown"),
+            effective_focus or "none",
         )
 
-        # Step 1: Render the page with network request capture.
+        # Step 1: Render the page with network request capture. When a focus
+        # region is set, render_url scopes the HTML, screenshot, and overlay
+        # scan to that region so every downstream stage follows the focus.
         try:
             logger.debug("Rendering page...")
             render_result = render_url(
                 url,
                 capture_requests=True,
+                focus_region=effective_focus or None,
                 **render_kwargs,
             )
         except Exception as exc:
@@ -151,19 +172,14 @@ class CrawlService:
                 },
             )
 
-        # Step 2 (optional): Scope HTML to a specific page region.
-        focus_selector = ""
-        focus_method = "none"
-        if focus_region:
-            from ..crawler.region_focus import focus_html
-            render_result.html, focus_selector, focus_method = focus_html(
-                render_result.html, focus_region
-            )
-            logger.info(
-                "Focus region '%s' applied via %s (selector: %s)",
-                focus_region,
-                focus_method,
-                focus_selector or "n/a",
+        # Focus scoping happens inside render_url (Step 1) so the HTML,
+        # screenshot, and overlay scan are all narrowed together. Here we only
+        # read back what it resolved for the crawl result metadata.
+        focus_meta = getattr(render_result, "focus", None) or {}
+        if effective_focus and not focus_meta.get("matched"):
+            logger.warning(
+                "Focus region '%s' did not match any element — crawled full page",
+                effective_focus,
             )
 
         # Step 3: Extract ad-relevant data from rendered HTML.
@@ -271,10 +287,11 @@ class CrawlService:
                     "html_length": len(render_result.html or ""),
                 },
                 "focus_region": {
-                    "requested": focus_region or "",
-                    "selector": focus_selector,
-                    "method": focus_method,
-                } if focus_region else None,
+                    "requested": focus_meta.get("requested", effective_focus),
+                    "selector": focus_meta.get("selector", ""),
+                    "method": focus_meta.get("method", "none"),
+                    "matched": bool(focus_meta.get("matched", False)),
+                } if effective_focus else None,
                 "title": extracted_data.title,
                 "network_requests": network_summary,
                 "ad_candidates": detection_result.get("ad_candidates", []),
@@ -321,17 +338,20 @@ def _normalise_ticket_context(
     ticket_context: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
     """
-    Make ticket_context safe to store in JSON.
+    Normalize and JSON-sanitize ticket_context before storing it.
 
-    This function intentionally does not classify the ticket deeply. Ticket
-    classification should live in a separate service later, for example:
-        app.services.ticket_context.normalize_ticket_context()
-
-    Here we only:
-    - accept None as {},
-    - accept dict-like objects,
-    - prevent non-JSON-serializable values from breaking save_result().
+    The crawler still does not solve ticket logic.  It only makes sure the crawl
+    result contains the same normalized context shape that generation and
+    validation expect.  If normalization is temporarily unavailable, fall back to
+    a JSON-safe copy so crawling never crashes only because of context metadata.
     """
+    try:
+        from app.services.ticket_context import normalize_ticket_context
+
+        return _make_json_safe(normalize_ticket_context(ticket_context or {}))
+    except Exception as exc:
+        logger.warning("Failed to normalize ticket_context in crawler: %s", exc)
+
     if ticket_context is None:
         return {}
 

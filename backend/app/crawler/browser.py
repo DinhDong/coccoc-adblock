@@ -20,7 +20,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT_MS = 30_000
@@ -509,6 +509,7 @@ class RenderResult:
     elapsed_ms: int = 0
     captured_requests: List[CapturedRequest] = field(default_factory=list)
     fixed_elements: List[Dict] = field(default_factory=list)
+    focus: Optional[Dict] = None
 
 
 def _import_playwright() -> Any:
@@ -560,6 +561,127 @@ def _scroll_page(
         previous_height = current_height
 
 
+_BOUNDING_BOX_JS = (
+    "el => { const r = el.getBoundingClientRect();"
+    " return {left: r.left, top: r.top, right: r.right, bottom: r.bottom,"
+    " width: r.width, height: r.height}; }"
+)
+
+
+def _apply_focus_live(
+    page: Any,
+    html: str,
+    focus_region: str,
+) -> Tuple[Any, Optional[Dict[str, float]], Dict[str, Any], str]:
+    """
+    Resolve focus_region against the live page.
+
+    Returns (element_handle, bounding_box, focus_meta, scoped_html). The handle
+    and box are None when nothing matched; focus_meta always describes the
+    outcome for the crawl result.
+    """
+    from .region_focus import resolve_focus
+
+    meta: Dict[str, Any] = {
+        "requested": focus_region,
+        "selector": "",
+        "method": "none",
+        "matched": False,
+    }
+
+    try:
+        resolution = resolve_focus(html, focus_region)
+    except Exception as exc:
+        logger.debug("Focus resolution failed for %r: %s", focus_region, exc)
+        return None, None, meta, ""
+
+    meta["selector"] = resolution.describe()
+    meta["method"] = resolution.method
+
+    if not resolution.selector:
+        return None, None, meta, ""
+
+    try:
+        handles = page.query_selector_all(resolution.selector)
+    except Exception as exc:
+        logger.debug("Live focus query failed for %r: %s", resolution.selector, exc)
+        return None, None, meta, ""
+
+    if resolution.index >= len(handles):
+        logger.debug(
+            "Focus selector %r matched %d element(s); index %d out of range",
+            resolution.selector,
+            len(handles),
+            resolution.index,
+        )
+        return None, None, meta, ""
+
+    handle = handles[resolution.index]
+
+    box = None
+    try:
+        box = handle.evaluate(_BOUNDING_BOX_JS)
+    except Exception:
+        logger.debug("Could not read focus element geometry")
+
+    scoped_html = ""
+    try:
+        scoped_html = handle.evaluate("el => el.outerHTML") or ""
+    except Exception:
+        logger.debug("Could not read focus element outerHTML")
+
+    meta["matched"] = True
+    logger.info(
+        "Focus region '%s' resolved live via %s: %s",
+        focus_region,
+        resolution.method,
+        meta["selector"],
+    )
+    return handle, box, meta, scoped_html
+
+
+def _filter_elements_to_region(
+    elements: List[Dict],
+    box: Dict[str, float],
+    min_overlap: float = 0.5,
+) -> List[Dict]:
+    """
+    Keep only fixed/overlay elements that lie substantially within the focus box.
+
+    Overlap is measured as intersection area over the element's own area, so a
+    page-wide overlay that only clips the focus region is dropped, while a
+    banner sitting inside the region is kept.
+    """
+    kept: List[Dict] = []
+
+    for element in elements:
+        try:
+            if _region_overlap_ratio(element, box) >= min_overlap:
+                kept.append(element)
+        except Exception:
+            # Never drop data on a geometry error.
+            kept.append(element)
+
+    return kept
+
+
+def _region_overlap_ratio(element: Dict, box: Dict[str, float]) -> float:
+    ex0 = float(element.get("left", 0))
+    ey0 = float(element.get("top", 0))
+    ex1 = float(element.get("right", 0))
+    ey1 = float(element.get("bottom", 0))
+
+    inter_w = max(0.0, min(ex1, box["right"]) - max(ex0, box["left"]))
+    inter_h = max(0.0, min(ey1, box["bottom"]) - max(ey0, box["top"]))
+    intersection = inter_w * inter_h
+
+    element_area = max(0.0, ex1 - ex0) * max(0.0, ey1 - ey0)
+    if element_area <= 0:
+        return 0.0
+
+    return intersection / element_area
+
+
 def render_url(
     url: str,
     screenshot_path: Optional[str] = None,
@@ -576,8 +698,16 @@ def render_url(
     stealth: bool = True,
     user_agent: Optional[str] = None,
     environment: str = "desktop",
+    focus_region: Optional[str] = None,
 ) -> RenderResult:
-    """Render a URL in Playwright and return the rendered page data."""
+    """Render a URL in Playwright and return the rendered page data.
+
+    When focus_region is provided, the returned HTML, screenshot, and
+    fixed_elements are scoped to the matching page region so downstream
+    extraction, detection, and rule generation all operate on that region.
+    Network capture is never scoped — network rules are domain-scoped, not
+    region-scoped, so third-party request analysis stays whole-page.
+    """
     sync_playwright, PlaywrightError, PlaywrightTimeoutError = _import_playwright()
     start_time = time.perf_counter()
 
@@ -660,22 +790,58 @@ def render_url(
 
             html = page.content()
 
-            try:
-                screenshot_bytes = page.screenshot(
-                    full_page=True,
-                    timeout=timeout_ms,
+            # Resolve the focus region (if any) against the live page so the
+            # screenshot, HTML, and overlay scan can all be scoped to it.
+            focus_handle = None
+            focus_box = None
+            if focus_region:
+                focus_handle, focus_box, result.focus, scoped_html = _apply_focus_live(
+                    page, html, focus_region
                 )
+                if scoped_html:
+                    html = scoped_html
+
+            try:
+                if focus_handle is not None:
+                    # Element screenshot captures just the focused region and
+                    # scrolls it into view automatically.
+                    screenshot_bytes = focus_handle.screenshot(timeout=timeout_ms)
+                else:
+                    screenshot_bytes = page.screenshot(
+                        full_page=True,
+                        timeout=timeout_ms,
+                    )
             except Exception:
                 logger.debug(
-                    "full_page screenshot failed; falling back to viewport screenshot"
+                    "focus/full_page screenshot failed; falling back to viewport screenshot"
                 )
                 screenshot_bytes = page.screenshot(
                     full_page=False,
                     timeout=timeout_ms,
                 )
 
+            # An element screenshot may have scrolled the page — reset to the top
+            # so fixed-element geometry stays consistent with focus_box.
+            if focus_handle is not None:
+                try:
+                    page.evaluate("window.scrollTo(0, 0)")
+                except Exception:
+                    pass
+
             try:
                 result.fixed_elements = page.evaluate(_FIXED_ELEMENT_SCRIPT) or []
+
+                if focus_box and result.fixed_elements:
+                    before = len(result.fixed_elements)
+                    result.fixed_elements = _filter_elements_to_region(
+                        result.fixed_elements, focus_box
+                    )
+                    logger.debug(
+                        "Focus scoped fixed/overlay elements: %d -> %d",
+                        before,
+                        len(result.fixed_elements),
+                    )
+
                 if result.fixed_elements:
                     logger.debug(
                         "Found %d fixed/sticky/overlay element(s)",

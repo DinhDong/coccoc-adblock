@@ -13,6 +13,7 @@
 # Output: (system_message, user_message) tuple passed to llm_client.py
 
 import logging
+import re
 from typing import Any, Dict, List, Mapping
 from urllib.parse import urlparse
 
@@ -255,6 +256,8 @@ def build_prompt(
         lines.append(f"  Environment: {environment}")
 
     _append_ticket_context(lines, ticket_context)
+    _append_region_context(lines, ticket_context)
+    _append_validation_hints(lines, ticket_context)
     _append_evidence_summary(lines, ticket_context, third_party, ad_candidates)
     _append_current_rules(lines, ticket_context)
     _append_blocked_resources(lines, ticket_context)
@@ -332,6 +335,7 @@ def _append_ticket_context(
 
     evidence_level = ticket_context.get("evidence_level", "")
     platform = ticket_context.get("platform", "")
+    focus_region = ticket_context.get("focus_region", "")
     request = ticket_context.get("request", "")
     description = ticket_context.get("description", "")
     actual = ticket_context.get("actual", "")
@@ -349,6 +353,14 @@ def _append_ticket_context(
 
     if platform:
         lines.append(f"  Platform: {platform}")
+
+    if focus_region:
+        lines.append(f"  Focus region: {_truncate(str(focus_region), 160)}")
+        lines.append(
+            "    The crawl was scoped to this region. The page signals, DOM ad "
+            "candidates, and overlays below come from that region only — target "
+            "rules there and do not generate rules for other parts of the page."
+        )
 
     if request:
         lines.append(f"  Request: {_truncate(str(request), 500)}")
@@ -376,6 +388,186 @@ def _append_ticket_context(
         lines.append("  Should block:")
         for item in target_to_block[:12]:
             lines.append(f"    - {_truncate(str(item), 160)}")
+
+
+def _append_region_context(
+    lines: List[str],
+    ticket_context: Mapping[str, Any],
+) -> None:
+    """
+    Add teammate-owned region/focus context to the LLM prompt.
+
+    Important distinction:
+    - focus_region scopes the crawl itself, so extracted DOM candidates are from
+      that region only.
+    - preserve_regions / allowed_ad_region are constraints. They do not scope the
+      crawl; they tell the generator which page regions must not be damaged.
+    """
+    region_focus = ticket_context.get("region_focus")
+    focus_selectors = ticket_context.get("focus_selectors")
+    preserve_regions = ticket_context.get("preserve_regions")
+    target_regions = ticket_context.get("target_regions")
+
+    hints = ticket_context.get("validation_hints", {})
+    if not isinstance(hints, Mapping):
+        hints = {}
+
+    allowed_ad_region = hints.get("allowed_ad_region") or hints.get("allowed_regions")
+    block_outside_allowed_region = hints.get("block_ads_outside_allowed_region")
+
+    has_region_context = any(
+        value not in (None, "", [], {})
+        for value in (
+            region_focus,
+            focus_selectors,
+            preserve_regions,
+            target_regions,
+            allowed_ad_region,
+            block_outside_allowed_region,
+        )
+    )
+
+    if not has_region_context:
+        return
+
+    lines.append("\nRegion focus / region constraints:")
+    lines.append(
+        "  Use these as region-level constraints. Do not confuse a preserved/allowed "
+        "region with a target region to hide."
+    )
+
+    if region_focus not in (None, "", [], {}):
+        lines.append(
+            "  region_focus: "
+            f"{_truncate(_format_region_value(region_focus), 700)}"
+        )
+
+    if focus_selectors not in (None, "", [], {}):
+        lines.append(
+            "  focus_selectors: "
+            f"{_truncate(_format_region_value(focus_selectors), 700)}"
+        )
+
+    if preserve_regions not in (None, "", [], {}):
+        lines.append(
+            "  preserve_regions: "
+            f"{_truncate(_format_region_value(preserve_regions), 900)}"
+        )
+        lines.append(
+            "    Treat preserve_regions as hard safety boundaries: do not output "
+            "cosmetic rules that hide these regions or broad ancestors that may contain them."
+        )
+
+    if target_regions not in (None, "", [], {}):
+        lines.append(
+            "  target_regions: "
+            f"{_truncate(_format_region_value(target_regions), 900)}"
+        )
+        lines.append(
+            "    Prioritize ad candidates in target_regions when they are supported by "
+            "specific selector or URL evidence."
+        )
+
+    if allowed_ad_region not in (None, "", [], {}):
+        lines.append(
+            "  allowed_ad_region: "
+            f"{_truncate(_format_region_value(allowed_ad_region), 900)}"
+        )
+        lines.append(
+            "    Ads or sponsor creatives inside allowed_ad_region may remain. "
+            "Block ad placements outside that region only when a rule is region-safe."
+        )
+
+    if block_outside_allowed_region not in (None, "", [], {}):
+        lines.append(
+            f"  block_ads_outside_allowed_region: {block_outside_allowed_region}"
+        )
+
+
+def _append_validation_hints(
+    lines: List[str],
+    ticket_context: Mapping[str, Any],
+) -> None:
+    hints = ticket_context.get("validation_hints", {})
+    if not isinstance(hints, Mapping) or not hints:
+        return
+
+    lines.append("\nTicket validation hints:")
+    lines.append(
+        "  These are hard constraints for generation and sandbox validation when applicable."
+    )
+
+    must_not_generate = _as_rule_list(
+        hints.get("must_not_generate_rules", [])
+        or hints.get("forbidden_rules", [])
+        or hints.get("disallowed_rules", [])
+    )
+
+    if must_not_generate:
+        lines.append("  Must NOT generate these rules or equivalent broad variants:")
+        for rule in must_not_generate[:30]:
+            lines.append(f"    - {rule}")
+
+    must_preserve_text = _as_text_list(
+        hints.get("must_preserve_text", [])
+        or hints.get("preserve_text", [])
+        or hints.get("must_contain_text", [])
+    )
+
+    if must_preserve_text:
+        lines.append("  Must preserve visible text:")
+        for text in must_preserve_text[:20]:
+            lines.append(f"    - {_truncate(text, 160)}")
+
+    region_hint_keys = (
+        "allowed_ad_region",
+        "allowed_regions",
+        "blocked_regions",
+        "preserve_regions",
+        "target_regions",
+        "block_ads_outside_allowed_region",
+    )
+
+    wrote_region_hint = False
+    for key in region_hint_keys:
+        value = hints.get(key)
+        if value in (None, "", [], {}):
+            continue
+
+        if not wrote_region_hint:
+            lines.append("  Region assertions:")
+            wrote_region_hint = True
+
+        lines.append(f"    - {key}: {_truncate(_format_region_value(value), 700)}")
+
+    selector_hint_keys = (
+        "must_show_all_selectors",
+        "must_exist_selectors",
+        "must_hide_selectors",
+        "must_show_any_selector_groups",
+    )
+
+    wrote_selector_hint = False
+    for key in selector_hint_keys:
+        value = hints.get(key)
+        if value in (None, "", [], {}):
+            continue
+
+        if not wrote_selector_hint:
+            lines.append("  Selector assertions:")
+            wrote_selector_hint = True
+
+        lines.append(f"    - {key}: {_truncate(_format_hint_value(value), 500)}")
+
+    numeric_hint_keys = (
+        "min_visible_images",
+        "max_broken_images",
+        "min_visible_videos",
+    )
+
+    for key in numeric_hint_keys:
+        if key in hints:
+            lines.append(f"  {key}: {hints.get(key)}")
 
 
 def _append_evidence_summary(
@@ -768,6 +960,48 @@ def _as_rule_list(value: Any) -> List[str]:
             if line.strip()
         ]
 
+    if isinstance(value, Mapping):
+        rule = (
+            value.get("rule")
+            or value.get("matched_rule")
+            or value.get("filter")
+            or value.get("text")
+            or ""
+        )
+        if not str(rule).strip():
+            return []
+
+        details = []
+        for key in ("problem", "reason", "action", "selector", "resource_type", "url"):
+            detail = str(value.get(key, "") or "").strip()
+            if detail:
+                details.append(f"{key}={_truncate(detail, 140)}")
+
+        if details:
+            return [f"{str(rule).strip()} ({'; '.join(details)})"]
+
+        return [str(rule).strip()]
+
+    if isinstance(value, list):
+        result: List[str] = []
+        for item in value:
+            result.extend(_as_rule_list(item))
+        return result
+
+    return []
+
+
+def _as_text_list(value: Any) -> List[str]:
+    if value is None:
+        return []
+
+    if isinstance(value, str):
+        return [
+            part.strip()
+            for part in re.split(r"[,;\n]+", value)
+            if part.strip()
+        ]
+
     if isinstance(value, list):
         return [
             str(item).strip()
@@ -775,7 +1009,41 @@ def _as_rule_list(value: Any) -> List[str]:
             if str(item).strip()
         ]
 
-    return []
+    return [str(value).strip()] if str(value).strip() else []
+
+
+def _format_region_value(value: Any) -> str:
+    if isinstance(value, Mapping):
+        parts = []
+        for key, item in value.items():
+            if item in (None, "", [], {}):
+                continue
+            parts.append(f"{key}={_format_region_value(item)}")
+        return "{" + "; ".join(parts) + "}"
+
+    if isinstance(value, list):
+        return "[" + "; ".join(_format_region_value(item) for item in value[:10]) + "]"
+
+    return str(value)
+
+
+def _format_hint_value(value: Any) -> str:
+    if isinstance(value, list):
+        parts = []
+        for item in value[:8]:
+            if isinstance(item, Mapping):
+                name = item.get("name", "")
+                selectors = item.get("selectors", [])
+                min_required = item.get("min", 1)
+                if name or selectors:
+                    parts.append(
+                        f"name={name or 'group'} selectors={selectors} min={min_required}"
+                    )
+            else:
+                parts.append(str(item))
+        return "; ".join(parts)
+
+    return str(value)
 
 
 def _sort_candidates(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

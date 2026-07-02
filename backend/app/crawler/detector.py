@@ -3,20 +3,16 @@
 # Input: extracted page data + captured network requests
 # Output: ad_candidates with suggested adblock rules, grouped by domain/element
 #
-# Improvements in this version:
-# - Promote ad-like parent containers from parent_chain, e.g.
-#     child:  div.banner-bottom-double
-#     parent: div.adserver
-#   => candidate: site.com##div.adserver
-# - Generate narrow network rules for ad asset paths, e.g.
-#     cdn.example.com/storage/ads/banner.png
-#   => ||cdn.example.com/storage/ads/^$image,domain=site.com
-# - Stop treating analytics-only domains like Google Analytics / GTM as visible
-#   ad-blocking candidates.
+# Key behavior:
+# - Promote ad-like parent containers from parent_chain.
+# - Generate narrow network rules for ad asset paths.
 # - Detect fullscreen popup overlays/backdrops from browser fixed_elements.
-# - Avoid noisy header/nav candidates such as header.fly unless there are real
-#   ad/overlay signals.
-# - Prefer meaningful ad classes over generated classes like jsx-xxxxx.
+# - Detect fixed/sticky floating ad elements.
+# - Avoid analytics-only domains and noisy site chrome.
+# - Preserve full nested URL prefixes for API/banner endpoints, e.g.
+#     /baseapi/api/v1/banners/public
+#   becomes:
+#     ||example.com/baseapi/api/v1/banners/^$xmlhttprequest,domain=site.com
 
 import re
 from collections import defaultdict
@@ -175,6 +171,9 @@ AD_URL_PATH_KEYWORDS = [
     "/promo/",
     "/promotion/",
     "/storage/ads/",
+    "/baseapi/api/v1/banners/",
+    "/api/v1/banners/",
+    "banners/public",
     "ads%20",
     "adserver",
     "adservice",
@@ -197,6 +196,11 @@ AD_URL_PATH_KEYWORDS = [
 ]
 
 NARROW_AD_PATH_PREFIXES = [
+    # API/banner endpoints can be nested under a site-specific prefix.
+    # Keep these before generic /banners/ so the generated rule remains narrow.
+    "/baseapi/api/v1/banners/",
+    "/api/v1/banners/",
+    "/v1/banners/",
     "/storage/ads/",
     "/ads/",
     "/ad/",
@@ -281,6 +285,19 @@ GENERATED_CLASS_PREFIXES = (
     "mantine-",
     "ant-",
 )
+
+RESOURCE_TYPE_TO_ABP_OPTION = {
+    "image": "image",
+    "script": "script",
+    "media": "media",
+    "font": "font",
+    "stylesheet": "stylesheet",
+    "xhr": "xmlhttprequest",
+    "fetch": "xmlhttprequest",
+    "xmlhttprequest": "xmlhttprequest",
+    "iframe": "subdocument",
+    "subdocument": "subdocument",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -517,50 +534,64 @@ class AdDetector:
         """
         Build a narrow ABP network rule for ad asset paths.
 
-        Example:
+        Important detail:
+            Keep the path before the matched ad keyword.
+
+        Examples:
             https://cdn.rophim.co.com/storage/ads/foo.png
         becomes:
             ||cdn.rophim.co.com/storage/ads/^$image,domain=rophim10.live
+
+            https://rophim10.vip/baseapi/api/v1/banners/public
+        becomes:
+            ||rophim10.vip/baseapi/api/v1/banners/^$xmlhttprequest,domain=rophim10.live
+
+        The previous implementation used only the keyword prefix itself
+        (/banners/), which produced a rule like:
+            ||rophim10.vip/banners/^$domain=rophim10.live
+        That rule does not match /baseapi/api/v1/banners/public.
         """
-        best_prefix = ""
-        matched_urls: List[str] = []
-        matched_resource_types: set[str] = set()
+        prefix_groups: Dict[str, Dict[str, Any]] = defaultdict(
+            lambda: {"urls": [], "resource_types": set()}
+        )
 
         for item in items:
             req_url = item.get("url", "")
             parsed = urlparse(req_url)
             path = (parsed.path or "").lower()
 
-            matched_prefix = ""
-
-            for prefix in NARROW_AD_PATH_PREFIXES:
-                if prefix in path:
-                    matched_prefix = prefix
-                    break
+            matched_prefix = _find_narrow_ad_path_prefix(path)
 
             if not matched_prefix:
                 continue
 
-            if not best_prefix:
-                best_prefix = matched_prefix
+            prefix_groups[matched_prefix]["urls"].append(req_url)
+            prefix_groups[matched_prefix]["resource_types"].add(
+                str(item.get("resource_type", "other")).lower()
+            )
 
-            if matched_prefix == best_prefix:
-                matched_urls.append(req_url)
-                matched_resource_types.add(
-                    str(item.get("resource_type", "other")).lower()
-                )
+        if not prefix_groups:
+            return "", []
+
+        # Prefer the prefix that explains the most requests. If tied, prefer
+        # the longer prefix because it is narrower and less likely to block
+        # unrelated site APIs/assets.
+        best_prefix, best_group = sorted(
+            prefix_groups.items(),
+            key=lambda pair: (
+                len(pair[1]["urls"]),
+                len(pair[0]),
+            ),
+            reverse=True,
+        )[0]
+
+        matched_urls = list(best_group["urls"])
+        matched_resource_types = set(best_group["resource_types"])
 
         if not best_prefix or not matched_urls:
             return "", []
 
-        options: List[str] = []
-
-        if "image" in matched_resource_types:
-            options.append("image")
-        elif "script" in matched_resource_types:
-            options.append("script")
-        elif "media" in matched_resource_types:
-            options.append("media")
+        options: List[str] = _resource_type_options(matched_resource_types)
 
         if page_domain:
             options.append(f"domain={page_domain}")
@@ -832,7 +863,6 @@ class AdDetector:
             is_dark_overlay = bool(el.get("is_dark_overlay", False))
             has_close_button = bool(el.get("has_close_button", False))
             overlay_keyword = bool(el.get("overlay_keyword", False))
-            ad_keyword = bool(el.get("ad_keyword", False))
             site_chrome = bool(el.get("site_chrome", False))
 
             external_domains = []
@@ -1256,6 +1286,86 @@ def _is_too_broad_selector(selector: str) -> bool:
         "footer",
         "nav",
     }
+
+
+def _find_narrow_ad_path_prefix(path: str) -> str:
+    """
+    Return a safe, narrow path prefix for an ad-like URL path.
+
+    For nested API paths, preserve the prefix before the ad keyword:
+        /baseapi/api/v1/banners/public -> /baseapi/api/v1/banners/
+
+    For direct asset paths, this behaves the same as the previous logic:
+        /storage/ads/foo.png -> /storage/ads/
+    """
+    value = str(path or "").lower()
+
+    if not value.startswith("/"):
+        value = "/" + value
+
+    best_prefix = ""
+
+    for marker in NARROW_AD_PATH_PREFIXES:
+        marker = str(marker or "").lower()
+        if not marker:
+            continue
+
+        index = value.find(marker)
+        if index < 0:
+            continue
+
+        candidate = value[: index + len(marker)]
+
+        if _is_too_broad_path_prefix(candidate):
+            continue
+
+        if not best_prefix or len(candidate) > len(best_prefix):
+            best_prefix = candidate
+
+    return best_prefix
+
+
+def _is_too_broad_path_prefix(prefix: str) -> bool:
+    value = str(prefix or "").strip().lower()
+
+    return value in {
+        "",
+        "/",
+        "/ad/",
+        "/ads/",
+        "/banner/",
+        "/banners/",
+        "/popup/",
+        "/promo/",
+        "/sponsor/",
+    }
+
+
+def _resource_type_options(resource_types: set[str]) -> List[str]:
+    """Map Playwright resource types to ABP network option names."""
+    normalized = {str(item or "").lower() for item in resource_types or set()}
+    options: List[str] = []
+
+    for raw_type in [
+        "image",
+        "script",
+        "media",
+        "font",
+        "stylesheet",
+        "xhr",
+        "fetch",
+        "xmlhttprequest",
+        "iframe",
+        "subdocument",
+    ]:
+        if raw_type not in normalized:
+            continue
+
+        option = RESOURCE_TYPE_TO_ABP_OPTION.get(raw_type)
+        if option and option not in options:
+            options.append(option)
+
+    return options
 
 
 # ---------------------------------------------------------------------------

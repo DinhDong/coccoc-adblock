@@ -40,8 +40,17 @@ def normalize_ticket_context(raw_context: Any) -> Dict[str, Any]:
     """
     context = _coerce_dict(raw_context)
 
+    # Focus region is orthogonal to problem classification: it scopes which
+    # part of the page the crawler analyses. Extract it up front so it survives
+    # even when the rest of the context falls back to the legacy default.
+    focus_region = _extract_focus_region(context)
+
     if _is_empty_context(context) or _looks_like_legacy_default_context(context):
-        return _legacy_no_ticket_context()
+        legacy = _legacy_no_ticket_context()
+        if focus_region:
+            legacy["focus_region"] = focus_region
+        _copy_passthrough_fields(legacy, context)
+        return _make_json_safe(legacy)
 
     request = _clean_text(context.get("request", ""))
     description = _clean_text(context.get("description", ""))
@@ -101,7 +110,7 @@ def normalize_ticket_context(raw_context: Any) -> Dict[str, Any]:
         keys=("current_rules", "existing_rules", "active_rules"),
     )
 
-    matched_rules = _normalize_string_list(context.get("matched_rules", []))
+    matched_rules = _normalize_matched_rules(context.get("matched_rules", []))
     blocked_resources = _normalize_blocked_resources(
         context.get("blocked_resources", [])
     )
@@ -117,6 +126,7 @@ def normalize_ticket_context(raw_context: Any) -> Dict[str, Any]:
         "platform": platform,
         "problem_type": problem_type,
         "resolution_strategy": resolution_strategy,
+        "focus_region": focus_region,
         "request": request,
         "description": description,
         "steps": steps,
@@ -132,20 +142,7 @@ def normalize_ticket_context(raw_context: Any) -> Dict[str, Any]:
         "raw": _make_json_safe(context.get("raw", {})),
     }
 
-    # Preserve useful integration fields from CMS if they exist.
-    for key in (
-        "ticket_id",
-        "issue_id",
-        "report_id",
-        "severity",
-        "browser_version",
-        "os_version",
-        "device",
-        "screenshot_url",
-        "notes",
-    ):
-        if key in context:
-            normalized[key] = _make_json_safe(context.get(key))
+    _copy_passthrough_fields(normalized, context)
 
     return _make_json_safe(normalized)
 
@@ -296,6 +293,7 @@ def _legacy_no_ticket_context() -> Dict[str, Any]:
         "platform": "",
         "problem_type": problem_type,
         "resolution_strategy": get_resolution_strategy(problem_type),
+        "focus_region": "",
         "request": "",
         "description": "",
         "steps": [],
@@ -337,6 +335,50 @@ def _resolve_problem_type(
 
     inferred = infer_problem_type(combined_text)
     return normalize_problem_type(inferred, fallback="unknown")
+
+
+def _extract_focus_region(context: Mapping[str, Any]) -> str:
+    """
+    Read the page region the crawler should actively scope to.
+
+    Accepts ``focus_region`` (preferred), ``focus`` (legacy shortcut), and
+    ``region_focus`` when it is a plain string. Structured ``region_focus`` is
+    only converted to a crawl-scoping focus when it explicitly describes a target
+    region. Preserve/allowed-region payloads are forwarded but not used to scope
+    crawling, because scoping to a preserved region would make the detector look
+    at the thing we are trying to keep.
+    """
+    for key in ("focus_region", "focus"):
+        value = context.get(key, "")
+        if isinstance(value, str) and value.strip():
+            return _clean_text(value)
+
+    region_focus = context.get("region_focus", "")
+    if isinstance(region_focus, str) and region_focus.strip():
+        return _clean_text(region_focus)
+
+    if isinstance(region_focus, Mapping):
+        mode = _normalize_region_mode(region_focus)
+        if mode and any(token in mode for token in ("preserve", "allow", "protect", "safe")):
+            return ""
+
+        for key in ("focus_region", "region", "target", "description", "name"):
+            value = region_focus.get(key, "")
+            if isinstance(value, str) and value.strip():
+                return _clean_text(value)
+
+    return ""
+
+
+def _normalize_region_mode(region_focus: Mapping[str, Any]) -> str:
+    value = (
+        region_focus.get("mode")
+        or region_focus.get("type")
+        or region_focus.get("role")
+        or region_focus.get("intent")
+        or ""
+    )
+    return _normalize_for_matching(str(value))
 
 
 def _coerce_dict(value: Any) -> Dict[str, Any]:
@@ -580,11 +622,23 @@ def _collect_rule_list(
         value = context.get(key)
 
         if isinstance(value, list):
-            return [
-                _clean_text(rule)
-                for rule in value
-                if _clean_text(rule)
-            ]
+            rules: List[str] = []
+
+            for item in value:
+                if isinstance(item, Mapping):
+                    rule = (
+                        item.get("rule")
+                        or item.get("matched_rule")
+                        or item.get("filter")
+                        or item.get("text")
+                        or ""
+                    )
+                    if _clean_text(rule):
+                        rules.append(_clean_text(rule))
+                elif _clean_text(item):
+                    rules.append(_clean_text(item))
+
+            return rules
 
         if isinstance(value, str) and value.strip():
             return [
@@ -594,6 +648,98 @@ def _collect_rule_list(
             ]
 
     return []
+
+
+def _normalize_matched_rules(value: Any) -> List[Dict[str, Any]]:
+    """
+    Normalize matched/suspect rule evidence while preserving useful notes.
+
+    CMS/debug payloads often send either:
+      ["site.com##.ad"]
+    or:
+      [{"rule": "site.com##.ad", "problem": "too broad"}]
+
+    Keeping the structured note is important because prompt_builder can then tell
+    the LLM why a matched rule should be avoided or replaced.
+    """
+    if value is None:
+        return []
+
+    if isinstance(value, str):
+        return [
+            {"rule": rule}
+            for rule in _normalize_string_list(value)
+        ]
+
+    if isinstance(value, list):
+        result: List[Dict[str, Any]] = []
+
+        for item in value:
+            if isinstance(item, Mapping):
+                rule = _clean_text(
+                    item.get("rule")
+                    or item.get("matched_rule")
+                    or item.get("filter")
+                    or item.get("text")
+                    or ""
+                )
+
+                if not rule:
+                    continue
+
+                normalized_item: Dict[str, Any] = {"rule": rule}
+
+                for key in (
+                    "problem",
+                    "reason",
+                    "action",
+                    "resource_type",
+                    "url",
+                    "selector",
+                    "evidence",
+                ):
+                    if key in item and _clean_text(item.get(key, "")):
+                        normalized_item[key] = _clean_text(item.get(key, ""))
+
+                result.append(normalized_item)
+
+            elif _clean_text(item):
+                result.append({"rule": _clean_text(item)})
+
+        return result
+
+    return []
+
+
+def _copy_passthrough_fields(
+    normalized: Dict[str, Any],
+    context: Mapping[str, Any],
+) -> None:
+    """
+    Preserve integration fields that this module should forward but not interpret.
+
+    This keeps ticket_context compatible with teammate-owned features such as
+    region_focus without implementing that feature here.
+    """
+    for key in (
+        "ticket_id",
+        "issue_id",
+        "report_id",
+        "severity",
+        "browser_version",
+        "os_version",
+        "device",
+        "screenshot_url",
+        "notes",
+        "region_focus",
+        "focus_selectors",
+        "preserve_regions",
+        "target_regions",
+        "allowed_regions",
+        "blocked_regions",
+    ):
+        if key in context:
+            normalized[key] = _make_json_safe(context.get(key))
 
 
 def _normalize_blocked_resources(value: Any) -> List[Dict[str, Any]]:

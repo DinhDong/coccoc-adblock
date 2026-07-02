@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Optional
 
@@ -39,6 +40,11 @@ from app.services.problem_policy import (
 from app.validator.abp_syntax import SyntaxResult, check_syntax_batch
 from app.validator.rule_scope import ScopeResult, check_scope_batch
 from app.validator.sandbox_check import SandboxResult, run_sandbox
+
+try:
+    from app.services.ticket_context import normalize_ticket_context
+except Exception:  # pragma: no cover - keeps validator usable during partial imports
+    normalize_ticket_context = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -288,6 +294,7 @@ def validate_rules(
             rule=rule,
             problem_type=resolved_problem_type,
             has_direct_evidence=has_direct_evidence,
+            ticket_context=context,
         )
 
         if not policy_result.valid:
@@ -409,6 +416,12 @@ def validate_rules(
 def _normalize_context(
     ticket_context: Optional[Mapping[str, Any]],
 ) -> dict[str, Any]:
+    if normalize_ticket_context is not None:
+        try:
+            return normalize_ticket_context(ticket_context or {})
+        except Exception as exc:
+            logger.warning("Failed to normalize ticket_context in validator: %s", exc)
+
     if isinstance(ticket_context, Mapping):
         return dict(ticket_context)
 
@@ -451,9 +464,21 @@ def _check_policy_direction(
     rule: str,
     problem_type: str,
     has_direct_evidence: bool,
+    ticket_context: Mapping[str, Any],
 ) -> PolicyResult:
     policy = get_problem_policy(problem_type)
     rule_direction = classify_rule_direction(rule)
+
+    forbidden_error = _ticket_forbidden_rule_error(rule, ticket_context)
+    if forbidden_error:
+        return PolicyResult(
+            rule=rule,
+            valid=False,
+            problem_type=policy.problem_type,
+            resolution_strategy=policy.strategy,
+            rule_direction=rule_direction,
+            error=forbidden_error,
+        )
 
     error = get_rule_direction_error(
         problem_type,
@@ -475,6 +500,71 @@ def _check_policy_direction(
         rule_direction=rule_direction,
         error=error or None,
     )
+
+
+def _ticket_forbidden_rule_error(
+    rule: str,
+    ticket_context: Mapping[str, Any],
+) -> str:
+    forbidden_rules = _ticket_forbidden_rules(ticket_context)
+    if not forbidden_rules:
+        return ""
+
+    normalized_rule = _normalize_rule_for_ticket_compare(rule)
+    if not normalized_rule:
+        return ""
+
+    for forbidden in forbidden_rules:
+        normalized_forbidden = _normalize_rule_for_ticket_compare(forbidden)
+        if not normalized_forbidden:
+            continue
+
+        if normalized_rule == normalized_forbidden:
+            return f"rule is forbidden by ticket_context validation_hints.must_not_generate_rules: {forbidden}"
+
+        if "*" in normalized_forbidden:
+            pattern = re.escape(normalized_forbidden).replace("\\*", ".*")
+            if re.fullmatch(pattern, normalized_rule):
+                return f"rule matches forbidden ticket_context pattern: {forbidden}"
+
+    return ""
+
+
+def _ticket_forbidden_rules(ticket_context: Mapping[str, Any]) -> list[str]:
+    hints = ticket_context.get("validation_hints", {})
+    if not isinstance(hints, Mapping):
+        return []
+
+    result: list[str] = []
+    for key in ("must_not_generate_rules", "forbidden_rules", "disallowed_rules"):
+        result.extend(_as_string_list(hints.get(key, [])))
+
+    return result
+
+
+def _as_string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+
+    if isinstance(value, str):
+        return [
+            item.strip()
+            for item in re.split(r"[,;\n]+", value)
+            if item.strip()
+        ]
+
+    if isinstance(value, list):
+        return [
+            str(item).strip()
+            for item in value
+            if str(item).strip()
+        ]
+
+    return [str(value).strip()] if str(value).strip() else []
+
+
+def _normalize_rule_for_ticket_compare(rule: Any) -> str:
+    return str(rule or "").strip().lower()
 
 
 def _has_direct_evidence(ticket_context: Mapping[str, Any]) -> bool:

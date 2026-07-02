@@ -25,16 +25,5 @@ COPY . .
 
 ENV PYTHONPATH=/app
 
-# Default entrypoint lets callers pick any module:
-#   docker compose run --rm backend app.services.workflow vnexpress-desktop
-#   docker compose run --rm backend app.services.crawler https://... id --env desktop
-#   docker compose run --rm backend app.services.crawler https://... id --focus "header"
-#   docker compose run --rm backend app.services.crawler https://... id --focus "right sidebar"
-#
-#   docker compose run --rm backend app.validator.rule_preview https://... "||example.com^" 
-#   docker compose run --rm backend app.validator.rule_preview https://... --rules-file rules.txt --env android
-#   docker compose run --rm backend app.validator.rule_preview https://... "||example.com^" --out data/previews/motp
-#
-#   docker compose run --rm backend pytest app/tests/ -v
 ENTRYPOINT ["python", "-m"]
 CMD ["app.services.workflow", "--help"]

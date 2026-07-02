@@ -338,17 +338,20 @@ def _normalise_ticket_context(
     ticket_context: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
     """
-    Make ticket_context safe to store in JSON.
+    Normalize and JSON-sanitize ticket_context before storing it.
 
-    This function intentionally does not classify the ticket deeply. Ticket
-    classification should live in a separate service later, for example:
-        app.services.ticket_context.normalize_ticket_context()
-
-    Here we only:
-    - accept None as {},
-    - accept dict-like objects,
-    - prevent non-JSON-serializable values from breaking save_result().
+    The crawler still does not solve ticket logic.  It only makes sure the crawl
+    result contains the same normalized context shape that generation and
+    validation expect.  If normalization is temporarily unavailable, fall back to
+    a JSON-safe copy so crawling never crashes only because of context metadata.
     """
+    try:
+        from app.services.ticket_context import normalize_ticket_context
+
+        return _make_json_safe(normalize_ticket_context(ticket_context or {}))
+    except Exception as exc:
+        logger.warning("Failed to normalize ticket_context in crawler: %s", exc)
+
     if ticket_context is None:
         return {}
 

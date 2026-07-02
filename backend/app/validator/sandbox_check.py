@@ -14,16 +14,29 @@
 #       candidate @@ exception rule should unblock it
 # - Support cosmetic exception rules (#@#) against existing cosmetic hide rules.
 # - Validate differently per ticket type:
-#     visible ad issue        => ads_blocked AND page_functional
-#     image/video/content bug => page_functional AND ticket assertions
-#     UI hidden bug           => page_functional AND ticket assertions
-#     overlay/anti-adblock    => page_functional AND ticket assertions
+#     visible ad issue        -> ads_blocked AND page_functional
+#     image/video/content bug -> page_functional AND ticket assertions
+#     UI hidden bug           -> page_functional AND ticket assertions
+#     overlay/anti-adblock    -> page_functional AND ticket assertions
 # - Avoid requiring every generic selector in validation_hints to be visible.
 # - Avoid false positives where analytics/tracking-only requests are counted as
 #   visible ad blocking.
 # - Persist cosmetic evidence:
 #     missing_ad_selectors
 #     hidden_ad_selectors
+#
+# Ticket-aware region validation added:
+# - validation_hints.must_preserve_region / must_preserve_regions:
+#     Verify a preserved region still has visible text/images/links.
+#     This catches broad cosmetic rules like:
+#         rophim10.live##div.adserver
+#     when the text "Nhà cái uy tín" remains but bookmaker logo/cards disappear.
+#
+# - validation_hints.must_hide_text_outside_allowed_region:
+#     Verify ad-like text is gone outside allowed/preserved regions.
+#     Example:
+#         "Nhà Tài Trợ"
+#     should be hidden outside the "Nhà cái uy tín" allowed region.
 
 import logging
 import re
@@ -119,6 +132,8 @@ TICKET_ASSERTION_SCRIPT = """
         return rect.width > 0 && rect.height > 0;
     };
 
+    const normalizeText = (value) => String(value || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+
     const countVisible = (selector) => {
         try {
             return Array.from(document.querySelectorAll(selector)).filter(isVisible).length;
@@ -133,6 +148,183 @@ TICKET_ASSERTION_SCRIPT = """
         } catch (err) {
             return -1;
         }
+    };
+
+    const visibleElements = (root, selector) => {
+        try {
+            return Array.from((root || document).querySelectorAll(selector)).filter(isVisible);
+        } catch (err) {
+            return [];
+        }
+    };
+
+    const hasVisibleText = (el, text) => {
+        if (!el || !text || !isVisible(el)) return false;
+        return normalizeText(el.innerText || el.textContent || '').includes(normalizeText(text));
+    };
+
+    const countVisibleImages = (root) => {
+        return visibleElements(root, 'img').filter((img) => {
+            return img.naturalWidth > 0 && img.naturalHeight > 0;
+        }).length;
+    };
+
+    const countBrokenImages = (root) => {
+        return visibleElements(root, 'img').filter((img) => {
+            if (!img.src) return false;
+            return img.complete && (img.naturalWidth === 0 || img.naturalHeight === 0);
+        }).length;
+    };
+
+    const countVisibleLinks = (root) => {
+        return visibleElements(root, 'a[href]').length;
+    };
+
+    const countVisibleBackgroundImages = (root) => {
+        return visibleElements(root, '*').filter((el) => {
+            const style = window.getComputedStyle(el);
+            if (!style || !style.backgroundImage || style.backgroundImage === 'none') return false;
+            const rect = el.getBoundingClientRect();
+            return rect.width >= 20 && rect.height >= 20;
+        }).length;
+    };
+
+    const countVisibleImageLike = (root) => {
+        return countVisibleImages(root) + countVisibleBackgroundImages(root);
+    };
+
+    const findBySelector = (selector) => {
+        if (!selector) return null;
+        try {
+            const matches = Array.from(document.querySelectorAll(selector)).filter(isVisible);
+            return matches.length ? matches[0] : null;
+        } catch (err) {
+            return null;
+        }
+    };
+
+    const findSmallestVisibleTextElement = (text) => {
+        const needle = normalizeText(text);
+        if (!needle) return null;
+
+        const candidates = Array.from(document.querySelectorAll('body *')).filter((el) => {
+            if (!isVisible(el)) return false;
+            const value = normalizeText(el.innerText || el.textContent || '');
+            if (!value.includes(needle)) return false;
+
+            // Prefer leaf-ish text holders rather than giant page containers.
+            const childMatches = Array.from(el.children || []).some((child) => {
+                if (!isVisible(child)) return false;
+                return normalizeText(child.innerText || child.textContent || '').includes(needle);
+            });
+
+            return !childMatches;
+        });
+
+        return candidates.length ? candidates[0] : null;
+    };
+
+    const regionStats = (root) => {
+        if (!root || !(root instanceof Element)) {
+            return {
+                found: false,
+                selector: '',
+                text: '',
+                visible_images: 0,
+                visible_background_images: 0,
+                visible_image_like: 0,
+                visible_links: 0,
+                broken_images: 0,
+                visible_text: '',
+            };
+        }
+
+        let selector = root.tagName ? root.tagName.toLowerCase() : '';
+        if (root.id) selector += '#' + root.id;
+        else if (root.classList && root.classList.length) selector += '.' + Array.from(root.classList).slice(0, 3).join('.');
+
+        const visibleImages = countVisibleImages(root);
+        const visibleBackgroundImages = countVisibleBackgroundImages(root);
+        const visibleLinks = countVisibleLinks(root);
+
+        return {
+            found: true,
+            selector,
+            text: normalizeText(root.innerText || root.textContent || '').slice(0, 300),
+            visible_images: visibleImages,
+            visible_background_images: visibleBackgroundImages,
+            visible_image_like: visibleImages + visibleBackgroundImages,
+            visible_links: visibleLinks,
+            broken_images: countBrokenImages(root),
+        };
+    };
+
+    const findRegion = (region) => {
+        region = region || {};
+
+        const explicitSelector =
+            region.selector ||
+            region.root_selector ||
+            region.container_selector ||
+            region.region_selector ||
+            '';
+
+        const explicit = findBySelector(explicitSelector);
+        if (explicit) return explicit;
+
+        const text =
+            region.must_contain_text ||
+            region.text ||
+            region.title ||
+            region.name ||
+            '';
+
+        const textElement = findSmallestVisibleTextElement(text);
+        if (!textElement) return null;
+
+        const maxDepth = Number(region.max_ancestor_depth || 8);
+        const minImages = Number(region.min_visible_images || 0);
+        const minLinks = Number(region.min_visible_links || 0);
+        const minImageLike = Number(region.min_visible_image_like || 0);
+
+        let current = textElement;
+        let best = textElement;
+        let bestScore = -1;
+        let depth = 0;
+
+        while (current && current instanceof Element && depth <= maxDepth) {
+            const tag = (current.tagName || '').toLowerCase();
+
+            if (tag === 'body' || tag === 'html') break;
+
+            if (isVisible(current)) {
+                const images = countVisibleImages(current);
+                const links = countVisibleLinks(current);
+                const imageLike = countVisibleImageLike(current);
+                const score = images + links + imageLike;
+
+                // If a nearby ancestor already satisfies the caller's region
+                // requirements, use it immediately. This avoids falling back to
+                // a page-wide container that may include unrelated movie cards.
+                if (
+                    (minImages <= 0 || images >= minImages) &&
+                    (minLinks <= 0 || links >= minLinks) &&
+                    (minImageLike <= 0 || imageLike >= minImageLike)
+                ) {
+                    return current;
+                }
+
+                if (score > bestScore) {
+                    best = current;
+                    bestScore = score;
+                }
+            }
+
+            current = current.parentElement;
+            depth += 1;
+        }
+
+        return best;
     };
 
     const mustShow = {};
@@ -169,18 +361,75 @@ TICKET_ASSERTION_SCRIPT = """
         };
     }
 
-    const visibleImages = Array.from(document.querySelectorAll('img')).filter((img) => {
-        return isVisible(img) && img.naturalWidth > 0 && img.naturalHeight > 0;
-    }).length;
-
-    const brokenImages = Array.from(document.querySelectorAll('img')).filter((img) => {
-        if (!isVisible(img)) return false;
-        if (!img.src) return false;
-        return img.complete && (img.naturalWidth === 0 || img.naturalHeight === 0);
-    }).length;
-
+    const visibleImages = countVisibleImages(document);
+    const brokenImages = countBrokenImages(document);
     const visibleVideos = Array.from(document.querySelectorAll('video')).filter(isVisible).length;
     const visibleIframes = Array.from(document.querySelectorAll('iframe')).filter(isVisible).length;
+
+    const visibleBodyText = normalizeText(document.body ? document.body.innerText : '');
+    const preserveText = {};
+    for (const text of payload.mustPreserveText || []) {
+        const needle = normalizeText(text);
+        if (!needle) continue;
+        preserveText[text] = visibleBodyText.includes(needle);
+    }
+
+    const preserveRegions = {};
+    for (const region of payload.mustPreserveRegions || []) {
+        const name = region.name || region.must_contain_text || region.selector || 'unnamed_region';
+        const root = findRegion(region);
+        preserveRegions[name] = regionStats(root);
+    }
+
+    const allowedRegionRoots = [];
+    for (const region of payload.allowedRegions || []) {
+        const root = findRegion(region);
+        if (root) allowedRegionRoots.push(root);
+    }
+
+    const isInsideAllowedRegion = (el) => {
+        for (const root of allowedRegionRoots) {
+            if (root === el || root.contains(el)) return true;
+        }
+        return false;
+    };
+
+    const hiddenTextOutsideAllowedRegion = {};
+    for (const text of payload.mustHideTextOutsideAllowedRegion || []) {
+        const needle = normalizeText(text);
+        if (!needle) continue;
+
+        let count = 0;
+        const samples = [];
+
+        for (const el of Array.from(document.querySelectorAll('body *'))) {
+            if (!isVisible(el)) continue;
+            if (isInsideAllowedRegion(el)) continue;
+
+            const value = normalizeText(el.innerText || el.textContent || '');
+            if (!value.includes(needle)) continue;
+
+            // Count leaf-ish occurrences only. A parent containing a matching
+            // child should not inflate the count.
+            const childHasNeedle = Array.from(el.children || []).some((child) => {
+                if (!isVisible(child)) return false;
+                if (isInsideAllowedRegion(child)) return false;
+                return normalizeText(child.innerText || child.textContent || '').includes(needle);
+            });
+
+            if (childHasNeedle) continue;
+
+            count += 1;
+            if (samples.length < 5) {
+                samples.push(value.slice(0, 120));
+            }
+        }
+
+        hiddenTextOutsideAllowedRegion[text] = {
+            count,
+            samples,
+        };
+    }
 
     return {
         must_show: mustShow,
@@ -191,6 +440,9 @@ TICKET_ASSERTION_SCRIPT = """
         broken_images: brokenImages,
         visible_videos: visibleVideos,
         visible_iframes: visibleIframes,
+        preserve_text: preserveText,
+        preserve_regions: preserveRegions,
+        hide_text_outside_allowed_region: hiddenTextOutsideAllowedRegion,
     };
 }
 """
@@ -393,6 +645,9 @@ def run_sandbox(
     problem_type = str(safe_ticket_context.get("problem_type", "unknown")).strip().lower()
 
     existing_rules = _get_existing_rules(safe_ticket_context)
+    if not _should_apply_existing_rules(problem_type, candidate_rules):
+        existing_rules = []
+
     all_test_rules = existing_rules + candidate_rules
 
     result.existing_rules_count = len(existing_rules)
@@ -813,11 +1068,26 @@ def _capture_ticket_state(
 ) -> Dict[str, Any]:
     hints = _get_validation_hints(ticket_context)
 
+    preserve_regions = _get_preserve_region_hints(ticket_context, hints)
+    allowed_regions = _get_allowed_region_hints(ticket_context, hints, preserve_regions)
+
     payload = {
         "mustShowSelectors": hints.get("must_show_all_selectors", []),
         "mustExistSelectors": hints.get("must_exist_selectors", []),
         "mustHideSelectors": hints.get("must_hide_selectors", []),
         "mustShowAnySelectorGroups": hints.get("must_show_any_selector_groups", []),
+        "mustPreserveText": _as_string_list(
+            hints.get("must_preserve_text", [])
+            or hints.get("preserve_text", [])
+            or hints.get("must_contain_text", [])
+        ),
+        "mustPreserveRegions": preserve_regions,
+        "allowedRegions": allowed_regions,
+        "mustHideTextOutsideAllowedRegion": _as_string_list(
+            hints.get("must_hide_text_outside_allowed_region", [])
+            or hints.get("must_hide_text_outside_allowed_regions", [])
+            or hints.get("must_not_show_text_outside_allowed_region", [])
+        ),
     }
 
     try:
@@ -833,6 +1103,9 @@ def _capture_ticket_state(
             "broken_images": 0,
             "visible_videos": 0,
             "visible_iframes": 0,
+            "preserve_text": {},
+            "preserve_regions": {},
+            "hide_text_outside_allowed_region": {},
         }
 
 
@@ -870,6 +1143,70 @@ def _evaluate_ticket_assertions(
         if total < min_required:
             errors.append(
                 f"expected at least {min_required} visible element(s) in group '{group_name}', got {total}"
+            )
+
+    for text, found in (state.get("preserve_text") or {}).items():
+        if not found:
+            errors.append(f"expected text to remain visible: {text}")
+
+    for region_name, region_state in (state.get("preserve_regions") or {}).items():
+        if not isinstance(region_state, Mapping):
+            errors.append(f"invalid preserve region state: {region_name}")
+            continue
+
+        if not bool(region_state.get("found", False)):
+            errors.append(f"expected preserve region to remain visible: {region_name}")
+            continue
+
+        config = _find_preserve_region_config(ticket_context, hints, region_name)
+
+        min_region_images = _optional_int(config.get("min_visible_images"))
+        if min_region_images is not None:
+            actual = int(region_state.get("visible_images", 0) or 0)
+            if actual < min_region_images:
+                errors.append(
+                    f"expected preserve region '{region_name}' to contain at least "
+                    f"{min_region_images} visible image(s), got {actual}"
+                )
+
+        min_region_links = _optional_int(config.get("min_visible_links"))
+        if min_region_links is not None:
+            actual = int(region_state.get("visible_links", 0) or 0)
+            if actual < min_region_links:
+                errors.append(
+                    f"expected preserve region '{region_name}' to contain at least "
+                    f"{min_region_links} visible link(s), got {actual}"
+                )
+
+        min_region_image_like = _optional_int(config.get("min_visible_image_like"))
+        if min_region_image_like is not None:
+            actual = int(region_state.get("visible_image_like", 0) or 0)
+            if actual < min_region_image_like:
+                errors.append(
+                    f"expected preserve region '{region_name}' to contain at least "
+                    f"{min_region_image_like} visible image-like element(s), got {actual}"
+                )
+
+        max_region_broken_images = _optional_int(config.get("max_broken_images"))
+        if max_region_broken_images is not None:
+            actual = int(region_state.get("broken_images", 0) or 0)
+            if actual > max_region_broken_images:
+                errors.append(
+                    f"expected preserve region '{region_name}' to contain at most "
+                    f"{max_region_broken_images} broken image(s), got {actual}"
+                )
+
+    for text, data in (state.get("hide_text_outside_allowed_region") or {}).items():
+        if not isinstance(data, Mapping):
+            continue
+
+        count = int(data.get("count", 0) or 0)
+        if count > 0:
+            samples = data.get("samples", []) or []
+            sample_text = f"; samples={samples[:3]}" if samples else ""
+            errors.append(
+                f"expected text to be hidden outside allowed region: {text} "
+                f"(visible occurrences: {count}{sample_text})"
             )
 
     min_visible_images = hints.get("min_visible_images")
@@ -921,6 +1258,10 @@ def _get_validation_hints(ticket_context: Dict[str, Any]) -> Dict[str, Any]:
       - must_exist_selectors
       - must_hide_selectors
       - must_show_any_selector_groups
+      - must_preserve_text
+      - must_preserve_region
+      - must_preserve_regions
+      - must_hide_text_outside_allowed_region
     """
     raw_hints = ticket_context.get("validation_hints", {})
 
@@ -949,6 +1290,14 @@ def _get_validation_hints(ticket_context: Dict[str, Any]) -> Dict[str, Any]:
                 hints["must_show_any_selector_groups"] = groups
 
             hints.pop("must_show_selectors", None)
+
+        text_hints = _as_string_list(
+            hints.get("must_preserve_text", [])
+            or hints.get("preserve_text", [])
+            or hints.get("must_contain_text", [])
+        )
+        if text_hints:
+            hints["must_preserve_text"] = text_hints
 
         return hints
 
@@ -1038,6 +1387,238 @@ def _get_validation_hints(ticket_context: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     return {}
+
+
+def _get_preserve_region_hints(
+    ticket_context: Dict[str, Any],
+    hints: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """
+    Return region-preservation assertions.
+
+    Supported shapes:
+      validation_hints.must_preserve_region: {...}
+      validation_hints.must_preserve_regions: [{...}]
+      validation_hints.preserve_regions: [{...}]
+      ticket_context.preserve_regions: [{...}]
+
+    A region can be located by explicit selector or by visible text:
+      {
+        "name": "trusted_bookmakers",
+        "must_contain_text": "Nhà cái uy tín",
+        "min_visible_images": 3,
+        "min_visible_links": 3
+      }
+    """
+    regions: List[Dict[str, Any]] = []
+
+    for key in (
+        "must_preserve_region",
+        "must_preserve_regions",
+        "preserve_region",
+        "preserve_regions",
+    ):
+        regions.extend(_normalize_region_list(hints.get(key)))
+
+    # Top-level ticket_context.preserve_regions is produced by the
+    # ticket_context flow / region_focus integration.
+    regions.extend(_normalize_region_list(ticket_context.get("preserve_regions")))
+
+    # If region_focus is explicitly a preserve/allowed region, treat it as a
+    # preserve-region assertion only when caller gave count requirements inside
+    # it. This avoids turning generic focus metadata into a strict assertion.
+    region_focus = ticket_context.get("region_focus")
+    if isinstance(region_focus, Mapping):
+        mode = str(region_focus.get("mode", "")).lower()
+        if any(token in mode for token in ("preserve", "allow", "allowed", "protect")):
+            normalized = _normalize_region_hint(region_focus)
+            if normalized and any(
+                key in normalized
+                for key in (
+                    "min_visible_images",
+                    "min_visible_links",
+                    "min_visible_image_like",
+                    "max_broken_images",
+                )
+            ):
+                regions.append(normalized)
+
+    # De-duplicate by stable name/text/selector.
+    unique: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for region in regions:
+        key = (
+            str(region.get("name", ""))
+            + "|"
+            + str(region.get("must_contain_text", ""))
+            + "|"
+            + str(region.get("selector", ""))
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(region)
+
+    return unique
+
+
+def _get_allowed_region_hints(
+    ticket_context: Dict[str, Any],
+    hints: Dict[str, Any],
+    preserve_regions: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Return regions where ad-like text is allowed to remain.
+
+    This is used by must_hide_text_outside_allowed_region.
+    """
+    regions: List[Dict[str, Any]] = []
+
+    for key in (
+        "allowed_ad_region",
+        "allowed_ad_regions",
+        "allowed_region",
+        "allowed_regions",
+    ):
+        regions.extend(_normalize_region_list(hints.get(key)))
+
+    regions.extend(_normalize_region_list(ticket_context.get("allowed_regions")))
+
+    # A preserve region is also an allowed region unless caller provides a
+    # separate allowed-region list.
+    regions.extend(preserve_regions)
+
+    region_focus = ticket_context.get("region_focus")
+    if isinstance(region_focus, Mapping):
+        mode = str(region_focus.get("mode", "")).lower()
+        if any(token in mode for token in ("preserve", "allow", "allowed", "protect")):
+            normalized = _normalize_region_hint(region_focus)
+            if normalized:
+                regions.append(normalized)
+
+    unique: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for region in regions:
+        key = (
+            str(region.get("name", ""))
+            + "|"
+            + str(region.get("must_contain_text", ""))
+            + "|"
+            + str(region.get("selector", ""))
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(region)
+
+    return unique
+
+
+def _normalize_region_list(value: Any) -> List[Dict[str, Any]]:
+    if value is None:
+        return []
+
+    if isinstance(value, Mapping):
+        normalized = _normalize_region_hint(value)
+        return [normalized] if normalized else []
+
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        return [
+            {
+                "name": text,
+                "must_contain_text": text,
+            }
+        ]
+
+    if isinstance(value, list):
+        regions: List[Dict[str, Any]] = []
+        for item in value:
+            if isinstance(item, Mapping):
+                normalized = _normalize_region_hint(item)
+                if normalized:
+                    regions.append(normalized)
+            elif isinstance(item, str) and item.strip():
+                regions.append(
+                    {
+                        "name": item.strip(),
+                        "must_contain_text": item.strip(),
+                    }
+                )
+        return regions
+
+    return []
+
+
+def _normalize_region_hint(value: Mapping[str, Any]) -> Dict[str, Any]:
+    region = dict(value)
+
+    selector = (
+        region.get("selector")
+        or region.get("root_selector")
+        or region.get("container_selector")
+        or region.get("region_selector")
+        or ""
+    )
+    text = (
+        region.get("must_contain_text")
+        or region.get("text")
+        or region.get("title")
+        or ""
+    )
+    name = region.get("name") or text or selector or "unnamed_region"
+
+    normalized: Dict[str, Any] = {
+        "name": str(name).strip(),
+    }
+
+    if selector:
+        normalized["selector"] = str(selector).strip()
+
+    if text:
+        normalized["must_contain_text"] = str(text).strip()
+
+    for key in (
+        "min_visible_images",
+        "min_visible_links",
+        "min_visible_image_like",
+        "max_broken_images",
+        "max_ancestor_depth",
+    ):
+        if key in region:
+            normalized[key] = region.get(key)
+
+    if not normalized.get("selector") and not normalized.get("must_contain_text"):
+        return {}
+
+    return normalized
+
+
+def _find_preserve_region_config(
+    ticket_context: Dict[str, Any],
+    hints: Dict[str, Any],
+    region_name: str,
+) -> Dict[str, Any]:
+    target = str(region_name or "")
+    for region in _get_preserve_region_hints(ticket_context, hints):
+        if str(region.get("name", "")) == target:
+            return region
+
+    return {}
+
+
+def _optional_int(value: Any) -> Optional[int]:
+    if value is None or value == "":
+        return None
+
+    try:
+        return int(value)
+    except Exception:
+        return None
 
 
 def _find_broken_critical_selectors(
@@ -1457,6 +2038,53 @@ def _safe_ticket_context(value: Any) -> Dict[str, Any]:
         "problem_type": "unknown",
         "raw": str(value),
     }
+
+
+def _should_apply_existing_rules(problem_type: str, candidate_rules: List[str]) -> bool:
+    """
+    Existing/current rules are needed when validating exception-style fixes.
+
+    For visible-ad tickets, applying broad current_rules can make an unrelated
+    candidate fail preserve assertions, especially when current_rules are only
+    supplied as review context from a previous legacy run.
+    """
+    normalized_problem_type = str(problem_type or "").strip().lower()
+
+    if normalized_problem_type in {
+        "content_broken_image",
+        "content_broken_video",
+        "content_broken",
+        "ui_hidden",
+    }:
+        return True
+
+    return any(_is_exception_rule(rule) for rule in candidate_rules)
+
+
+def _is_exception_rule(rule: str) -> bool:
+    text = str(rule or "").strip()
+    return text.startswith("@@") or "#@#" in text
+
+
+def _as_string_list(value: Any) -> List[str]:
+    if value is None:
+        return []
+
+    if isinstance(value, str):
+        return [
+            item.strip()
+            for item in re.split(r"[,;\n]+", value)
+            if item.strip()
+        ]
+
+    if isinstance(value, list):
+        return [
+            str(item).strip()
+            for item in value
+            if str(item).strip()
+        ]
+
+    return [str(value).strip()] if str(value).strip() else []
 
 
 def _get_existing_rules(ticket_context: Dict[str, Any]) -> List[str]:

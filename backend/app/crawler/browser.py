@@ -527,18 +527,60 @@ def _import_playwright() -> Any:
 
 
 def _apply_stealth(page: Any, user_agent: Optional[str] = None) -> None:
-    """Apply stealth patches to a Playwright page to suppress bot-detection signals."""
+    """
+    Apply stealth patches to a Playwright page.
+
+    playwright-stealth's user-agent override expects a Chromium-style user
+    agent containing a Chrome version. Passing a Safari/WebKit user agent can
+    make the library fail while trying to derive sec-ch-ua values.
+
+    For non-Chromium user agents, skip the Chromium-specific stealth package.
+    The browser context already carries the requested user agent and device
+    profile, so skipping this patch is safer than injecting Chrome-only
+    properties into WebKit.
+
+    Any unexpected stealth failure falls back to the lightweight init script so
+    browser rendering and sandbox validation can continue.
+    """
+    effective_user_agent = (user_agent or _DEFAULT_USER_AGENT).strip()
+    is_chromium_user_agent = "Chrome/" in effective_user_agent
+
+    if not is_chromium_user_agent:
+        logger.debug(
+            "Skipping playwright-stealth for non-Chromium user agent: %s",
+            effective_user_agent,
+        )
+        return
+
     try:
         from playwright_stealth import Stealth
 
         Stealth(
             chrome_runtime=True,
-            navigator_user_agent_override=user_agent or _DEFAULT_USER_AGENT,
+            navigator_user_agent_override=effective_user_agent,
         ).apply_stealth_sync(page)
+
         logger.debug("playwright-stealth applied")
+
     except ImportError:
-        logger.debug("playwright-stealth not installed; using fallback stealth script")
+        logger.debug(
+            "playwright-stealth not installed; using fallback stealth script"
+        )
         page.add_init_script(_FALLBACK_STEALTH_SCRIPT)
+
+    except Exception as exc:
+        logger.warning(
+            "playwright-stealth failed; using fallback stealth script: %s",
+            exc,
+        )
+
+        try:
+            page.add_init_script(_FALLBACK_STEALTH_SCRIPT)
+        except Exception as fallback_exc:
+            logger.warning(
+                "Fallback stealth script could not be installed: %s",
+                fallback_exc,
+            )
 
 
 def _scroll_page(

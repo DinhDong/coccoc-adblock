@@ -44,9 +44,9 @@ SAFE_DOMAINS = {
 
 AUTO_APPEND_CATEGORY_RANK = {
     "popup_overlay": 0,
-    "ad_network_request": 1,
+    "floating_ad": 1,
     "ad_container": 2,
-    "floating_ad": 3,
+    "ad_network_request": 3,
     "ad_iframe": 4,
 }
 
@@ -72,7 +72,7 @@ BROAD_COSMETIC_SELECTORS = {
     "input",
 }
 
-AD_LIKE_RULE_HINTS = (
+AD_HINT_WORDS = (
     "ad",
     "ads",
     "adserver",
@@ -97,13 +97,73 @@ AD_LIKE_RULE_HINTS = (
     "advertisement",
     "sticky_ads",
     "floating_ad",
+)
+
+AD_HINT_PATHS = (
     "/ads/",
     "/ad/",
     "/storage/ads/",
     "/banner/",
+    "/banners/",
     "/popup/",
     "/sponsor/",
     "/promo/",
+)
+
+POPUP_OVERLAY_HINTS = (
+    "popup",
+    "pop-up",
+    "modal",
+    "overlay",
+    "backdrop",
+    "interstitial",
+    "dialog",
+    "monetization-dialog",
+    "fc-dialog",
+)
+
+FLOATING_HINTS = (
+    "floating",
+    "float",
+    "sticky",
+    "fixed",
+    "catfish",
+)
+
+IFRAME_HINTS = (
+    "iframe",
+    "frame",
+    "subdocument",
+)
+
+OVERLAY_RELEVANT_HINTS = (
+    "popup",
+    "pop-up",
+    "modal",
+    "overlay",
+    "backdrop",
+    "interstitial",
+    "dialog",
+    "monetization",
+    "rewarded",
+    "close",
+    "sticky",
+    "floating",
+    "float",
+    "fixed",
+    "catfish",
+    "ad-content",
+)
+
+GENERIC_PAGE_AD_HINTS = (
+    "adsbygoogle",
+    "google-auto-placed",
+    "ad-area",
+    "ad-slot",
+    "ad_client",
+    "ad-client",
+    "ad-format",
+    "ad-status",
 )
 
 
@@ -154,22 +214,14 @@ def generate_rules_with_metadata(
 
     Steps:
         1. Build compact crawl signals from crawl_result.
-        2. Include ticket_context in compact signals.
+        2. Include normalized ticket_context in compact signals.
         3. Assemble prompt via prompt_builder.build_prompt().
         4. Call LLM via llm_client.call_llm_with_fallback().
         5. Capture token usage if the LLM client returns it.
         6. Parse raw response into ParsedRule objects.
-        7. Auto-append safe high-confidence detector suggested rules that the LLM omitted.
-        8. Return rules + token metadata.
-
-    Why step 7 exists:
-        The LLM sometimes chooses only cosmetic overlay rules and omits an
-        independent high-confidence network rule such as:
-            ||cdn.site.com/storage/ads/^$image,domain=site.com
-
-        That omission leaves visible ads loaded even though validation can see
-        that each selected cosmetic rule works individually. The detector already
-        produced a narrow safe suggested_rule, so the generator should not drop it.
+        7. Hard-filter LLM rules against ticket constraints/problem strategy.
+        8. Auto-append safe high-confidence detector suggested rules that the LLM omitted.
+        9. Return rules + token metadata.
     """
     try:
         logger.info(
@@ -204,9 +256,10 @@ def generate_rules_with_metadata(
         else:
             parsed_rules = parse_llm_response(response_text)
 
-        parsed_rules = _filter_ticket_forbidden_parsed_rules(
-            parsed_rules,
-            compact_signals.get("ticket_context", {}),
+        parsed_rules = _filter_ticket_constrained_parsed_rules(
+            rules=parsed_rules,
+            ticket_context=compact_signals.get("ticket_context", {}),
+            compact_signals=compact_signals,
         )
 
         token_usage = _build_token_usage_payload(llm_response)
@@ -229,7 +282,7 @@ def generate_rules_with_metadata(
         )
 
         logger.info(
-            "Successfully generated %s candidate rules via AI orchestration (%s from LLM, %s after detector backfill).",
+            "Successfully generated %s candidate rules via AI orchestration (%s from LLM after filtering, %s after detector backfill).",
             len(completed_rules),
             len(parsed_rules),
             len(completed_rules),
@@ -265,7 +318,8 @@ def _merge_high_confidence_detector_rules(
     - no exceptions,
     - no tracking-only domains,
     - no broad cosmetic selectors,
-    - no unsafe site-wide network blocks.
+    - no unsafe site-wide network blocks,
+    - must respect ticket_context scope.
     """
     ticket_context = compact_signals.get("ticket_context", {})
     if not isinstance(ticket_context, Mapping):
@@ -307,29 +361,61 @@ def _merge_high_confidence_detector_rules(
     return _dedupe_parsed_rules(parsed_rules + auto_parsed)
 
 
-def _filter_ticket_forbidden_parsed_rules(
+def _filter_ticket_constrained_parsed_rules(
     rules: List[ParsedRule],
     ticket_context: Any,
+    compact_signals: Optional[Dict[str, Any]] = None,
 ) -> List[ParsedRule]:
+    """
+    Remove LLM-generated rules that violate ticket constraints.
+
+    Prompt instructions alone are not enough. The LLM can still output a broad
+    rule that conflicts with a narrow user ticket, so we enforce ticket_context
+    after parsing and before detector backfill.
+    """
     if not rules:
         return []
 
     if not isinstance(ticket_context, Mapping):
         return rules
 
+    problem_type = str(ticket_context.get("problem_type", "") or "").strip().lower()
+    strategy = str(ticket_context.get("resolution_strategy", "") or "").strip().lower()
+
     kept: List[ParsedRule] = []
     removed: List[str] = []
 
     for rule in rules:
         rule_text = str(getattr(rule, "rule", "") or "").strip()
-        if _rule_is_forbidden_by_ticket(rule_text, ticket_context):
-            removed.append(rule_text)
+        if not rule_text:
             continue
+
+        if _rule_is_forbidden_by_ticket(rule_text, ticket_context):
+            removed.append(f"{rule_text} (forbidden_by_ticket)")
+            continue
+
+        if _rule_violates_ticket_candidate_scope(
+            rule=rule_text,
+            ticket_context=ticket_context,
+            compact_signals=compact_signals,
+        ):
+            removed.append(f"{rule_text} (outside_ticket_candidate_scope)")
+            continue
+
+        if _rule_is_noise_for_problem_strategy(
+            rule=rule_text,
+            problem_type=problem_type,
+            strategy=strategy,
+            compact_signals=compact_signals,
+        ):
+            removed.append(f"{rule_text} (noise_for_problem_strategy)")
+            continue
+
         kept.append(rule)
 
     if removed:
         logger.warning(
-            "Removed %d LLM rule(s) forbidden by ticket_context: %s",
+            "Removed %d LLM rule(s) violating ticket_context/problem strategy: %s",
             len(removed),
             removed,
         )
@@ -355,10 +441,15 @@ def _select_detector_backfill_rules(
 
     sorted_candidates = sorted(
         [
-            candidate for candidate in candidates
+            candidate
+            for candidate in candidates
             if isinstance(candidate, Mapping)
         ],
-        key=_candidate_backfill_sort_key,
+        key=lambda candidate: _candidate_backfill_sort_key(
+            candidate=candidate,
+            problem_type=problem_type,
+            strategy=strategy,
+        ),
     )
 
     for candidate in sorted_candidates:
@@ -373,11 +464,35 @@ def _select_detector_backfill_rules(
             continue
 
         if _rule_is_forbidden_by_ticket(rule, ticket_context):
-            logger.info("Skipped detector backfill rule forbidden by ticket_context: %s", rule)
+            logger.info(
+                "Skipped detector backfill rule forbidden by ticket_context: %s",
+                rule,
+            )
+            continue
+
+        if not _candidate_allowed_by_ticket_scope(candidate, ticket_context):
+            logger.info(
+                "Skipped detector backfill rule outside ticket candidate scope: %s",
+                rule,
+            )
+            continue
+
+        if not _candidate_relevant_for_problem_strategy(
+            candidate=candidate,
+            problem_type=problem_type,
+            strategy=strategy,
+        ):
+            logger.info(
+                "Skipped detector backfill rule not relevant for problem strategy: %s",
+                rule,
+            )
             continue
 
         if _candidate_mentions_preserved_context(candidate, ticket_context):
-            logger.info("Skipped detector backfill rule because candidate overlaps preserve context: %s", rule)
+            logger.info(
+                "Skipped detector backfill rule because candidate overlaps preserve context: %s",
+                rule,
+            )
             continue
 
         if not _candidate_is_backfillable(candidate):
@@ -398,6 +513,216 @@ def _select_detector_backfill_rules(
     return selected
 
 
+def _rule_is_noise_for_problem_strategy(
+    rule: str,
+    problem_type: str,
+    strategy: str,
+    compact_signals: Optional[Dict[str, Any]],
+) -> bool:
+    """
+    Drop rules that are technically ad-related but irrelevant to the ticket type.
+
+    For anti_adblock_or_overlay, the goal is normally to remove the blocking
+    overlay/popup/close issue, not to clean all generic ads on the page.
+    """
+    if problem_type != "anti_adblock_or_overlay":
+        return False
+
+    if strategy != "remove_overlay_or_allow_required_resource":
+        return False
+
+    if _is_network_rule(rule):
+        return True
+
+    if _rule_is_overlay_relevant(rule, compact_signals):
+        return False
+
+    if _rule_is_generic_page_ad(rule, compact_signals):
+        return True
+
+    categories = _candidate_categories_for_rule(rule, compact_signals)
+
+    if categories and not any(
+        category in {"popup_overlay", "floating_ad"} for category in categories
+    ):
+        # Keep ad_container only when it looks modal/dialog/rewarded/close-related.
+        if "ad_container" in categories:
+            return not _rule_or_candidate_context_has_overlay_hint(rule, compact_signals)
+        return True
+
+    return False
+
+
+def _candidate_relevant_for_problem_strategy(
+    candidate: Mapping[str, Any],
+    problem_type: str,
+    strategy: str,
+) -> bool:
+    """
+    Decide whether a detector candidate should be considered for auto-backfill
+    under the current ticket problem type/strategy.
+    """
+    if problem_type != "anti_adblock_or_overlay":
+        return True
+
+    if strategy != "remove_overlay_or_allow_required_resource":
+        return True
+
+    category = str(candidate.get("category", "") or "").strip().lower()
+
+    if category in {"popup_overlay", "floating_ad"}:
+        return True
+
+    if category == "ad_container":
+        return _candidate_has_overlay_relevant_context(candidate)
+
+    # For anti-adblock/overlay, avoid automatically appending network/iframe
+    # rules unless future ticket_context explicitly asks for them.
+    return False
+
+
+def _candidate_has_overlay_relevant_context(candidate: Mapping[str, Any]) -> bool:
+    text = _candidate_text(candidate)
+    normalized = _normalize_human_text(text)
+
+    if _text_contains_any_hint(normalized, OVERLAY_RELEVANT_HINTS):
+        return True
+
+    selector = str(candidate.get("selector", "") or "").strip().lower()
+    rule = str(candidate.get("suggested_rule", "") or "").strip().lower()
+
+    return (
+        "ad-content" in selector
+        or "ad-content" in rule
+        or "sticky_ads" in selector
+        or "sticky_ads" in rule
+    )
+
+
+def _rule_is_overlay_relevant(
+    rule: str,
+    compact_signals: Optional[Dict[str, Any]],
+) -> bool:
+    selector = _cosmetic_selector(rule)
+    normalized_rule = _normalize_human_text(rule)
+    normalized_selector = _normalize_human_text(selector)
+
+    if _text_contains_any_hint(normalized_rule, OVERLAY_RELEVANT_HINTS):
+        return True
+
+    if _text_contains_any_hint(normalized_selector, OVERLAY_RELEVANT_HINTS):
+        return True
+
+    if _rule_or_candidate_context_has_overlay_hint(rule, compact_signals):
+        return True
+
+    return False
+
+
+def _rule_or_candidate_context_has_overlay_hint(
+    rule: str,
+    compact_signals: Optional[Dict[str, Any]],
+) -> bool:
+    if not compact_signals or not isinstance(compact_signals, Mapping):
+        return False
+
+    candidates = compact_signals.get("ad_candidates", [])
+    if not isinstance(candidates, list):
+        return False
+
+    normalized_rule = _normalize_rule_for_ticket_compare(rule)
+    rule_selector = ""
+    if "##" in normalized_rule:
+        rule_selector = normalized_rule.split("##", 1)[1].strip()
+
+    for candidate in candidates:
+        if not isinstance(candidate, Mapping):
+            continue
+
+        suggested_rule = _normalize_rule_for_ticket_compare(
+            candidate.get("suggested_rule", "")
+        )
+        selector = _normalize_rule_for_ticket_compare(candidate.get("selector", ""))
+
+        if suggested_rule != normalized_rule and (
+            not rule_selector or selector != rule_selector
+        ):
+            continue
+
+        if _candidate_has_overlay_relevant_context(candidate):
+            return True
+
+    return False
+
+
+def _rule_is_generic_page_ad(
+    rule: str,
+    compact_signals: Optional[Dict[str, Any]],
+) -> bool:
+    text = _normalize_human_text(rule)
+
+    if _text_contains_any_hint(text, GENERIC_PAGE_AD_HINTS):
+        return True
+
+    if not compact_signals or not isinstance(compact_signals, Mapping):
+        return False
+
+    candidates = compact_signals.get("ad_candidates", [])
+    if not isinstance(candidates, list):
+        return False
+
+    normalized_rule = _normalize_rule_for_ticket_compare(rule)
+    rule_selector = ""
+    if "##" in normalized_rule:
+        rule_selector = normalized_rule.split("##", 1)[1].strip()
+
+    for candidate in candidates:
+        if not isinstance(candidate, Mapping):
+            continue
+
+        suggested_rule = _normalize_rule_for_ticket_compare(
+            candidate.get("suggested_rule", "")
+        )
+        selector = _normalize_rule_for_ticket_compare(candidate.get("selector", ""))
+
+        if suggested_rule != normalized_rule and (
+            not rule_selector or selector != rule_selector
+        ):
+            continue
+
+        candidate_text = _normalize_human_text(_candidate_text(candidate))
+
+        if _text_contains_any_hint(candidate_text, GENERIC_PAGE_AD_HINTS):
+            return True
+
+        parent_chain = candidate.get("parent_chain", [])
+        if isinstance(parent_chain, list):
+            parent_text = _normalize_human_text(str(parent_chain))
+            if _text_contains_any_hint(parent_text, GENERIC_PAGE_AD_HINTS):
+                return True
+
+    return False
+
+
+def _candidate_text(candidate: Mapping[str, Any]) -> str:
+    text = " ".join(
+        str(candidate.get(key, "") or "")
+        for key in (
+            "suggested_rule",
+            "selector",
+            "reason",
+            "element_snippet",
+            "domain",
+        )
+    )
+
+    parent_chain = candidate.get("parent_chain", [])
+    if isinstance(parent_chain, list):
+        text += " " + " ".join(str(item) for item in parent_chain)
+
+    return text
+
+
 def _rule_is_forbidden_by_ticket(rule: str, ticket_context: Mapping[str, Any]) -> bool:
     forbidden_rules = _ticket_forbidden_rules(ticket_context)
     if not forbidden_rules:
@@ -415,7 +740,6 @@ def _rule_is_forbidden_by_ticket(rule: str, ticket_context: Mapping[str, Any]) -
         if normalized_rule == normalized_forbidden:
             return True
 
-        # Allow simple wildcard-style deny entries, e.g. "rophim10.live##div.swiper*".
         if "*" in normalized_forbidden:
             pattern = re.escape(normalized_forbidden).replace("\\*", ".*")
             if re.fullmatch(pattern, normalized_rule):
@@ -425,15 +749,205 @@ def _rule_is_forbidden_by_ticket(rule: str, ticket_context: Mapping[str, Any]) -
 
 
 def _ticket_forbidden_rules(ticket_context: Mapping[str, Any]) -> List[str]:
-    hints = ticket_context.get("validation_hints", {})
-    if not isinstance(hints, Mapping):
-        return []
+    hints = _ticket_validation_hints(ticket_context)
 
     result: List[str] = []
     for key in ("must_not_generate_rules", "forbidden_rules", "disallowed_rules"):
         result.extend(_as_string_list(hints.get(key, [])))
 
-    return result
+    return _dedupe_strings(result)
+
+
+def _rule_violates_ticket_candidate_scope(
+    rule: str,
+    ticket_context: Mapping[str, Any],
+    compact_signals: Optional[Dict[str, Any]],
+) -> bool:
+    """
+    Return True when a generated rule is outside the ticket candidate scope.
+
+    This supports two levels:
+    1. Exact detector mapping:
+       If the rule maps to an ad_candidate category, enforce allowed/disallowed.
+    2. Heuristic fallback:
+       If the rule does not map to a candidate but clearly looks like a network
+       block or iframe block, still enforce disallowed categories.
+    """
+    if not isinstance(ticket_context, Mapping):
+        return False
+
+    allowed = _ticket_allowed_candidate_categories(ticket_context)
+    disallowed = _ticket_disallowed_candidate_categories(ticket_context)
+
+    if not allowed and not disallowed:
+        return False
+
+    categories = _candidate_categories_for_rule(rule, compact_signals)
+    inferred_categories = _infer_candidate_categories_from_rule(rule)
+
+    for category in inferred_categories:
+        if category not in categories:
+            categories.append(category)
+
+    if any(category in disallowed for category in categories):
+        return True
+
+    if allowed and categories:
+        return not any(category in allowed for category in categories)
+
+    if allowed and not categories:
+        if _is_network_rule(rule):
+            return "ad_network_request" not in allowed
+
+    return False
+
+
+def _candidate_allowed_by_ticket_scope(
+    candidate: Mapping[str, Any],
+    ticket_context: Mapping[str, Any],
+) -> bool:
+    """
+    Return whether a detector candidate is allowed to be auto-appended for this
+    ticket scope.
+    """
+    if not isinstance(ticket_context, Mapping):
+        return True
+
+    allowed = _ticket_allowed_candidate_categories(ticket_context)
+    disallowed = _ticket_disallowed_candidate_categories(ticket_context)
+
+    if not allowed and not disallowed:
+        return True
+
+    category = str(candidate.get("category", "") or "").strip().lower()
+
+    if category and category in disallowed:
+        return False
+
+    if allowed:
+        if not category:
+            return False
+        return category in allowed
+
+    return True
+
+
+def _candidate_categories_for_rule(
+    rule: str,
+    compact_signals: Optional[Dict[str, Any]],
+) -> List[str]:
+    """
+    Find detector candidate categories that produced or match this rule.
+    """
+    if not compact_signals or not isinstance(compact_signals, Mapping):
+        return []
+
+    candidates = compact_signals.get("ad_candidates", [])
+    if not isinstance(candidates, list):
+        return []
+
+    normalized_rule = _normalize_rule_for_ticket_compare(rule)
+    if not normalized_rule:
+        return []
+
+    rule_selector = ""
+    if "##" in normalized_rule:
+        rule_selector = normalized_rule.split("##", 1)[1].strip()
+
+    categories: List[str] = []
+
+    for candidate in candidates:
+        if not isinstance(candidate, Mapping):
+            continue
+
+        category = str(candidate.get("category", "") or "").strip().lower()
+        if not category:
+            continue
+
+        suggested_rule = _normalize_rule_for_ticket_compare(
+            candidate.get("suggested_rule", "")
+        )
+        selector = _normalize_rule_for_ticket_compare(
+            candidate.get("selector", "")
+        )
+
+        if suggested_rule and suggested_rule == normalized_rule:
+            categories.append(category)
+            continue
+
+        if rule_selector and selector and selector == rule_selector:
+            categories.append(category)
+            continue
+
+    return _dedupe_strings(categories)
+
+
+def _infer_candidate_categories_from_rule(rule: str) -> List[str]:
+    """
+    Heuristically infer detector-like categories from a rule.
+
+    This is intentionally coarse and only used as a safety guard for ticket scope.
+    Detector-provided candidate categories remain the stronger signal.
+    """
+    text = str(rule or "").strip().lower()
+    if not text:
+        return []
+
+    categories: List[str] = []
+
+    if _is_network_rule(text):
+        categories.append("ad_network_request")
+        return categories
+
+    selector = _cosmetic_selector(text)
+
+    if not selector:
+        return categories
+
+    selector_text = _normalize_human_text(selector)
+
+    if _text_contains_any_hint(selector_text, IFRAME_HINTS):
+        categories.append("ad_iframe")
+
+    if _text_contains_any_hint(selector_text, POPUP_OVERLAY_HINTS):
+        categories.append("popup_overlay")
+
+    if _text_contains_any_hint(selector_text, FLOATING_HINTS):
+        categories.append("floating_ad")
+
+    if _text_has_ad_hint(selector_text):
+        categories.append("ad_container")
+
+    return _dedupe_strings(categories)
+
+
+def _ticket_allowed_candidate_categories(
+    ticket_context: Mapping[str, Any],
+) -> List[str]:
+    hints = _ticket_validation_hints(ticket_context)
+    return _normalize_category_list(hints.get("allowed_candidate_categories", []))
+
+
+def _ticket_disallowed_candidate_categories(
+    ticket_context: Mapping[str, Any],
+) -> List[str]:
+    hints = _ticket_validation_hints(ticket_context)
+    return _normalize_category_list(hints.get("disallowed_candidate_categories", []))
+
+
+def _ticket_validation_hints(ticket_context: Mapping[str, Any]) -> Mapping[str, Any]:
+    hints = ticket_context.get("validation_hints", {})
+    if isinstance(hints, Mapping):
+        return hints
+    return {}
+
+
+def _normalize_category_list(value: Any) -> List[str]:
+    return [
+        item.strip().lower()
+        for item in _as_string_list(value)
+        if item.strip()
+    ]
 
 
 def _candidate_mentions_preserved_context(
@@ -444,15 +958,7 @@ def _candidate_mentions_preserved_context(
     if not protected_terms:
         return False
 
-    candidate_text = " ".join(
-        str(candidate.get(key, "") or "")
-        for key in ("suggested_rule", "selector", "reason", "element_snippet")
-    )
-
-    parent_chain = candidate.get("parent_chain", [])
-    if isinstance(parent_chain, list):
-        candidate_text += " " + " ".join(str(item) for item in parent_chain)
-
+    candidate_text = _candidate_text(candidate)
     normalized_candidate_text = _normalize_human_text(candidate_text)
 
     for term in protected_terms:
@@ -469,9 +975,6 @@ def _ticket_preserve_terms(ticket_context: Mapping[str, Any]) -> List[str]:
     terms: List[str] = []
     terms.extend(_as_string_list(ticket_context.get("target_to_preserve", [])))
 
-    # Region-level preserve metadata is owned by region_focus, but the generator
-    # can still use its human-readable labels/text as a safety signal when
-    # deciding whether to auto-append detector rules.
     for key in ("preserve_regions", "focus_selectors"):
         terms.extend(_extract_region_terms(ticket_context.get(key)))
 
@@ -486,20 +989,7 @@ def _ticket_preserve_terms(ticket_context: Mapping[str, Any]) -> List[str]:
         for key in ("allowed_ad_region", "allowed_regions", "preserve_regions"):
             terms.extend(_extract_region_terms(hints.get(key)))
 
-    # Deduplicate while preserving order.
-    seen = set()
-    unique: List[str] = []
-    for term in terms:
-        cleaned = str(term or "").strip()
-        if not cleaned:
-            continue
-        normalized = _normalize_human_text(cleaned)
-        if normalized in seen:
-            continue
-        seen.add(normalized)
-        unique.append(cleaned)
-
-    return unique
+    return _dedupe_strings(terms)
 
 
 def _extract_region_terms(value: Any) -> List[str]:
@@ -550,48 +1040,20 @@ def _region_value_looks_preserved(value: Any) -> bool:
     return any(token in mode for token in ("preserve", "allow", "protect", "safe"))
 
 
-def _as_string_list(value: Any) -> List[str]:
-    if value is None:
-        return []
-
-    if isinstance(value, str):
-        return [
-            item.strip()
-            for item in re.split(r"[,;\n]+", value)
-            if item.strip()
-        ]
-
-    if isinstance(value, list):
-        return [
-            str(item).strip()
-            for item in value
-            if str(item).strip()
-        ]
-
-    return [str(value).strip()] if str(value).strip() else []
-
-
-def _normalize_rule_for_ticket_compare(rule: Any) -> str:
-    return str(rule or "").strip().lower()
-
-
-def _normalize_human_text(value: Any) -> str:
-    text = str(value or "").lower()
-    text = unicodedata.normalize("NFKD", text)
-    text = "".join(ch for ch in text if not unicodedata.combining(ch))
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def _candidate_backfill_sort_key(candidate: Mapping[str, Any]) -> tuple[int, int, int, str]:
+def _candidate_backfill_sort_key(
+    candidate: Mapping[str, Any],
+    problem_type: str,
+    strategy: str,
+) -> tuple[int, int, int, str]:
     category = str(candidate.get("category", "") or "").strip().lower()
     confidence = str(candidate.get("confidence", "") or "").strip().lower()
     rule = str(candidate.get("suggested_rule", "") or "")
 
     confidence_rank = {
-        "high": 0,
         "very_high": 0,
         "very-high": 0,
         "strong": 0,
+        "high": 0,
         "medium": 1,
         "med": 1,
         "moderate": 1,
@@ -599,6 +1061,16 @@ def _candidate_backfill_sort_key(candidate: Mapping[str, Any]) -> tuple[int, int
     }.get(confidence, 9)
 
     category_rank = AUTO_APPEND_CATEGORY_RANK.get(category, 99)
+
+    if problem_type == "anti_adblock_or_overlay":
+        if category == "popup_overlay":
+            category_rank = 0
+        elif category == "floating_ad":
+            category_rank = 1
+        elif category == "ad_container" and _candidate_has_overlay_relevant_context(candidate):
+            category_rank = 2
+        elif category == "ad_container":
+            category_rank = 50
 
     narrow_network_rank = 0 if _looks_like_narrow_network_rule(rule) else 1
 
@@ -620,18 +1092,17 @@ def _candidate_is_backfillable(candidate: Mapping[str, Any]) -> bool:
     if confidence in {"high", "very_high", "very-high", "strong"}:
         return category in {
             "popup_overlay",
-            "ad_network_request",
-            "ad_container",
             "floating_ad",
+            "ad_container",
+            "ad_network_request",
             "ad_iframe",
         }
 
-    # Allow medium candidates only when the detector category is still very targeted.
     if confidence in {"medium", "med", "moderate"}:
         return category in {
             "popup_overlay",
-            "ad_container",
             "floating_ad",
+            "ad_container",
         }
 
     return False
@@ -685,25 +1156,28 @@ def _is_safe_auto_cosmetic_rule(
         return False
 
     if selector_lower.startswith(("#", ".")):
-        # .adserver / #ad-modal style selectors are okay only if ad/overlay-like.
-        return _text_has_ad_hint(selector_lower)
+        return _text_has_ad_hint(selector_lower) or _text_has_overlay_hint(selector_lower)
 
     if selector_lower.startswith("div.") or selector_lower.startswith("div#"):
-        return _text_has_ad_hint(selector_lower)
+        return _text_has_ad_hint(selector_lower) or _text_has_overlay_hint(selector_lower)
 
     if selector_lower.startswith("section.") or selector_lower.startswith("section#"):
-        return _text_has_ad_hint(selector_lower)
+        return _text_has_ad_hint(selector_lower) or _text_has_overlay_hint(selector_lower)
 
     if selector_lower.startswith("aside.") or selector_lower.startswith("aside#"):
-        return _text_has_ad_hint(selector_lower)
+        return _text_has_ad_hint(selector_lower) or _text_has_overlay_hint(selector_lower)
+
+    if selector_lower.startswith("button."):
+        return _text_has_ad_hint(selector_lower) or _text_has_overlay_hint(selector_lower)
+
+    if selector_lower.startswith("span."):
+        return _text_has_ad_hint(selector_lower) or _text_has_overlay_hint(selector_lower)
 
     if selector_lower.startswith("body >"):
-        # Structural selectors are only safe when the detector says this is a
-        # fullscreen overlay. Otherwise they are too fragile.
         category = str(candidate.get("category", "") or "").strip().lower()
         return category == "popup_overlay"
 
-    return _text_has_ad_hint(selector_lower)
+    return _text_has_ad_hint(selector_lower) or _text_has_overlay_hint(selector_lower)
 
 
 def _is_safe_auto_network_rule(
@@ -729,7 +1203,7 @@ def _is_safe_auto_network_rule(
     if _host_in_domains(host, SAFE_DOMAINS):
         return False
 
-    if text in {
+    if page_domain and text in {
         f"||{page_domain}^",
         f"||www.{page_domain}^",
     }:
@@ -743,11 +1217,9 @@ def _is_safe_auto_network_rule(
         or f"domain=www.{page_domain}" in lower
     )
 
-    # Narrow path rules with explicit domain scope are safest.
     if _looks_like_narrow_network_rule(text) and has_domain_scope:
         return _text_has_ad_hint(lower)
 
-    # Known detector ad_network_request can still be allowed if it has an ad hint.
     category = str(candidate.get("category", "") or "").strip().lower()
     if category == "ad_network_request" and _text_has_ad_hint(lower):
         return True
@@ -767,6 +1239,23 @@ def _looks_like_narrow_network_rule(rule: str) -> bool:
         and "$" in text
         and "domain=" in text
     )
+
+
+def _is_network_rule(rule: str) -> bool:
+    text = str(rule or "").strip()
+    return text.startswith("||") or text.startswith("@@||")
+
+
+def _cosmetic_selector(rule: str) -> str:
+    text = str(rule or "").strip()
+
+    if "##" in text:
+        return text.split("##", 1)[1].strip()
+
+    if "#@#" in text:
+        return text.split("#@#", 1)[1].strip()
+
+    return ""
 
 
 def _network_rule_host(rule: str) -> str:
@@ -810,7 +1299,33 @@ def _cosmetic_domain_mentions_page_domain(domain_part: str, page_domain: str) ->
 def _text_has_ad_hint(text: str) -> bool:
     value = str(text or "").lower()
 
-    return any(hint in value for hint in AD_LIKE_RULE_HINTS)
+    if any(path_hint in value for path_hint in AD_HINT_PATHS):
+        return True
+
+    return _text_contains_any_hint(value, AD_HINT_WORDS)
+
+
+def _text_has_overlay_hint(text: str) -> bool:
+    value = str(text or "").lower()
+    return _text_contains_any_hint(value, POPUP_OVERLAY_HINTS + FLOATING_HINTS)
+
+
+def _text_contains_any_hint(text: str, hints: tuple[str, ...]) -> bool:
+    value = str(text or "").lower()
+
+    for hint in hints:
+        escaped = re.escape(hint.lower())
+
+        if "/" in hint:
+            if hint.lower() in value:
+                return True
+            continue
+
+        pattern = rf"(^|[^a-z0-9]){escaped}([^a-z0-9]|$)"
+        if re.search(pattern, value):
+            return True
+
+    return False
 
 
 def _dedupe_parsed_rules(rules: List[ParsedRule]) -> List[ParsedRule]:
@@ -827,6 +1342,58 @@ def _dedupe_parsed_rules(rules: List[ParsedRule]) -> List[ParsedRule]:
         unique.append(rule)
 
     return unique
+
+
+def _dedupe_strings(values: List[str]) -> List[str]:
+    result: List[str] = []
+    seen: set[str] = set()
+
+    for value in values:
+        cleaned = str(value or "").strip()
+        if not cleaned:
+            continue
+
+        key = cleaned.lower()
+        if key in seen:
+            continue
+
+        seen.add(key)
+        result.append(cleaned)
+
+    return result
+
+
+def _as_string_list(value: Any) -> List[str]:
+    if value is None:
+        return []
+
+    if isinstance(value, str):
+        return [
+            item.strip()
+            for item in re.split(r"[,;\n]+", value)
+            if item.strip()
+        ]
+
+    if isinstance(value, list):
+        return [
+            str(item).strip()
+            for item in value
+            if str(item).strip()
+        ]
+
+    return [str(value).strip()] if str(value).strip() else []
+
+
+def _normalize_rule_for_ticket_compare(rule: Any) -> str:
+    return str(rule or "").strip().lower()
+
+
+def _normalize_human_text(value: Any) -> str:
+    text = str(value or "").lower()
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = text.replace("đ", "d")
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def _extract_llm_text(llm_response: Any) -> str:
@@ -970,7 +1537,8 @@ def _extract_signals(crawl_result: Dict[str, Any]) -> Dict[str, Any]:
         )
 
     signals["third_party"] = [
-        item for item in signals["third_party"]
+        item
+        for item in signals["third_party"]
         if item.get("domain")
     ]
 

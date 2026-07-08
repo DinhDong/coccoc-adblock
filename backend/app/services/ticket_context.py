@@ -1,4 +1,5 @@
 import re
+import unicodedata
 from typing import Any, Dict, List, Mapping
 
 from app.services.problem_policy import (
@@ -19,30 +20,22 @@ def normalize_ticket_context(raw_context: Any) -> Dict[str, Any]:
     """
     Normalize user/CMS ticket data into a compact JSON-safe context object.
 
+    Design goal:
+    - Users should only need to provide simple fields:
+        platform, problem_type, request, description, steps, actual, expected.
+    - Internal/debug fields remain optional:
+        target_to_block, target_to_preserve, current_rules, matched_rules,
+        blocked_resources, validation_hints.
+    - When those optional fields are missing, this module infers safe defaults
+      from the user-facing text.
+
     Important behavior:
-    - If no ticket_context is provided, fallback to legacy ad-blocking mode:
-        problem_type = specific_ad_not_blocked
-        resolution_strategy = block_visible_ad
-
-      This keeps backward compatibility with the old pipeline:
-        crawl URL -> detect ad signals -> generate block/hide rules.
-
-    - If the context is already the normalized legacy default, keep:
-        evidence_level = legacy_no_ticket_context
-
-      This prevents a second normalization pass from relabeling it as:
-        url_only_best_effort
-
-    - Problem policy is centralized in:
-        app.services.problem_policy
-
-      So adding a new problem type should usually be done there first.
+    - Empty context -> legacy no-ticket mode.
+    - URL-only/basic context -> best-effort ticket-aware mode.
+    - "popup/floating only" tickets are narrowed automatically so rule generation
+      can avoid broad visible-ad behavior.
     """
     context = _coerce_dict(raw_context)
-
-    # Focus region is orthogonal to problem classification: it scopes which
-    # part of the page the crawler analyses. Extract it up front so it survives
-    # even when the rest of the context falls back to the legacy default.
     focus_region = _extract_focus_region(context)
 
     if _is_empty_context(context) or _looks_like_legacy_default_context(context):
@@ -74,14 +67,6 @@ def normalize_ticket_context(raw_context: Any) -> Dict[str, Any]:
         combined_text=combined_text,
     )
 
-    # If context exists but does not give enough information to infer a ticket
-    # type, fall back to legacy ad-blocking behavior.
-    #
-    # Example:
-    #   {"platform": "android"}
-    #
-    # This should still behave like:
-    #   crawl -> detect ad signals -> generate block/hide rules.
     if problem_type == "unknown" and not combined_text:
         problem_type = LEGACY_DEFAULT_PROBLEM_TYPE
 
@@ -109,7 +94,6 @@ def normalize_ticket_context(raw_context: Any) -> Dict[str, Any]:
         context,
         keys=("current_rules", "existing_rules", "active_rules"),
     )
-
     matched_rules = _normalize_matched_rules(context.get("matched_rules", []))
     blocked_resources = _normalize_blocked_resources(
         context.get("blocked_resources", [])
@@ -150,8 +134,7 @@ def normalize_ticket_context(raw_context: Any) -> Dict[str, Any]:
 def infer_problem_type(text: str) -> str:
     """
     Infer the ticket type from user-facing ticket text.
-
-    The returned type is normalized through problem_policy aliases.
+    Explicit problem_type from user/CMS still wins in normalize_ticket_context().
     """
     normalized = _normalize_for_matching(text)
 
@@ -167,8 +150,8 @@ def infer_problem_type(text: str) -> str:
         r"\bthumbnail\b",
         r"\bavatar\b",
         r"\blazyload\b",
-        r"\bảnh\b",
-        r"không\s+hiện\s+ảnh",
+        r"\banh\b",
+        r"khong\s+hien\s+anh",
         r"doesn'?t\s+display\s+images",
         r"not\s+display\s+images",
         r"images?\s+(?:are\s+)?(?:not|missing|hidden|blank|broken)",
@@ -183,7 +166,7 @@ def infer_problem_type(text: str) -> str:
         r"\bmedia\b",
         r"\bm3u8\b",
         r"\bmp4\b",
-        r"không\s+xem\s+được",
+        r"khong\s+xem\s+duoc",
         r"video\s+(?:is\s+)?(?:not|missing|broken|blank)",
         r"player\s+(?:is\s+)?(?:not|missing|broken|blank)",
     ]
@@ -202,9 +185,9 @@ def infer_problem_type(text: str) -> str:
         r"\bhidden\b",
         r"\bhide\b",
         r"\bmissing\b",
-        r"\bẩn\b",
-        r"không\s+thấy",
-        r"không\s+hiển\s+thị",
+        r"\ban\b",
+        r"khong\s+thay",
+        r"khong\s+hien\s+thi",
         r"search\s*&\s*menu",
     ]
     if _matches_any(normalized, ui_hidden_patterns):
@@ -222,9 +205,9 @@ def infer_problem_type(text: str) -> str:
         r"\boverlay\b",
         r"\bpopup\b",
         r"\binterstitial\b",
-        r"không\s+đóng",
-        r"không\s+tắt",
-        r"tắt\s+adblock",
+        r"khong\s+dong",
+        r"khong\s+tat",
+        r"tat\s+adblock",
     ]
     if _matches_any(normalized, anti_adblock_patterns):
         return normalize_problem_type("anti_adblock_or_overlay")
@@ -236,7 +219,7 @@ def infer_problem_type(text: str) -> str:
         r"\bnot\s+block\b",
         r"\bstill\s+show",
         r"\bstill\s+visible",
-        r"quảng\s+cáo\s+(?:vẫn\s+)?(?:hiện|xuất\s+hiện)",
+        r"quang\s+cao\s+(?:van\s+)?(?:hien|xuat\s+hien)",
     ]
     if _matches_any(normalized, ad_not_blocked_patterns):
         return normalize_problem_type("specific_ad_not_blocked")
@@ -247,8 +230,8 @@ def infer_problem_type(text: str) -> str:
         r"\bwhite\s+screen\b",
         r"\bnot\s+working\b",
         r"\bdoesn'?t\s+work\b",
-        r"không\s+hoạt\s+động",
-        r"lỗi",
+        r"khong\s+hoat\s+dong",
+        r"\bloi\b",
     ]
     if _matches_any(normalized, broken_content_patterns):
         return normalize_problem_type("content_broken")
@@ -258,34 +241,195 @@ def infer_problem_type(text: str) -> str:
 
 def infer_targets_to_block(problem_type: str, text: str) -> List[str]:
     """
-    Get default block targets from centralized problem policy.
+    Infer target_to_block from simple user-facing text.
+
+    Example:
+      User only provides:
+        "Block popup and floating ads only"
+
+      We enrich it into popup/modal/floating targets, but we avoid adding
+      site-specific selectors or rules here.
     """
     normalized_problem_type = normalize_problem_type(problem_type, fallback="unknown")
+
+    if _is_popup_floating_only_ticket(normalized_problem_type, text):
+        return [
+            "popup modal",
+            "popup ad content",
+            "popup ad container",
+            "popup image/ad creative container",
+            "modal content container",
+            "modal backdrop",
+            "fullscreen overlay",
+            "floating ad container",
+            "sticky floating ad",
+        ]
+
     return get_default_targets_to_block(normalized_problem_type)
 
 
 def infer_targets_to_preserve(problem_type: str, text: str) -> List[str]:
     """
-    Get default preserve targets from centralized problem policy.
+    Infer target_to_preserve from simple user-facing text.
+
+    If a ticket says popup/floating only, preserve normal page content by
+    default so the generator does not treat every ad-like signal as in-scope.
     """
     normalized_problem_type = normalize_problem_type(problem_type, fallback="unknown")
-    return get_default_targets_to_preserve(normalized_problem_type)
+    defaults = get_default_targets_to_preserve(normalized_problem_type)
+
+    inferred: List[str] = []
+
+    if _is_popup_floating_only_ticket(normalized_problem_type, text):
+        inferred.extend(
+            [
+                "movie cards",
+                "main hero area",
+                "category/topic cards",
+                "navigation/header/search",
+                "footer",
+                "normal page content",
+            ]
+        )
+
+    if _mentions_do_not_block_banner_native_or_bookmaker(text):
+        inferred.extend(
+            [
+                "banner ads",
+                "native ads",
+                "bookmaker ads",
+                "sponsor/bookmaker sections",
+            ]
+        )
+
+    return _dedupe_strings(inferred + defaults)
 
 
 def infer_validation_hints(problem_type: str, text: str) -> Dict[str, Any]:
     """
-    Get default validation hints from centralized problem policy.
+    Infer generic internal validation/generation hints from user-facing text.
+
+    Users do not need to know rules/selectors. This function turns simple text
+    such as "popup/floating only" into generic scope hints.
+
+    Important:
+    - Do not put site-specific selectors, paths, or API routes here.
+    - Specific selectors/URLs should come from detector/extractor evidence.
+    - rule_generator can enforce these generic hints for LLM and detector backfill.
     """
     normalized_problem_type = normalize_problem_type(problem_type, fallback="unknown")
-    return get_default_validation_hints(normalized_problem_type)
+    hints = dict(get_default_validation_hints(normalized_problem_type))
+
+    if _is_popup_floating_only_ticket(normalized_problem_type, text):
+        hints = _merge_validation_hints(
+            hints,
+            {
+                "inferred_scope": "popup_floating_only",
+                "allowed_candidate_categories": [
+                    "popup_overlay",
+                    "floating_ad",
+                    "ad_container",
+                ],
+                "disallowed_candidate_categories": [
+                    "ad_network_request",
+                    "ad_iframe",
+                ],
+                "must_not_generate_rules": [
+                    "*adserver*",
+                ],
+            },
+        )
+
+    if _mentions_do_not_block_banner_native_or_bookmaker(text):
+        hints = _merge_validation_hints(
+            hints,
+            {
+                "must_not_generate_rules": [
+                    "*banner*",
+                    "*banners*",
+                    "*native*",
+                    "*bookmaker*",
+                    "*sponsor*",
+                    "*sponsored*",
+                ],
+            },
+        )
+
+    return hints
+
+
+def _is_popup_floating_only_ticket(problem_type: str, text: str) -> bool:
+    """
+    Detect tickets that intentionally limit scope to popup/modal/floating ads.
+    """
+    normalized_problem_type = normalize_problem_type(problem_type, fallback="unknown")
+    normalized_text = _normalize_for_matching(text)
+
+    if normalized_problem_type not in {
+        "specific_ad_not_blocked",
+        LEGACY_DEFAULT_PROBLEM_TYPE,
+        "anti_adblock_or_overlay",
+    }:
+        return False
+
+    popup_or_floating_patterns = [
+        r"\bpopup\b",
+        r"\bpop[-\s]?up\b",
+        r"\bmodal\b",
+        r"\boverlay\b",
+        r"\bbackdrop\b",
+        r"\bfloating\b",
+        r"\bsticky\s+floating\b",
+        r"\bsticky\s+ad\b",
+        r"quang\s+cao\s+(?:popup|noi|dinh|float)",
+    ]
+
+    if not _matches_any(normalized_text, popup_or_floating_patterns):
+        return False
+
+    limiting_patterns = [
+        r"\bonly\b",
+        r"\bjust\b",
+        r"\bpopup\s*(?:/|and|&)?\s*floating\b",
+        r"\bfloating\s*(?:/|and|&)?\s*popup\b",
+        r"do\s+not\s+(?:try\s+to\s+)?block\s+all",
+        r"do\s+not\s+block\s+(?:banner|native|bookmaker)",
+        r"khong\s+block\s+tat\s+ca",
+        r"khong\s+chan\s+tat\s+ca",
+        r"chi\s+(?:block|chan)",
+    ]
+
+    preserve_non_popup_patterns = [
+        r"\bbanner\b",
+        r"\bnative\b",
+        r"\bbookmaker\b",
+        r"\bsponsor\b",
+        r"nha\s+cai",
+    ]
+
+    return (
+        _matches_any(normalized_text, limiting_patterns)
+        or _matches_any(normalized_text, preserve_non_popup_patterns)
+    )
+
+
+def _mentions_do_not_block_banner_native_or_bookmaker(text: str) -> bool:
+    normalized_text = _normalize_for_matching(text)
+
+    patterns = [
+        r"do\s+not\s+(?:try\s+to\s+)?block\s+(?:all\s+)?(?:banner|native|bookmaker|sponsor)",
+        r"do\s+not\s+block\s+.*(?:banner|native|bookmaker|sponsor)",
+        r"(?:banner|native|bookmaker|sponsor).*(?:should\s+remain|must\s+remain|preserve|keep)",
+        r"khong\s+(?:block|chan)\s+.*(?:banner|native|nha\s+cai|sponsor)",
+        r"giu\s+.*(?:banner|native|nha\s+cai|sponsor)",
+    ]
+
+    return _matches_any(normalized_text, patterns)
 
 
 def _legacy_no_ticket_context() -> Dict[str, Any]:
     """
     Default context for old behavior when no ticket context is supplied.
-
-    This keeps the pipeline backward-compatible:
-      URL only -> generate rules to block detected ad-related signals.
     """
     problem_type = LEGACY_DEFAULT_PROBLEM_TYPE
 
@@ -314,9 +458,6 @@ def _resolve_problem_type(
     raw_problem_type: Any,
     combined_text: str,
 ) -> str:
-    """
-    Resolve problem type from explicit ticket field first, then infer from text.
-    """
     raw_text = _clean_text(raw_problem_type)
 
     if raw_text:
@@ -325,8 +466,6 @@ def _resolve_problem_type(
         if normalized != "unknown":
             return normalized
 
-        # If the provided type is unknown but there is useful text, infer from
-        # ticket content instead of keeping unknown.
         if combined_text:
             inferred = infer_problem_type(combined_text)
             return normalize_problem_type(inferred, fallback="unknown")
@@ -341,12 +480,9 @@ def _extract_focus_region(context: Mapping[str, Any]) -> str:
     """
     Read the page region the crawler should actively scope to.
 
-    Accepts ``focus_region`` (preferred), ``focus`` (legacy shortcut), and
-    ``region_focus`` when it is a plain string. Structured ``region_focus`` is
-    only converted to a crawl-scoping focus when it explicitly describes a target
-    region. Preserve/allowed-region payloads are forwarded but not used to scope
-    crawling, because scoping to a preserved region would make the detector look
-    at the thing we are trying to keep.
+    Structured preserve/allowed region metadata is not converted into crawl
+    focus, because scoping to a preserved region would make the detector inspect
+    the thing we want to keep.
     """
     for key in ("focus_region", "focus"):
         value = context.get(key, "")
@@ -354,12 +490,16 @@ def _extract_focus_region(context: Mapping[str, Any]) -> str:
             return _clean_text(value)
 
     region_focus = context.get("region_focus", "")
+
     if isinstance(region_focus, str) and region_focus.strip():
         return _clean_text(region_focus)
 
     if isinstance(region_focus, Mapping):
         mode = _normalize_region_mode(region_focus)
-        if mode and any(token in mode for token in ("preserve", "allow", "protect", "safe")):
+        if mode and any(
+            token in mode
+            for token in ("preserve", "allow", "protect", "safe")
+        ):
             return ""
 
         for key in ("focus_region", "region", "target", "description", "name"):
@@ -395,9 +535,6 @@ def _coerce_dict(value: Any) -> Dict[str, Any]:
 
 
 def _is_empty_context(context: Mapping[str, Any]) -> bool:
-    """
-    Return True when no useful ticket context was provided.
-    """
     if not context:
         return True
 
@@ -418,6 +555,9 @@ def _is_empty_context(context: Mapping[str, Any]) -> bool:
         "active_rules",
         "matched_rules",
         "blocked_resources",
+        "region_focus",
+        "focus_region",
+        "focus",
     ]
 
     for key in meaningful_keys:
@@ -464,8 +604,6 @@ def _looks_like_legacy_default_context(context: Mapping[str, Any]) -> bool:
     if problem_type and problem_type not in {"unknown", LEGACY_DEFAULT_PROBLEM_TYPE}:
         return False
 
-    # If the user/report has actual text fields, this is explicit context,
-    # not the legacy empty fallback.
     text_fields = [
         "platform",
         "request",
@@ -484,7 +622,6 @@ def _looks_like_legacy_default_context(context: Mapping[str, Any]) -> bool:
     if isinstance(steps, str) and steps.strip():
         return False
 
-    # If debug evidence exists, it is not legacy-empty context.
     for key in (
         "current_rules",
         "existing_rules",
@@ -538,7 +675,21 @@ def _merge_validation_hints(
     merged = _make_json_safe(dict(inferred_hints))
 
     for key, value in provided_hints.items():
-        merged[str(key)] = _make_json_safe(value)
+        if key == "must_not_generate_rules":
+            merged[key] = _dedupe_strings(
+                _normalize_string_list(merged.get(key, []))
+                + _normalize_string_list(value)
+            )
+        elif (
+            key in {"allowed_candidate_categories", "disallowed_candidate_categories"}
+            and key in merged
+        ):
+            merged[key] = _dedupe_strings(
+                _normalize_string_list(merged.get(key, []))
+                + _normalize_string_list(value)
+            )
+        else:
+            merged[str(key)] = _make_json_safe(value)
 
     return merged
 
@@ -553,7 +704,7 @@ def _clean_text(value: Any) -> str:
 
 
 def _normalize_platform(value: Any) -> str:
-    text = _clean_text(value).lower()
+    text = _normalize_for_matching(value)
 
     if text in {"ios", "iphone", "ipad"}:
         return "ios"
@@ -653,14 +804,6 @@ def _collect_rule_list(
 def _normalize_matched_rules(value: Any) -> List[Dict[str, Any]]:
     """
     Normalize matched/suspect rule evidence while preserving useful notes.
-
-    CMS/debug payloads often send either:
-      ["site.com##.ad"]
-    or:
-      [{"rule": "site.com##.ad", "problem": "too broad"}]
-
-    Keeping the structured note is important because prompt_builder can then tell
-    the LLM why a matched rule should be avoided or replaced.
     """
     if value is None:
         return []
@@ -711,37 +854,6 @@ def _normalize_matched_rules(value: Any) -> List[Dict[str, Any]]:
     return []
 
 
-def _copy_passthrough_fields(
-    normalized: Dict[str, Any],
-    context: Mapping[str, Any],
-) -> None:
-    """
-    Preserve integration fields that this module should forward but not interpret.
-
-    This keeps ticket_context compatible with teammate-owned features such as
-    region_focus without implementing that feature here.
-    """
-    for key in (
-        "ticket_id",
-        "issue_id",
-        "report_id",
-        "severity",
-        "browser_version",
-        "os_version",
-        "device",
-        "screenshot_url",
-        "notes",
-        "region_focus",
-        "focus_selectors",
-        "preserve_regions",
-        "target_regions",
-        "allowed_regions",
-        "blocked_regions",
-    ):
-        if key in context:
-            normalized[key] = _make_json_safe(context.get(key))
-
-
 def _normalize_blocked_resources(value: Any) -> List[Dict[str, Any]]:
     """
     Normalize blocked resource records.
@@ -786,16 +898,45 @@ def _normalize_blocked_resources(value: Any) -> List[Dict[str, Any]]:
     return []
 
 
+def _copy_passthrough_fields(
+    normalized: Dict[str, Any],
+    context: Mapping[str, Any],
+) -> None:
+    """
+    Preserve integration fields that this module should forward but not interpret.
+
+    This keeps ticket_context compatible with teammate-owned features such as
+    region_focus without implementing that feature here.
+    """
+    for key in (
+        "ticket_id",
+        "issue_id",
+        "report_id",
+        "severity",
+        "browser_version",
+        "os_version",
+        "device",
+        "screenshot_url",
+        "notes",
+        "region_focus",
+        "focus_selectors",
+        "preserve_regions",
+        "target_regions",
+        "allowed_regions",
+        "blocked_regions",
+    ):
+        if key in context:
+            normalized[key] = _make_json_safe(context.get(key))
+
+
 def _infer_evidence_level(
     current_rules: List[str],
-    matched_rules: List[str],
+    matched_rules: List[Dict[str, Any]],
     blocked_resources: List[Dict[str, Any]],
     has_explicit_context: bool,
 ) -> str:
     """
     Describe how strong the generation evidence is.
-
-    This is helpful for moderator review.
     """
     if matched_rules or blocked_resources:
         return "observed_rule_or_resource_context"
@@ -809,8 +950,31 @@ def _infer_evidence_level(
     return "legacy_no_ticket_context"
 
 
-def _normalize_for_matching(text: str) -> str:
-    return _clean_text(text).lower()
+def _dedupe_strings(values: List[str]) -> List[str]:
+    result: List[str] = []
+    seen: set[str] = set()
+
+    for value in values:
+        cleaned = _clean_text(value)
+        if not cleaned:
+            continue
+
+        key = cleaned.lower()
+        if key in seen:
+            continue
+
+        seen.add(key)
+        result.append(cleaned)
+
+    return result
+
+
+def _normalize_for_matching(value: Any) -> str:
+    text = _clean_text(value).lower()
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = text.replace("đ", "d")
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def _matches_any(text: str, patterns: List[str]) -> bool:

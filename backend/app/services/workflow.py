@@ -426,6 +426,7 @@ def run_pipeline(
     environment: str = "desktop",
     ticket_context: Optional[Mapping[str, Any]] = None,
     focus_region: Optional[str] = None,
+    interactive: bool = True,
     **render_kwargs: Any,
 ) -> Dict[str, Any]:
     """
@@ -445,6 +446,7 @@ def run_pipeline(
         ticket_context: Ticket metadata forwarded to the crawl when url is
                         provided.
         focus_region:   Optional region scope forwarded to the crawl.
+        interactive:    If False, keep existing rules without prompting.
         **render_kwargs: Extra render options forwarded to the crawler.
     """
     from app.services.rule_registry import get_domain, get_existing_rules
@@ -514,7 +516,7 @@ def run_pipeline(
     existing = get_existing_rules(domain)
     discard_existing = False
 
-    if existing and verbose:
+    if existing and verbose and interactive:
         print(f"  Domain '{domain}' already has {len(existing)} rule(s) in the registry.")
         print("  [1] Discard old rules — overwrite with fresh generation")
         print("  [2] Keep old rules — only add new ones  (default)")

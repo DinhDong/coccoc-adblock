@@ -20,14 +20,51 @@ git clone <repo-url> && cd coccoc-adblock
 cp .env.example .env.local
 # Edit .env.local — set your OPENAI_API_KEY and change the MySQL passwords
 
-# 3. Build and start all services (MySQL + backend)
+# 3. Build and start all services (MySQL + worker)
 docker compose up --build -d
 
-# 4. Verify MySQL is healthy
-docker compose ps   # db should show "healthy"
+# 4. Verify services
+docker compose ps   # db should show "healthy"; backend may exit after idle cycles
 ```
 
-### Running the pipeline
+### Running the worker service
+
+`docker compose up backend` now starts the long-running worker:
+
+```bash
+python -m app.services.worker
+```
+
+Worker modes:
+
+- `auto` (default): use DB mode when `DATABASE_URL` is configured and `crawl_inputs` / `rule_outputs` exist; otherwise use file mode.
+- `files`: scan `backend/app/tests/tickets/*.json`, skip already processed tickets in `backend/data/service_worker/processed_tickets.json`, then run crawl -> generate -> validate.
+- `db`: poll `crawl_inputs` where `status = 'new'`, mark jobs `processing`, write `rule_outputs`, then mark inputs `completed` or `failed`.
+- When no jobs are available, the worker sleeps for `WORKER_SLEEP_SECONDS`; after `WORKER_MAX_IDLE_CYCLES=2` idle sleep cycles it exits cleanly.
+
+Useful commands:
+
+```bash
+# Auto-detect source
+docker compose run --rm backend app.services.worker --once
+
+# Force file mode for test tickets
+docker compose run --rm backend app.services.worker --source files --once
+
+# Force database mode
+docker compose run --rm backend app.services.worker --source db --once
+
+# Custom idle sleep interval
+docker compose run --rm backend app.services.worker --sleep 60
+
+# Keep waiting forever when idle
+docker compose run --rm backend app.services.worker --max-idle 0
+```
+
+Failed jobs are terminal. Admins renew them manually by changing DB status back
+to `new` or by editing/removing the file-mode ledger entry.
+
+### Running the pipeline manually
 
 ```bash
 # Crawl a website AND generate rules for it in one command
@@ -43,6 +80,11 @@ docker compose run --rm backend app.services.crawler <url> <report_id> --env des
 docker compose run --rm backend app.services.crawler <url> <report_id> --focus "header"
 docker compose run --rm backend app.services.crawler <url> <report_id> --focus "right sidebar"
 docker compose run --rm backend app.services.crawler <url> <report_id> --focus "top banner area"
+
+# Run the crawler with ticket context (scopes rules to specific problems)
+docker compose run --rm backend app.services.crawler <url> <report_id> --env desktop --ticket-context-file <ticket_file>
+# Then run the workflow for that crawl
+docker compose run --rm backend app.services.workflow <report_id>
 
 # Preview a single rule — saves before.png (targets highlighted) + after.png (rule applied)
 docker compose run --rm backend app.validator.rule_preview <url> "<rule>"

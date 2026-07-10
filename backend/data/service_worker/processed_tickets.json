@@ -1,0 +1,1242 @@
+{
+  "tickets": {
+    "app/tests/tickets/ticket_motchille_popup_floating_only.json": {
+      "status": "completed",
+      "updated_at": "2026-07-09T14:41:48.815492+00:00",
+      "created_at": "2026-07-09T14:41:22.296310+00:00",
+      "report_id": "ticket_motchille_popup_floating_only",
+      "domain": "motchille.app",
+      "jira_ticket_code": "ticket_motchille_popup_floating_only",
+      "url": "https://motchille.app/danh-sach/phim-chieu-rap",
+      "environment": "desktop",
+      "processed_at": "2026-07-09T14:41:48.815492+00:00",
+      "output": {
+        "input_id": null,
+        "report_id": "ticket_motchille_popup_floating_only",
+        "url": "https://motchille.app/danh-sach/phim-chieu-rap",
+        "rules": [
+          "motchille.app##div.adserver"
+        ],
+        "input_tokens": 4526,
+        "output_tokens": 63,
+        "validation_result": {
+          "report_id": "ticket_motchille_popup_floating_only",
+          "url": "https://motchille.app/danh-sach/phim-chieu-rap",
+          "ticket_context": {
+            "platform": "desktop",
+            "problem_type": "specific_ad_not_blocked",
+            "resolution_strategy": "block_visible_ad",
+            "focus_region": "",
+            "request": "[Desktop][Adblock] - motchille.app/danh-sach/phim-chieu-rap: Block popup and floating ads only",
+            "description": "This ticket-context test case is intentionally narrow. Only popup, modal, overlay, and floating ad elements should be blocked. Do not try to block all banners, movie cards, category blocks, or normal page content.",
+            "steps": [
+              "Open https://motchille.app/danh-sach/phim-chieu-rap",
+              "Enable Adblock mode",
+              "Observe any popup, modal, overlay, or floating ad containers",
+              "Verify the movie listing page remains usable after those popup/floating ads are hidden"
+            ],
+            "actual": "Popup, modal, overlay, or floating ads may appear on the movie listing page.",
+            "expected": "Popup, modal, overlay, and floating ads are hidden while normal movie listing content remains visible and usable.",
+            "target_to_block": [
+              "popup modal",
+              "modal backdrop",
+              "fullscreen overlay",
+              "floating ad container",
+              "sticky floating ad",
+              "closeable popup ad"
+            ],
+            "target_to_preserve": [
+              "movie cards",
+              "movie posters",
+              "movie titles",
+              "category listing",
+              "pagination",
+              "navigation/header/search",
+              "main content",
+              "footer"
+            ],
+            "validation_hints": {
+              "must_preserve_text": [
+                "Phim chieu rap",
+                "Phim",
+                "The loai"
+              ],
+              "must_not_generate_rules": [
+                "motchille.app##body",
+                "motchille.app##main",
+                "motchille.app##header",
+                "motchille.app##footer",
+                "motchille.app##nav",
+                "motchille.app##section",
+                "motchille.app##article",
+                "motchille.app##div.container",
+                "motchille.app##div.content",
+                "motchille.app##div.movie",
+                "motchille.app##div.movie-item",
+                "motchille.app##div.film",
+                "motchille.app##div.film-item",
+                "motchille.app##div.card",
+                "motchille.app##a[href*=\"/phim/\"]",
+                "||motchille.app^$document"
+              ],
+              "prefer_narrow_rules": [
+                "motchille.app##div.modal-backdrop",
+                "motchille.app##div.modal",
+                "motchille.app##div.popup",
+                "motchille.app##div.overlay",
+                "motchille.app##div.floating",
+                "motchille.app##div[class*=\"popup\"]",
+                "motchille.app##div[class*=\"modal\"]",
+                "motchille.app##div[class*=\"overlay\"]",
+                "motchille.app##div[class*=\"floating\"]"
+              ]
+            },
+            "current_rules": [],
+            "matched_rules": [
+              {
+                "rule": "motchille.app##div.adserver",
+                "problem": "too broad for this ticket; this test only wants popup/floating ads"
+              }
+            ],
+            "blocked_resources": [],
+            "evidence_level": "observed_rule_or_resource_context",
+            "raw": {
+              "test_goal": "This ticket is intentionally narrow. It verifies ticket_context flow for Motchille and should not solve broad banner or sitewide ad blocking."
+            }
+          },
+          "problem_type": "specific_ad_not_blocked",
+          "resolution_strategy": "block_visible_ad",
+          "timestamp": "2026-07-09T14:41:48.797682+00:00",
+          "total": 1,
+          "passed": 0,
+          "failed": 1,
+          "passing_rules": [],
+          "combined_screenshot": "data/rule_outputs/screenshots/ticket_motchille_popup_floating_only_with_rules.png",
+          "combined_sandbox": null,
+          "outcomes": [
+            {
+              "rule": "motchille.app##div.adserver",
+              "passed": false,
+              "failure_stage": "sandbox",
+              "failure_reason": "ticket_assertions_failed=expected text to remain visible: Phim chieu rap; expected text to remain visible: The loai",
+              "syntax": {
+                "rule": "motchille.app##div.adserver",
+                "valid": true,
+                "error": null
+              },
+              "scope": {
+                "rule": "motchille.app##div.adserver",
+                "safe": true,
+                "risk": null,
+                "detail": null
+              },
+              "policy": {
+                "rule": "motchille.app##div.adserver",
+                "valid": true,
+                "problem_type": "specific_ad_not_blocked",
+                "resolution_strategy": "block_visible_ad",
+                "rule_direction": "cosmetic_hide",
+                "error": null
+              },
+              "sandbox": {
+                "url": "https://motchille.app/danh-sach/phim-chieu-rap",
+                "passed": false,
+                "ads_blocked": false,
+                "page_functional": true,
+                "ticket_assertions_passed": false,
+                "ticket_assertion_errors": [
+                  "expected text to remain visible: Phim chieu rap",
+                  "expected text to remain visible: The loai"
+                ],
+                "baseline_ticket_assertions_passed": false,
+                "baseline_ticket_assertion_errors": [
+                  "expected text to remain visible: Phim chieu rap",
+                  "expected text to remain visible: The loai"
+                ],
+                "existing_rules_count": 0,
+                "candidate_rules_count": 1,
+                "blocked_requests": [],
+                "candidate_blocked_requests": [],
+                "missing_ad_selectors": [],
+                "hidden_ad_selectors": [],
+                "broken_selectors": [],
+                "error": "",
+                "unreachable": false,
+                "tested_screenshot_saved": true
+              }
+            }
+          ]
+        },
+        "after_screenshot": "data/rule_outputs/screenshots/ticket_motchille_popup_floating_only_with_rules.png",
+        "status": "ok",
+        "error_message": "",
+        "crawl_duration_ms": 26490,
+        "created_at": "2026-07-09T14:41:48.815466+00:00",
+        "updated_at": "2026-07-09T14:41:48.815479+00:00"
+      }
+    },
+    "app/tests/tickets/ticket_rophim_popup_floating_only.json": {
+      "status": "completed",
+      "updated_at": "2026-07-09T14:44:01.514966+00:00",
+      "created_at": "2026-07-09T14:41:48.827852+00:00",
+      "report_id": "ticket_rophim_popup_floating_only",
+      "domain": "rophim10.live",
+      "jira_ticket_code": "ticket_rophim_popup_floating_only",
+      "url": "https://rophim10.live/phimhay",
+      "environment": "desktop",
+      "processed_at": "2026-07-09T14:44:01.514966+00:00",
+      "output": {
+        "input_id": null,
+        "report_id": "ticket_rophim_popup_floating_only",
+        "url": "https://rophim10.live/phimhay",
+        "rules": [
+          "||rophim10.com.im/baseapi/api/v1/banners/^$xmlhttprequest,domain=rophim10.live"
+        ],
+        "input_tokens": 4222,
+        "output_tokens": 69,
+        "validation_result": {
+          "report_id": "ticket_rophim_popup_floating_only",
+          "url": "https://rophim10.live/phimhay",
+          "ticket_context": {
+            "platform": "desktop",
+            "problem_type": "specific_ad_not_blocked",
+            "resolution_strategy": "block_visible_ad",
+            "focus_region": "",
+            "request": "[Desktop][Adblock] - rophim10.live/phimhay: Block popup and floating ads only",
+            "description": "This is a simple ticket-context test case. The goal is to verify that ticket_context is passed through crawler, prompt_builder, rule_generator, rule_validator, and sandbox_check. Only popup/modal/floating ads should be blocked. Do not try to block all banner/native/bookmaker ads in this test.",
+            "steps": [
+              "Open https://rophim10.live/phimhay",
+              "Enable Adblock mode",
+              "Observe the popup modal/backdrop and floating ad containers",
+              "Verify the page remains usable after these popup/floating ads are hidden"
+            ],
+            "actual": "Popup/modal/floating ads may appear on the page.",
+            "expected": "Popup/modal/floating ads are hidden while normal page content remains visible.",
+            "target_to_block": [
+              "popup modal",
+              "modal backdrop",
+              "fullscreen overlay",
+              "floating ad container",
+              "sticky floating ad"
+            ],
+            "target_to_preserve": [
+              "Nhà cái uy tín section",
+              "movie cards",
+              "main hero area",
+              "category/topic cards",
+              "navigation/header/search",
+              "footer",
+              "main content"
+            ],
+            "validation_hints": {
+              "must_preserve_text": [
+                "Nhà cái uy tín",
+                "Bạn đang quan tâm gì?",
+                "Phim Trung Quốc mới"
+              ],
+              "must_not_generate_rules": [
+                "rophim10.live##div.adserver",
+                "rophim10.live##div.banner-bottom-double",
+                "rophim10.live##div.banner-bottom-double__item",
+                "rophim10.live##div.banner-middle-single",
+                "rophim10.live##div.banner-middle-single__item",
+                "rophim10.live##div.intro",
+                "rophim10.live##div.lim-2",
+                "rophim10.live##div#top_slider",
+                "rophim10.live##div.swiper",
+                "rophim10.live##div.swiper-wrapper",
+                "rophim10.live##div.swiper-slide",
+                "||cdn.rophim.co.com/storage/ads/^$image,domain=rophim10.live"
+              ],
+              "prefer_narrow_rules": [
+                "rophim10.live##div.modal-backdrop",
+                "rophim10.live##div.v-modal",
+                "rophim10.live##div.sspp-area"
+              ]
+            },
+            "current_rules": [],
+            "matched_rules": [
+              {
+                "rule": "rophim10.live##div.adserver",
+                "problem": "too broad for this ticket; this test only wants popup/floating ads"
+              }
+            ],
+            "blocked_resources": [],
+            "evidence_level": "observed_rule_or_resource_context",
+            "raw": {
+              "test_goal": "This ticket is intentionally narrow. It is used to verify ticket_context flow, not to solve the full region-aware bookmaker-ad case."
+            }
+          },
+          "problem_type": "specific_ad_not_blocked",
+          "resolution_strategy": "block_visible_ad",
+          "timestamp": "2026-07-09T14:44:01.489734+00:00",
+          "total": 1,
+          "passed": 0,
+          "failed": 1,
+          "passing_rules": [],
+          "combined_screenshot": "data/rule_outputs/screenshots/ticket_rophim_popup_floating_only_with_rules.png",
+          "combined_sandbox": null,
+          "outcomes": [
+            {
+              "rule": "||rophim10.com.im/baseapi/api/v1/banners/^$xmlhttprequest,domain=rophim10.live",
+              "passed": false,
+              "failure_stage": "sandbox",
+              "failure_reason": "ads_not_blocked; page_not_functional; ticket_assertions_failed=expected text to remain visible: Nhà cái uy tín; expected text to remain visible: Bạn đang quan tâm gì?; expected text to remain visible: Phim Trung Quốc mới",
+              "syntax": {
+                "rule": "||rophim10.com.im/baseapi/api/v1/banners/^$xmlhttprequest,domain=rophim10.live",
+                "valid": true,
+                "error": null
+              },
+              "scope": {
+                "rule": "||rophim10.com.im/baseapi/api/v1/banners/^$xmlhttprequest,domain=rophim10.live",
+                "safe": true,
+                "risk": null,
+                "detail": null
+              },
+              "policy": {
+                "rule": "||rophim10.com.im/baseapi/api/v1/banners/^$xmlhttprequest,domain=rophim10.live",
+                "valid": true,
+                "problem_type": "specific_ad_not_blocked",
+                "resolution_strategy": "block_visible_ad",
+                "rule_direction": "network_block",
+                "error": null
+              },
+              "sandbox": {
+                "url": "https://rophim10.live/phimhay",
+                "passed": false,
+                "ads_blocked": false,
+                "page_functional": false,
+                "ticket_assertions_passed": false,
+                "ticket_assertion_errors": [
+                  "expected text to remain visible: Nhà cái uy tín",
+                  "expected text to remain visible: Bạn đang quan tâm gì?",
+                  "expected text to remain visible: Phim Trung Quốc mới"
+                ],
+                "baseline_ticket_assertions_passed": false,
+                "baseline_ticket_assertion_errors": [
+                  "expected text to remain visible: Nhà cái uy tín",
+                  "expected text to remain visible: Bạn đang quan tâm gì?",
+                  "expected text to remain visible: Phim Trung Quốc mới"
+                ],
+                "existing_rules_count": 0,
+                "candidate_rules_count": 1,
+                "blocked_requests": [],
+                "candidate_blocked_requests": [],
+                "missing_ad_selectors": [],
+                "hidden_ad_selectors": [],
+                "broken_selectors": [],
+                "error": "",
+                "unreachable": false,
+                "tested_screenshot_saved": true
+              }
+            }
+          ]
+        },
+        "after_screenshot": "data/rule_outputs/screenshots/ticket_rophim_popup_floating_only_with_rules.png",
+        "status": "ok",
+        "error_message": "",
+        "crawl_duration_ms": 132671,
+        "created_at": "2026-07-09T14:44:01.514940+00:00",
+        "updated_at": "2026-07-09T14:44:01.514953+00:00"
+      }
+    },
+    "app/tests/tickets/ticket_fo88_block_all_ads.json": {
+      "status": "processing",
+      "updated_at": "2026-07-10T02:43:20.671448+00:00",
+      "created_at": "2026-07-10T02:43:20.671448+00:00",
+      "report_id": "ticket_fo88_block_all_ads",
+      "domain": "fo88.srl",
+      "jira_ticket_code": "ticket_fo88_block_all_ads",
+      "url": "https://fo88.srl",
+      "environment": "desktop"
+    },
+    "app/tests/tickets/ticket_vic88_block_all_ads.json": {
+      "status": "completed",
+      "updated_at": "2026-07-10T02:45:43.186546+00:00",
+      "created_at": "2026-07-10T02:43:46.197789+00:00",
+      "report_id": "ticket_vic88_block_all_ads",
+      "domain": "vic88.ml",
+      "jira_ticket_code": "ticket_vic88_block_all_ads",
+      "url": "https://vic88.ml",
+      "environment": "desktop",
+      "processed_at": "2026-07-10T02:45:43.186546+00:00",
+      "output": {
+        "input_id": null,
+        "report_id": "ticket_vic88_block_all_ads",
+        "url": "https://vic88.ml",
+        "rules": [
+          "vic88.ml##section.promo",
+          "vic88.ml##article.promo-banner",
+          "vic88.ml##div.hero-banner-container",
+          "vic88.ml##section.hero-banner",
+          "vic88.ml##article.feature-banner.feature-banner--download-app",
+          "vic88.ml##div.floating-icon-panel"
+        ],
+        "input_tokens": 4198,
+        "output_tokens": 59,
+        "validation_result": {
+          "report_id": "ticket_vic88_block_all_ads",
+          "url": "https://vic88.ml",
+          "ticket_context": {
+            "platform": "desktop",
+            "problem_type": "specific_ad_not_blocked",
+            "resolution_strategy": "block_visible_ad",
+            "focus_region": "",
+            "request": "[Desktop][Adblock] - vic88.ml: Block all ads",
+            "description": "Block all advertising elements on Vic88 (online casino/sports betting website). Remove all banner ads, popup ads, floating ads, sidebar ads, and any other advertising content while preserving the main site functionality and content.",
+            "steps": [
+              "Open https://vic88.ml",
+              "Enable Adblock mode",
+              "Scroll through the page and observe all ad placements (headers, sidebars, popups, banners)",
+              "Verify all ad elements are hidden while core site functionality remains intact"
+            ],
+            "actual": "Multiple ad elements appear throughout the page including banners, popups, floating ads, and sidebar advertisements.",
+            "expected": "All advertising elements are hidden; core website functionality (navigation, main content, forms) remains fully accessible and operational.",
+            "target_to_block": [
+              "banner ads",
+              "header banners",
+              "sidebar advertisements",
+              "popup ads",
+              "modal ads",
+              "floating ads",
+              "sticky ads",
+              "fullscreen overlays",
+              "promotional boxes",
+              "advertisement containers",
+              "native ads",
+              "sponsored content",
+              "ad frames",
+              "ad iframes"
+            ],
+            "target_to_preserve": [
+              "main navigation",
+              "header menu",
+              "footer links",
+              "login/register forms",
+              "main content area",
+              "sports listings",
+              "betting information",
+              "user account section",
+              "page title",
+              "search functionality"
+            ],
+            "validation_hints": {
+              "must_preserve_text": [
+                "vic88",
+                "nhà cái",
+                "casino",
+                "betting"
+              ],
+              "must_not_generate_rules": [
+                "vic88.ml##body",
+                "vic88.ml##main",
+                "vic88.ml##header",
+                "vic88.ml##footer",
+                "vic88.ml##nav"
+              ]
+            },
+            "current_rules": [],
+            "matched_rules": [],
+            "blocked_resources": [],
+            "evidence_level": "url_only_best_effort",
+            "raw": {}
+          },
+          "problem_type": "specific_ad_not_blocked",
+          "resolution_strategy": "block_visible_ad",
+          "timestamp": "2026-07-10T02:45:43.158710+00:00",
+          "total": 6,
+          "passed": 0,
+          "failed": 6,
+          "passing_rules": [],
+          "combined_screenshot": "data/rule_outputs/screenshots/ticket_vic88_block_all_ads_with_rules.png",
+          "combined_sandbox": null,
+          "outcomes": [
+            {
+              "rule": "vic88.ml##section.promo",
+              "passed": false,
+              "failure_stage": "sandbox",
+              "failure_reason": "ticket_assertions_failed=expected text to remain visible: nhà cái; expected text to remain visible: betting",
+              "syntax": {
+                "rule": "vic88.ml##section.promo",
+                "valid": true,
+                "error": null
+              },
+              "scope": {
+                "rule": "vic88.ml##section.promo",
+                "safe": true,
+                "risk": null,
+                "detail": null
+              },
+              "policy": {
+                "rule": "vic88.ml##section.promo",
+                "valid": true,
+                "problem_type": "specific_ad_not_blocked",
+                "resolution_strategy": "block_visible_ad",
+                "rule_direction": "cosmetic_hide",
+                "error": null
+              },
+              "sandbox": {
+                "url": "https://vic88.ml",
+                "passed": false,
+                "ads_blocked": true,
+                "page_functional": true,
+                "ticket_assertions_passed": false,
+                "ticket_assertion_errors": [
+                  "expected text to remain visible: nhà cái",
+                  "expected text to remain visible: betting"
+                ],
+                "baseline_ticket_assertions_passed": false,
+                "baseline_ticket_assertion_errors": [
+                  "expected text to remain visible: nhà cái",
+                  "expected text to remain visible: betting"
+                ],
+                "existing_rules_count": 0,
+                "candidate_rules_count": 1,
+                "blocked_requests": [],
+                "candidate_blocked_requests": [],
+                "missing_ad_selectors": [],
+                "hidden_ad_selectors": [
+                  "section.promo"
+                ],
+                "broken_selectors": [],
+                "error": "",
+                "unreachable": false,
+                "tested_screenshot_saved": true
+              }
+            },
+            {
+              "rule": "vic88.ml##article.promo-banner",
+              "passed": false,
+              "failure_stage": "sandbox",
+              "failure_reason": "ticket_assertions_failed=expected text to remain visible: nhà cái; expected text to remain visible: betting",
+              "syntax": {
+                "rule": "vic88.ml##article.promo-banner",
+                "valid": true,
+                "error": null
+              },
+              "scope": {
+                "rule": "vic88.ml##article.promo-banner",
+                "safe": true,
+                "risk": null,
+                "detail": null
+              },
+              "policy": {
+                "rule": "vic88.ml##article.promo-banner",
+                "valid": true,
+                "problem_type": "specific_ad_not_blocked",
+                "resolution_strategy": "block_visible_ad",
+                "rule_direction": "cosmetic_hide",
+                "error": null
+              },
+              "sandbox": {
+                "url": "https://vic88.ml",
+                "passed": false,
+                "ads_blocked": true,
+                "page_functional": true,
+                "ticket_assertions_passed": false,
+                "ticket_assertion_errors": [
+                  "expected text to remain visible: nhà cái",
+                  "expected text to remain visible: betting"
+                ],
+                "baseline_ticket_assertions_passed": false,
+                "baseline_ticket_assertion_errors": [
+                  "expected text to remain visible: nhà cái",
+                  "expected text to remain visible: betting"
+                ],
+                "existing_rules_count": 0,
+                "candidate_rules_count": 1,
+                "blocked_requests": [],
+                "candidate_blocked_requests": [],
+                "missing_ad_selectors": [],
+                "hidden_ad_selectors": [
+                  "article.promo-banner"
+                ],
+                "broken_selectors": [],
+                "error": "",
+                "unreachable": false,
+                "tested_screenshot_saved": true
+              }
+            },
+            {
+              "rule": "vic88.ml##div.hero-banner-container",
+              "passed": false,
+              "failure_stage": "sandbox",
+              "failure_reason": "ticket_assertions_failed=expected text to remain visible: nhà cái; expected text to remain visible: betting",
+              "syntax": {
+                "rule": "vic88.ml##div.hero-banner-container",
+                "valid": true,
+                "error": null
+              },
+              "scope": {
+                "rule": "vic88.ml##div.hero-banner-container",
+                "safe": true,
+                "risk": null,
+                "detail": null
+              },
+              "policy": {
+                "rule": "vic88.ml##div.hero-banner-container",
+                "valid": true,
+                "problem_type": "specific_ad_not_blocked",
+                "resolution_strategy": "block_visible_ad",
+                "rule_direction": "cosmetic_hide",
+                "error": null
+              },
+              "sandbox": {
+                "url": "https://vic88.ml",
+                "passed": false,
+                "ads_blocked": true,
+                "page_functional": true,
+                "ticket_assertions_passed": false,
+                "ticket_assertion_errors": [
+                  "expected text to remain visible: nhà cái",
+                  "expected text to remain visible: betting"
+                ],
+                "baseline_ticket_assertions_passed": false,
+                "baseline_ticket_assertion_errors": [
+                  "expected text to remain visible: nhà cái",
+                  "expected text to remain visible: betting"
+                ],
+                "existing_rules_count": 0,
+                "candidate_rules_count": 1,
+                "blocked_requests": [],
+                "candidate_blocked_requests": [],
+                "missing_ad_selectors": [],
+                "hidden_ad_selectors": [
+                  "div.hero-banner-container"
+                ],
+                "broken_selectors": [],
+                "error": "",
+                "unreachable": false,
+                "tested_screenshot_saved": true
+              }
+            },
+            {
+              "rule": "vic88.ml##section.hero-banner",
+              "passed": false,
+              "failure_stage": "sandbox",
+              "failure_reason": "ticket_assertions_failed=expected text to remain visible: nhà cái; expected text to remain visible: betting",
+              "syntax": {
+                "rule": "vic88.ml##section.hero-banner",
+                "valid": true,
+                "error": null
+              },
+              "scope": {
+                "rule": "vic88.ml##section.hero-banner",
+                "safe": true,
+                "risk": null,
+                "detail": null
+              },
+              "policy": {
+                "rule": "vic88.ml##section.hero-banner",
+                "valid": true,
+                "problem_type": "specific_ad_not_blocked",
+                "resolution_strategy": "block_visible_ad",
+                "rule_direction": "cosmetic_hide",
+                "error": null
+              },
+              "sandbox": {
+                "url": "https://vic88.ml",
+                "passed": false,
+                "ads_blocked": true,
+                "page_functional": true,
+                "ticket_assertions_passed": false,
+                "ticket_assertion_errors": [
+                  "expected text to remain visible: nhà cái",
+                  "expected text to remain visible: betting"
+                ],
+                "baseline_ticket_assertions_passed": false,
+                "baseline_ticket_assertion_errors": [
+                  "expected text to remain visible: nhà cái",
+                  "expected text to remain visible: betting"
+                ],
+                "existing_rules_count": 0,
+                "candidate_rules_count": 1,
+                "blocked_requests": [],
+                "candidate_blocked_requests": [],
+                "missing_ad_selectors": [],
+                "hidden_ad_selectors": [
+                  "section.hero-banner"
+                ],
+                "broken_selectors": [],
+                "error": "",
+                "unreachable": false,
+                "tested_screenshot_saved": true
+              }
+            },
+            {
+              "rule": "vic88.ml##article.feature-banner.feature-banner--download-app",
+              "passed": false,
+              "failure_stage": "sandbox",
+              "failure_reason": "ticket_assertions_failed=expected text to remain visible: nhà cái; expected text to remain visible: betting",
+              "syntax": {
+                "rule": "vic88.ml##article.feature-banner.feature-banner--download-app",
+                "valid": true,
+                "error": null
+              },
+              "scope": {
+                "rule": "vic88.ml##article.feature-banner.feature-banner--download-app",
+                "safe": true,
+                "risk": null,
+                "detail": null
+              },
+              "policy": {
+                "rule": "vic88.ml##article.feature-banner.feature-banner--download-app",
+                "valid": true,
+                "problem_type": "specific_ad_not_blocked",
+                "resolution_strategy": "block_visible_ad",
+                "rule_direction": "cosmetic_hide",
+                "error": null
+              },
+              "sandbox": {
+                "url": "https://vic88.ml",
+                "passed": false,
+                "ads_blocked": true,
+                "page_functional": true,
+                "ticket_assertions_passed": false,
+                "ticket_assertion_errors": [
+                  "expected text to remain visible: nhà cái",
+                  "expected text to remain visible: betting"
+                ],
+                "baseline_ticket_assertions_passed": false,
+                "baseline_ticket_assertion_errors": [
+                  "expected text to remain visible: nhà cái",
+                  "expected text to remain visible: betting"
+                ],
+                "existing_rules_count": 0,
+                "candidate_rules_count": 1,
+                "blocked_requests": [],
+                "candidate_blocked_requests": [],
+                "missing_ad_selectors": [],
+                "hidden_ad_selectors": [
+                  "article.feature-banner.feature-banner--download-app"
+                ],
+                "broken_selectors": [],
+                "error": "",
+                "unreachable": false,
+                "tested_screenshot_saved": true
+              }
+            },
+            {
+              "rule": "vic88.ml##div.floating-icon-panel",
+              "passed": false,
+              "failure_stage": "sandbox",
+              "failure_reason": "ticket_assertions_failed=expected text to remain visible: nhà cái; expected text to remain visible: betting",
+              "syntax": {
+                "rule": "vic88.ml##div.floating-icon-panel",
+                "valid": true,
+                "error": null
+              },
+              "scope": {
+                "rule": "vic88.ml##div.floating-icon-panel",
+                "safe": true,
+                "risk": null,
+                "detail": null
+              },
+              "policy": {
+                "rule": "vic88.ml##div.floating-icon-panel",
+                "valid": true,
+                "problem_type": "specific_ad_not_blocked",
+                "resolution_strategy": "block_visible_ad",
+                "rule_direction": "cosmetic_hide",
+                "error": null
+              },
+              "sandbox": {
+                "url": "https://vic88.ml",
+                "passed": false,
+                "ads_blocked": true,
+                "page_functional": true,
+                "ticket_assertions_passed": false,
+                "ticket_assertion_errors": [
+                  "expected text to remain visible: nhà cái",
+                  "expected text to remain visible: betting"
+                ],
+                "baseline_ticket_assertions_passed": false,
+                "baseline_ticket_assertion_errors": [
+                  "expected text to remain visible: nhà cái",
+                  "expected text to remain visible: betting"
+                ],
+                "existing_rules_count": 0,
+                "candidate_rules_count": 1,
+                "blocked_requests": [],
+                "candidate_blocked_requests": [],
+                "missing_ad_selectors": [],
+                "hidden_ad_selectors": [
+                  "div.floating-icon-panel"
+                ],
+                "broken_selectors": [],
+                "error": "",
+                "unreachable": false,
+                "tested_screenshot_saved": true
+              }
+            }
+          ]
+        },
+        "after_screenshot": "data/rule_outputs/screenshots/ticket_vic88_block_all_ads_with_rules.png",
+        "status": "ok",
+        "error_message": "",
+        "crawl_duration_ms": 116961,
+        "created_at": "2026-07-10T02:45:43.186518+00:00",
+        "updated_at": "2026-07-10T02:45:43.186531+00:00"
+      }
+    },
+    "app/tests/tickets/ticket_motchille_block_all_ads.json": {
+      "status": "completed",
+      "updated_at": "2026-07-10T02:58:30.293376+00:00",
+      "created_at": "2026-07-10T02:58:19.805237+00:00",
+      "report_id": "ticket_motchille_block_all_ads",
+      "domain": "motchille.app",
+      "jira_ticket_code": "ticket_motchille_block_all_ads",
+      "url": "https://motchille.app/danh-sach/phim-chieu-rap",
+      "environment": "desktop",
+      "processed_at": "2026-07-10T02:58:30.293376+00:00",
+      "output": {
+        "input_id": null,
+        "report_id": "ticket_motchille_block_all_ads",
+        "url": "https://motchille.app/danh-sach/phim-chieu-rap",
+        "rules": [],
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "validation_result": {
+          "report_id": "ticket_motchille_block_all_ads",
+          "url": "https://motchille.app/danh-sach/phim-chieu-rap",
+          "environment": "desktop",
+          "problem_type": "specific_ad_not_blocked",
+          "resolution_strategy": "block_visible_ad",
+          "rules_generated": 0,
+          "rules_passed": 0,
+          "rules_failed": 0,
+          "passing_rules": [],
+          "status": "no_rules"
+        },
+        "after_screenshot": "",
+        "status": "no_rules",
+        "error_message": "",
+        "crawl_duration_ms": 10473,
+        "created_at": "2026-07-10T02:58:30.292807+00:00",
+        "updated_at": "2026-07-10T02:58:30.293363+00:00"
+      }
+    },
+    "app/tests/tickets/ticket_rophim_block_all_ads.json": {
+      "status": "failed",
+      "updated_at": "2026-07-10T02:58:31.026268+00:00",
+      "created_at": "2026-07-10T02:58:30.330630+00:00",
+      "report_id": "ticket_rophim_block_all_ads",
+      "domain": "rophim10.live",
+      "jira_ticket_code": "ticket_rophim_block_all_ads",
+      "url": "https://rophim10.live/phimhay",
+      "environment": "desktop",
+      "processed_at": "2026-07-10T02:58:31.026268+00:00",
+      "error_message": "Playwright error while rendering https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"load\"\n",
+      "output": {
+        "input_id": null,
+        "report_id": "ticket_rophim_block_all_ads",
+        "url": "https://rophim10.live/phimhay",
+        "rules": [],
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "validation_result": {
+          "report_id": "ticket_rophim_block_all_ads",
+          "url": "https://rophim10.live/phimhay",
+          "environment": "desktop",
+          "ticket_context": {
+            "platform": "desktop",
+            "problem_type": "specific_ad_not_blocked",
+            "request": "[Desktop][Adblock] - rophim10.live/phimhay: Block all ads",
+            "description": "This ticket-context test case asks the rule generator to block all visible and network ad surfaces on the Rophim listing page. This includes popup, modal, overlay, floating, sticky, banner, native, bookmaker, sponsored, and ad-network content. The generated rules should remove ads while preserving normal movie content and page navigation.",
+            "steps": [
+              "Open https://rophim10.live/phimhay",
+              "Enable Adblock mode",
+              "Observe all visible ad placements, including popup, floating, sticky, banner, native, and bookmaker ad areas",
+              "Verify all ad placements are hidden or blocked while the movie listing page remains usable"
+            ],
+            "actual": "Multiple ad placements may appear on the page, including popup, floating, sticky, banner, native, or bookmaker ads.",
+            "expected": "All ad placements are hidden or blocked while normal movie content remains visible and usable.",
+            "target_to_block": [
+              "popup modal",
+              "modal backdrop",
+              "fullscreen overlay",
+              "floating ad container",
+              "sticky floating ad",
+              "banner ad",
+              "bottom banner ad",
+              "middle banner ad",
+              "native ad block",
+              "bookmaker ad",
+              "sponsored ad container",
+              "ad image resource",
+              "ad network request"
+            ],
+            "target_to_preserve": [
+              "movie cards",
+              "movie posters",
+              "movie titles",
+              "main hero area",
+              "category/topic cards",
+              "navigation/header/search",
+              "main content",
+              "footer"
+            ],
+            "current_rules": [],
+            "matched_rules": [],
+            "blocked_resources": [],
+            "validation_hints": {
+              "must_preserve_text": [
+                "Phim",
+                "Rophim"
+              ],
+              "must_not_generate_rules": [
+                "rophim10.live##body",
+                "rophim10.live##html",
+                "rophim10.live##main",
+                "rophim10.live##header",
+                "rophim10.live##footer",
+                "rophim10.live##nav",
+                "rophim10.live##section",
+                "rophim10.live##article",
+                "rophim10.live##div.container",
+                "rophim10.live##div.content",
+                "rophim10.live##div.movie",
+                "rophim10.live##div.movie-item",
+                "rophim10.live##a[href*=\"/phim/\"]",
+                "||rophim10.live^$document"
+              ],
+              "prefer_narrow_rules": [
+                "rophim10.live##div.modal-backdrop",
+                "rophim10.live##div.v-modal",
+                "rophim10.live##div.sspp-area",
+                "rophim10.live##div.adserver",
+                "rophim10.live##div.banner-bottom-double",
+                "rophim10.live##div.banner-bottom-double__item",
+                "rophim10.live##div.banner-middle-single",
+                "rophim10.live##div.banner-middle-single__item",
+                "||cdn.rophim.co.com/storage/ads/^$image,domain=rophim10.live",
+                "||rophim10.com.im/baseapi/api/v1/banners/^$xmlhttprequest,domain=rophim10.live",
+                "||rophim10.vip/baseapi/api/v1/banners/^$xmlhttprequest,domain=rophim10.live"
+              ]
+            },
+            "raw": {
+              "test_goal": "Broad all-ads ticket for Rophim. Unlike the popup-only ticket, this one allows banner, native, bookmaker, and ad-network rules as long as normal movie content remains usable."
+            }
+          },
+          "problem_type": "specific_ad_not_blocked",
+          "resolution_strategy": "unknown",
+          "rules_generated": 0,
+          "rules_passed": 0,
+          "rules_failed": 0,
+          "passing_rules": [],
+          "status": "crawl_failed",
+          "crawl_stage": "render",
+          "crawl_error": "Playwright error while rendering https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"load\"\n"
+        },
+        "after_screenshot": "",
+        "status": "crawl_failed",
+        "error_message": "Playwright error while rendering https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"load\"\n",
+        "crawl_duration_ms": 671,
+        "created_at": "2026-07-10T02:58:31.026248+00:00",
+        "updated_at": "2026-07-10T02:58:31.026261+00:00"
+      }
+    },
+    "app/tests/tickets/ticket_motchill_ui_android.json": {
+      "status": "completed",
+      "updated_at": "2026-07-10T03:14:43.213348+00:00",
+      "created_at": "2026-07-10T03:11:04.624719+00:00",
+      "report_id": "ticket_motchill_ui_android",
+      "domain": "motchilltv.tf",
+      "jira_ticket_code": "ticket_motchill_ui_android",
+      "url": "https://motchilltv.tf",
+      "environment": "android",
+      "processed_at": "2026-07-10T03:14:43.213348+00:00",
+      "output": {
+        "input_id": null,
+        "report_id": "ticket_motchill_ui_android",
+        "url": "https://motchilltv.tf",
+        "rules": [
+          "motchilltv.tf#@#.search",
+          "motchilltv.tf#@#nav"
+        ],
+        "input_tokens": 3006,
+        "output_tokens": 42,
+        "validation_result": {
+          "report_id": "ticket_motchill_ui_android",
+          "url": "https://motchilltv.tf",
+          "ticket_context": {
+            "platform": "android",
+            "problem_type": "ui_hidden",
+            "resolution_strategy": "restore_hidden_ui",
+            "focus_region": "",
+            "request": "[Android][Other] - motchilltv.tf: Search & Menu bar hidden when Adblock mode is enabled",
+            "description": "Search and menu controls are hidden when Adblock mode is enabled.",
+            "steps": [
+              "Open https://motchilltv.tf",
+              "Enable Adblock mode",
+              "Observe the search icon, search bar, menu icon, and header navigation"
+            ],
+            "actual": "Search and menu bar are hidden when Adblock mode is enabled.",
+            "expected": "Search and menu bar should remain visible while Adblock mode is enabled.",
+            "target_to_block": [],
+            "target_to_preserve": [
+              "header",
+              "navigation",
+              "search bar",
+              "menu bar",
+              "main content"
+            ],
+            "validation_hints": {
+              "must_show_any_selector_groups": [
+                {
+                  "name": "search",
+                  "selectors": [
+                    ".search",
+                    ".search-box",
+                    "input[type='search']",
+                    "[class*='search']",
+                    "[id*='search']"
+                  ],
+                  "min": 1
+                },
+                {
+                  "name": "menu_or_navigation",
+                  "selectors": [
+                    "header",
+                    "nav",
+                    ".header",
+                    ".navbar",
+                    ".menu",
+                    "[class*='menu']",
+                    "[class*='nav']",
+                    "[class*='header']"
+                  ],
+                  "min": 1
+                }
+              ]
+            },
+            "current_rules": [],
+            "matched_rules": [],
+            "blocked_resources": [],
+            "evidence_level": "url_only_best_effort",
+            "raw": {}
+          },
+          "problem_type": "ui_hidden",
+          "resolution_strategy": "restore_hidden_ui",
+          "timestamp": "2026-07-10T03:14:43.182745+00:00",
+          "total": 4,
+          "passed": 2,
+          "failed": 2,
+          "passing_rules": [
+            "motchilltv.tf#@#.search",
+            "motchilltv.tf#@#nav"
+          ],
+          "combined_screenshot": "data/rule_outputs/screenshots/ticket_motchill_ui_android_with_rules.png",
+          "combined_sandbox": {
+            "url": "https://motchilltv.tf",
+            "passed": false,
+            "ads_blocked": false,
+            "page_functional": false,
+            "ticket_assertions_passed": true,
+            "ticket_assertion_errors": [],
+            "baseline_ticket_assertions_passed": true,
+            "baseline_ticket_assertion_errors": [],
+            "existing_rules_count": 0,
+            "candidate_rules_count": 2,
+            "blocked_requests": [],
+            "candidate_blocked_requests": [],
+            "missing_ad_selectors": [],
+            "hidden_ad_selectors": [],
+            "broken_selectors": [],
+            "error": "sandbox browser failed for https://motchilltv.tf: Page.goto: net::ERR_CONNECTION_CLOSED at https://motchilltv.tf/\nCall log:\n  - navigating to \"https://motchilltv.tf/\", waiting until \"domcontentloaded\"\n",
+            "unreachable": false,
+            "tested_screenshot_saved": false
+          },
+          "outcomes": [
+            {
+              "rule": "motchilltv.tf#@#.search",
+              "passed": true,
+              "failure_stage": "",
+              "failure_reason": "",
+              "syntax": {
+                "rule": "motchilltv.tf#@#.search",
+                "valid": true,
+                "error": null
+              },
+              "scope": {
+                "rule": "motchilltv.tf#@#.search",
+                "safe": true,
+                "risk": null,
+                "detail": null
+              },
+              "policy": {
+                "rule": "motchilltv.tf#@#.search",
+                "valid": true,
+                "problem_type": "ui_hidden",
+                "resolution_strategy": "restore_hidden_ui",
+                "rule_direction": "cosmetic_exception",
+                "error": null
+              },
+              "sandbox": {
+                "url": "https://motchilltv.tf",
+                "passed": true,
+                "ads_blocked": false,
+                "page_functional": true,
+                "ticket_assertions_passed": true,
+                "ticket_assertion_errors": [],
+                "baseline_ticket_assertions_passed": true,
+                "baseline_ticket_assertion_errors": [],
+                "existing_rules_count": 0,
+                "candidate_rules_count": 1,
+                "blocked_requests": [],
+                "candidate_blocked_requests": [],
+                "missing_ad_selectors": [],
+                "hidden_ad_selectors": [],
+                "broken_selectors": [],
+                "error": "",
+                "unreachable": false,
+                "tested_screenshot_saved": true
+              }
+            },
+            {
+              "rule": "motchilltv.tf#@#.menu",
+              "passed": false,
+              "failure_stage": "sandbox",
+              "failure_reason": "sandbox browser failed for https://motchilltv.tf: Page.goto: net::ERR_CONNECTION_CLOSED at https://motchilltv.tf/\nCall log:\n  - navigating to \"https://motchilltv.tf/\", waiting until \"domcontentloaded\"\n",
+              "syntax": {
+                "rule": "motchilltv.tf#@#.menu",
+                "valid": true,
+                "error": null
+              },
+              "scope": {
+                "rule": "motchilltv.tf#@#.menu",
+                "safe": true,
+                "risk": null,
+                "detail": null
+              },
+              "policy": {
+                "rule": "motchilltv.tf#@#.menu",
+                "valid": true,
+                "problem_type": "ui_hidden",
+                "resolution_strategy": "restore_hidden_ui",
+                "rule_direction": "cosmetic_exception",
+                "error": null
+              },
+              "sandbox": {
+                "url": "https://motchilltv.tf",
+                "passed": false,
+                "ads_blocked": false,
+                "page_functional": false,
+                "ticket_assertions_passed": true,
+                "ticket_assertion_errors": [],
+                "baseline_ticket_assertions_passed": true,
+                "baseline_ticket_assertion_errors": [],
+                "existing_rules_count": 0,
+                "candidate_rules_count": 1,
+                "blocked_requests": [],
+                "candidate_blocked_requests": [],
+                "missing_ad_selectors": [],
+                "hidden_ad_selectors": [],
+                "broken_selectors": [],
+                "error": "sandbox browser failed for https://motchilltv.tf: Page.goto: net::ERR_CONNECTION_CLOSED at https://motchilltv.tf/\nCall log:\n  - navigating to \"https://motchilltv.tf/\", waiting until \"domcontentloaded\"\n",
+                "unreachable": false,
+                "tested_screenshot_saved": false
+              }
+            },
+            {
+              "rule": "motchilltv.tf#@#header",
+              "passed": false,
+              "failure_stage": "sandbox",
+              "failure_reason": "sandbox browser failed for https://motchilltv.tf: Page.screenshot: Timeout 30000ms exceeded.\nCall log:\n  - taking page screenshot\n  -   - waiting for fonts to load...\n",
+              "syntax": {
+                "rule": "motchilltv.tf#@#header",
+                "valid": true,
+                "error": null
+              },
+              "scope": {
+                "rule": "motchilltv.tf#@#header",
+                "safe": true,
+                "risk": null,
+                "detail": null
+              },
+              "policy": {
+                "rule": "motchilltv.tf#@#header",
+                "valid": true,
+                "problem_type": "ui_hidden",
+                "resolution_strategy": "restore_hidden_ui",
+                "rule_direction": "cosmetic_exception",
+                "error": null
+              },
+              "sandbox": {
+                "url": "https://motchilltv.tf",
+                "passed": false,
+                "ads_blocked": false,
+                "page_functional": false,
+                "ticket_assertions_passed": true,
+                "ticket_assertion_errors": [],
+                "baseline_ticket_assertions_passed": true,
+                "baseline_ticket_assertion_errors": [],
+                "existing_rules_count": 0,
+                "candidate_rules_count": 1,
+                "blocked_requests": [],
+                "candidate_blocked_requests": [],
+                "missing_ad_selectors": [],
+                "hidden_ad_selectors": [],
+                "broken_selectors": [],
+                "error": "sandbox browser failed for https://motchilltv.tf: Page.screenshot: Timeout 30000ms exceeded.\nCall log:\n  - taking page screenshot\n  -   - waiting for fonts to load...\n",
+                "unreachable": false,
+                "tested_screenshot_saved": false
+              }
+            },
+            {
+              "rule": "motchilltv.tf#@#nav",
+              "passed": true,
+              "failure_stage": "",
+              "failure_reason": "",
+              "syntax": {
+                "rule": "motchilltv.tf#@#nav",
+                "valid": true,
+                "error": null
+              },
+              "scope": {
+                "rule": "motchilltv.tf#@#nav",
+                "safe": true,
+                "risk": null,
+                "detail": null
+              },
+              "policy": {
+                "rule": "motchilltv.tf#@#nav",
+                "valid": true,
+                "problem_type": "ui_hidden",
+                "resolution_strategy": "restore_hidden_ui",
+                "rule_direction": "cosmetic_exception",
+                "error": null
+              },
+              "sandbox": {
+                "url": "https://motchilltv.tf",
+                "passed": true,
+                "ads_blocked": false,
+                "page_functional": true,
+                "ticket_assertions_passed": true,
+                "ticket_assertion_errors": [],
+                "baseline_ticket_assertions_passed": true,
+                "baseline_ticket_assertion_errors": [],
+                "existing_rules_count": 0,
+                "candidate_rules_count": 1,
+                "blocked_requests": [],
+                "candidate_blocked_requests": [],
+                "missing_ad_selectors": [],
+                "hidden_ad_selectors": [],
+                "broken_selectors": [],
+                "error": "",
+                "unreachable": false,
+                "tested_screenshot_saved": true
+              }
+            }
+          ]
+        },
+        "after_screenshot": "data/rule_outputs/screenshots/ticket_motchill_ui_android_with_rules.png",
+        "status": "ok",
+        "error_message": "",
+        "crawl_duration_ms": 218555,
+        "created_at": "2026-07-10T03:14:43.213298+00:00",
+        "updated_at": "2026-07-10T03:14:43.213309+00:00"
+      }
+    }
+  }
+}

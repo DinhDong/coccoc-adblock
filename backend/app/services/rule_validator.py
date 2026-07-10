@@ -5,6 +5,11 @@
 # Stage 4 — sandbox_check.py: test each surviving rule in a live Playwright browser session
 # Stage 5 — combined sandbox: test the whole passing patch together for final screenshot/review
 #
+# Stages 4 and 5 share one SandboxSession: the browser is launched once and the
+# reference/baseline pages are loaded once, so each rule costs one page load
+# instead of a full browser launch + three page loads. When only one rule
+# passes, the combined run is skipped and its per-rule result is reused.
+#
 # This validator is ticket-aware:
 # - visible ad / legacy mode      -> rule must block or hide an ad target
 # - content breakage              -> exception rules are valid; ads_blocked is not required
@@ -16,11 +21,11 @@
 
 from __future__ import annotations
 
-import inspect
 import logging
 import re
+import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Mapping, Optional
 
 from app.services.problem_policy import (
     LEGACY_DEFAULT_PROBLEM_TYPE,
@@ -39,7 +44,7 @@ from app.services.problem_policy import (
 )
 from app.validator.abp_syntax import SyntaxResult, check_syntax_batch
 from app.validator.rule_scope import ScopeResult, check_scope_batch
-from app.validator.sandbox_check import SandboxResult, run_sandbox
+from app.validator.sandbox_check import SandboxResult, SandboxSession
 
 try:
     from app.services.ticket_context import normalize_ticket_context
@@ -343,72 +348,103 @@ def validate_rules(
     # ============================================================
     # Stage 4: Per-rule sandbox
     # ============================================================
+    # One SandboxSession is shared by every per-rule test and the combined
+    # test: the browser is launched once and the reference/baseline pages are
+    # loaded once, so each rule only costs a single extra page load.
 
-    for idx, rule, syntax_result, scope_result, policy_result in sandbox_candidates:
-        try:
-            sandbox_result = _run_sandbox_single_rule(
-                page_url=page_url,
-                rule=rule,
-                ticket_context=context,
-                environment=environment,
+    session = SandboxSession(
+        page_url,
+        environment=environment,
+        ticket_context=context,
+    )
+
+    try:
+        # No eager open(): test_rules() opens on first use, so the browser is
+        # only launched when at least one rule actually reaches the sandbox.
+        for idx, rule, syntax_result, scope_result, policy_result in sandbox_candidates:
+            started = time.perf_counter()
+
+            try:
+                sandbox_result = session.test_rules([rule])
+            except Exception as exc:
+                sandbox_result = SandboxResult(
+                    url=page_url,
+                    passed=False,
+                    error=f"sandbox validator error: {exc}",
+                )
+
+            passed, failure_reason = _sandbox_policy_result(
+                sandbox_result=sandbox_result,
+                policy_result=policy_result,
             )
-        except Exception as exc:
-            sandbox_result = SandboxResult(
-                url=page_url,
-                passed=False,
-                error=f"sandbox validator error: {exc}",
-            )
 
-        passed, failure_reason = _sandbox_policy_result(
-            sandbox_result=sandbox_result,
-            policy_result=policy_result,
-        )
-
-        outcomes[idx] = RuleValidationOutcome(
-            rule=rule,
-            passed=passed,
-            syntax=syntax_result,
-            scope=scope_result,
-            policy=policy_result,
-            sandbox=sandbox_result,
-            failure_stage="" if passed else "sandbox",
-            failure_reason="" if passed else failure_reason,
-        )
-
-        if not passed:
-            _log_failure(rule, "sandbox", failure_reason)
-
-    report = _finalize_report(report, outcomes)
-
-    # ============================================================
-    # Stage 5: Combined sandbox for final screenshot / patch review
-    # ============================================================
-
-    passing_rules = report.passing_rules()
-
-    if run_sandbox_checks and passing_rules:
-        try:
-            report.combined_sandbox = _run_sandbox_rule_set(
-                page_url=page_url,
-                rules=passing_rules,
-                ticket_context=context,
-                environment=environment,
-            )
             logger.info(
-                "Combined sandbox finished | url=%s | rules=%d | passed=%s | ads_blocked=%s | page_functional=%s",
-                page_url,
-                len(passing_rules),
-                getattr(report.combined_sandbox, "passed", False),
-                getattr(report.combined_sandbox, "ads_blocked", False),
-                getattr(report.combined_sandbox, "page_functional", False),
+                "Sandbox tested rule in %.1fs | passed=%s | rule=%s",
+                time.perf_counter() - started,
+                passed,
+                rule,
             )
-        except Exception as exc:
-            report.combined_sandbox = SandboxResult(
-                url=page_url,
-                passed=False,
-                error=f"combined sandbox validator error: {exc}",
+
+            outcomes[idx] = RuleValidationOutcome(
+                rule=rule,
+                passed=passed,
+                syntax=syntax_result,
+                scope=scope_result,
+                policy=policy_result,
+                sandbox=sandbox_result,
+                failure_stage="" if passed else "sandbox",
+                failure_reason="" if passed else failure_reason,
             )
-            logger.exception("Combined sandbox failed for %s: %s", page_url, exc)
+
+            if not passed:
+                _log_failure(rule, "sandbox", failure_reason)
+
+        report = _finalize_report(report, outcomes)
+
+        # ============================================================
+        # Stage 5: Combined sandbox for final screenshot / patch review
+        # ============================================================
+
+        passing_rules = report.passing_rules()
+
+        if run_sandbox_checks and passing_rules:
+            if len(passing_rules) == 1:
+                # The combined patch is identical to the single passing rule's
+                # per-rule run — reuse its result instead of reloading the page.
+                report.combined_sandbox = next(
+                    (
+                        outcome.sandbox
+                        for outcome in report.outcomes
+                        if outcome.passed and outcome.sandbox is not None
+                    ),
+                    None,
+                )
+                logger.info(
+                    "Combined sandbox skipped | single passing rule — reusing its per-rule result"
+                )
+            else:
+                started = time.perf_counter()
+
+                try:
+                    report.combined_sandbox = session.test_rules(passing_rules)
+                    logger.info(
+                        "Combined sandbox finished in %.1fs | url=%s | rules=%d | passed=%s | ads_blocked=%s | page_functional=%s",
+                        time.perf_counter() - started,
+                        page_url,
+                        len(passing_rules),
+                        getattr(report.combined_sandbox, "passed", False),
+                        getattr(report.combined_sandbox, "ads_blocked", False),
+                        getattr(report.combined_sandbox, "page_functional", False),
+                    )
+                except Exception as exc:
+                    report.combined_sandbox = SandboxResult(
+                        url=page_url,
+                        passed=False,
+                        error=f"combined sandbox validator error: {exc}",
+                    )
+                    logger.exception("Combined sandbox failed for %s: %s", page_url, exc)
+    finally:
+        session.close()
 
     return report
 
@@ -582,60 +618,6 @@ def _has_items(value: Any) -> bool:
         return len(value) > 0
 
     return bool(value)
-
-
-def _run_sandbox_single_rule(
-    page_url: str,
-    rule: str,
-    ticket_context: Mapping[str, Any],
-    environment: str = "desktop",
-) -> SandboxResult:
-    """
-    Run sandbox for exactly one candidate rule.
-
-    This keeps validation honest: one good rule cannot make unrelated rules pass.
-    """
-    sig = inspect.signature(run_sandbox)
-    kwargs: Dict[str, Any] = {}
-
-    if "ticket_context" in sig.parameters:
-        kwargs["ticket_context"] = dict(ticket_context)
-
-    if "environment" in sig.parameters:
-        kwargs["environment"] = environment
-
-    try:
-        return run_sandbox(page_url, [rule], **kwargs)
-    except TypeError:
-        return run_sandbox(page_url, [rule])
-
-
-def _run_sandbox_rule_set(
-    page_url: str,
-    rules: list[str],
-    ticket_context: Mapping[str, Any],
-    environment: str = "desktop",
-) -> SandboxResult:
-    """
-    Run sandbox for the whole passing rule patch.
-
-    Per-rule sandbox proves each rule can work independently.
-    Combined sandbox proves the final saved screenshot reflects all passing rules
-    applied at the same time.
-    """
-    sig = inspect.signature(run_sandbox)
-    kwargs: Dict[str, Any] = {}
-
-    if "ticket_context" in sig.parameters:
-        kwargs["ticket_context"] = dict(ticket_context)
-
-    if "environment" in sig.parameters:
-        kwargs["environment"] = environment
-
-    try:
-        return run_sandbox(page_url, list(rules), **kwargs)
-    except TypeError:
-        return run_sandbox(page_url, list(rules))
 
 
 def _sandbox_policy_result(

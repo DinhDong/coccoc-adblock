@@ -1,0 +1,14 @@
+{
+  "platform": "desktop",
+  "problem_type": "specific_ad_not_blocked",
+  "request": "[Desktop][Adblock] - canyoublockit.com: Popup and in-page advertising tests are not blocked",
+  "description": "Popup, banner, or in-page advertising test elements may remain visible when Adblock mode is enabled.",
+  "steps": [
+    "Open https://canyoublockit.com",
+    "Enable Adblock mode",
+    "Start the available adblock tests",
+    "Observe popup, banner, and in-page advertising test elements"
+  ],
+  "actual": "One or more advertising test elements remain visible.",
+  "expected": "Advertising test elements should be blocked while the instructions and test controls remain usable."
+}

@@ -1,0 +1,17 @@
+import { Loader2 } from "lucide-react";
+import { STAGES } from "../constants.js";
+
+export default function StatusBadge({ t }) {
+  if (t.state === "draft") return <span className="ad-badge b-draft">Draft</span>;
+  if (t.state === "inprocess") {
+    const stage = STAGES.find((s) => s.k === t.stage);
+    return (
+      <span className="ad-badge b-inprocess">
+        <Loader2 className="ad-spin" aria-hidden="true" />
+        Processing · {stage ? stage.label : "Queued"}
+      </span>
+    );
+  }
+  if (t.state === "review") return <span className="ad-badge b-review">Awaiting review</span>;
+  return <span className="ad-badge b-done">Done</span>;
+}

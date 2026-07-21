@@ -1,0 +1,14 @@
+﻿{
+    "description":  "Header search and navigation controls should remain visible when Adblock mode is enabled. This ticket checks that generated rules do not hide important UI controls.",
+    "request":  "[Desktop][Adblock] - motchilltv.tf: Header search and navigation should remain visible",
+    "steps":  [
+                  "Open https://motchilltv.tf",
+                  "Enable Adblock mode",
+                  "Observe header, search, and navigation controls",
+                  "Verify that page controls remain visible"
+              ],
+    "expected":  "Header, search, and navigation controls remain visible while Adblock mode is enabled.",
+    "problem_type":  "ui_hidden",
+    "platform":  "desktop",
+    "actual":  "Header, search, or navigation controls may be hidden."
+}

@@ -1,0 +1,14 @@
+﻿{
+    "description":  "Side floating advertisement containers may appear around the page content. Only side floating ads should be blocked. Header, search, category cards, movie cards, and normal page content must remain visible.",
+    "request":  "[Desktop][Adblock] - rophim10.live/phimhay: Block side floating ads",
+    "steps":  [
+                  "Open https://rophim10.live/phimhay",
+                  "Enable Adblock mode",
+                  "Observe left or right floating advertisement containers",
+                  "Verify that the page remains usable after these ads are hidden"
+              ],
+    "expected":  "Side floating ads are hidden while normal page content remains visible.",
+    "problem_type":  "specific_ad_not_blocked",
+    "platform":  "desktop",
+    "actual":  "Side floating ads may remain visible."
+}

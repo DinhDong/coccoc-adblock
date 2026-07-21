@@ -1,0 +1,14 @@
+﻿{
+    "description":  "A bottom sticky advertisement may remain visible near the bottom of the page. Only the bottom sticky ad should be blocked. Navigation, movie cards, search, sponsor sections, and normal page content must remain visible.",
+    "request":  "[Desktop][Adblock] - rophim10.live/phimhay: Block bottom sticky advertisement",
+    "steps":  [
+                  "Open https://rophim10.live/phimhay",
+                  "Enable Adblock mode",
+                  "Observe the bottom sticky advertisement area",
+                  "Verify that movie lists and page controls remain visible"
+              ],
+    "expected":  "The bottom sticky advertisement is hidden while normal page content remains visible.",
+    "problem_type":  "specific_ad_not_blocked",
+    "platform":  "desktop",
+    "actual":  "A bottom sticky advertisement may remain visible."
+}

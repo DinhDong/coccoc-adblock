@@ -1,0 +1,14 @@
+﻿{
+    "description":  "An overlay, modal, or blocking layer may prevent interaction with the page. The overlay should be removed while normal page content, movie cards, search, and navigation remain usable.",
+    "request":  "[Desktop][Adblock] - rophim10.live/phimhay: Remove overlay that blocks page interaction",
+    "steps":  [
+                  "Open https://rophim10.live/phimhay",
+                  "Enable Adblock mode",
+                  "Observe whether any overlay or modal blocks page interaction",
+                  "Verify that the page is usable after the overlay is hidden"
+              ],
+    "expected":  "The blocking overlay is hidden while normal page content remains usable.",
+    "problem_type":  "anti_adblock_or_overlay",
+    "platform":  "desktop",
+    "actual":  "An overlay or modal may block page interaction."
+}

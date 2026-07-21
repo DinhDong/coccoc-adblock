@@ -1,0 +1,15 @@
+﻿{
+    "description":  "Banner image advertising test elements may remain visible. Only banner advertising elements should be blocked. Test labels, score, status rows, explanatory content, and controls must remain visible.",
+    "request":  "[Desktop][Adblock] - adblock-tester.com: Banner image advertisements remain visible",
+    "steps":  [
+                  "Open https://adblock-tester.com",
+                  "Enable Adblock mode",
+                  "Scroll to the banner advertising section",
+                  "Observe flash, GIF, and static image ad test areas",
+                  "Verify that test labels and controls remain visible"
+              ],
+    "expected":  "Banner image advertising elements are hidden while test labels, score, status rows, and controls remain visible.",
+    "problem_type":  "specific_ad_not_blocked",
+    "platform":  "desktop",
+    "actual":  "One or more banner image advertising elements remain visible."
+}

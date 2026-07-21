@@ -1,0 +1,14 @@
+﻿{
+    "description":  "This is a clean-page control ticket used to verify that the crawler, workflow, and Docker/K8s environment do not crash on a simple page. It is not used to evaluate ad-blocking effectiveness.",
+    "request":  "[Desktop][Crawler] - example.com: Control case for clean-page crawling",
+    "steps":  [
+                  "Open https://example.com",
+                  "Run the crawler and workflow in desktop environment",
+                  "Verify that structured outputs are produced",
+                  "Verify that the system handles a page with little or no ad evidence gracefully"
+              ],
+    "expected":  "The pipeline completes gracefully and produces structured outputs or a no-rule result without a critical internal failure.",
+    "problem_type":  "specific_ad_not_blocked",
+    "platform":  "desktop",
+    "actual":  "The pipeline may fail or crash on simple pages if the environment is misconfigured."
+}

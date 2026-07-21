@@ -50,6 +50,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT_MS = 30_000
 NETWORK_IDLE_TIMEOUT_MS = 5_000
 PAGE_SETTLE_DELAY_SECONDS = 2.0
+# Cosmetic CSS injection applies synchronously; a short reflow settle is enough.
+COSMETIC_SETTLE_DELAY_SECONDS = 1.0
 VISIBLE_ELEMENT_DROP_FAIL_RATIO = 0.35
 
 CRITICAL_SELECTORS = [
@@ -620,6 +622,10 @@ def run_sandbox(
     For breakage tickets such as image/video/content/UI hidden:
         passed = page_functional AND ticket_assertions_passed
 
+    Note: when validating several rule sets against the same URL, use
+    SandboxSession directly — it shares the browser launch and the
+    reference/baseline page loads across calls instead of repeating them.
+
     Args:
         url:
             The original reported page URL.
@@ -633,184 +639,404 @@ def run_sandbox(
     Returns:
         SandboxResult.
     """
-    result = SandboxResult(url=url, passed=False)
-
-    candidate_rules = [
-        str(rule).strip()
-        for rule in rules
-        if rule and str(rule).strip()
-    ]
-
-    safe_ticket_context = _safe_ticket_context(ticket_context)
-    problem_type = str(safe_ticket_context.get("problem_type", "unknown")).strip().lower()
-
-    existing_rules = _get_existing_rules(safe_ticket_context)
-    if not _should_apply_existing_rules(problem_type, candidate_rules):
-        existing_rules = []
-
-    all_test_rules = existing_rules + candidate_rules
-
-    result.existing_rules_count = len(existing_rules)
-    result.candidate_rules_count = len(candidate_rules)
-
-    candidate_cosmetic_selectors = _extract_applicable_cosmetic_selectors(
-        candidate_rules,
+    with SandboxSession(
         url,
-    )
+        environment=environment,
+        ticket_context=ticket_context,
+    ) as session:
+        return session.test_rules(rules)
 
-    candidate_network_block_rules = [
-        parsed for parsed in (_parse_network_rule(rule) for rule in candidate_rules)
-        if parsed is not None and not parsed.is_exception
-    ]
 
-    if not candidate_rules:
-        result.error = "no candidate rules supplied"
-        return result
+class SandboxSession:
+    """
+    Reusable sandbox for validating several rule sets against the same URL.
 
-    try:
-        from ..crawler.browser import (
-            ENVIRONMENTS,
-            _STEALTH_LAUNCH_ARGS,
-            _apply_stealth,
-            _import_playwright,
+    run_sandbox() previously launched a fresh browser and loaded the page three
+    times (reference, baseline, test) on every call. The validator calls it
+    once per rule plus once combined, so N rules cost 3*(N+1) page loads.
+
+    A session performs the expensive work once:
+      - one Playwright + Chromium launch,
+      - one reference page load (kept open; its state is re-read per rule set),
+      - at most one baseline load (only when existing rules apply),
+    so each test_rules() call costs a single page load.
+    """
+
+    def __init__(
+        self,
+        url: str,
+        environment: str = "desktop",
+        ticket_context: Optional[Dict[str, Any]] = None,
+    ):
+        self.url = url
+        self.environment = environment
+        self.ticket_context = _safe_ticket_context(ticket_context)
+        self.problem_type = str(
+            self.ticket_context.get("problem_type", "unknown")
+        ).strip().lower()
+        self.existing_rules = _get_existing_rules(self.ticket_context)
+
+        self._playwright: Any = None
+        self._browser: Any = None
+        self._apply_stealth: Any = None
+        self._timeout_error_cls: Any = Exception
+        self._context_kwargs: Dict[str, Any] = {}
+        self._ua = ""
+
+        self._reference_context: Any = None
+        self._reference_page: Any = None
+        self._reference_ticket_state: Optional[Dict[str, Any]] = None
+        self._baseline_ticket_state: Optional[Dict[str, Any]] = None
+
+        self._fatal_error = ""
+        self._fatal_unreachable = False
+        self._opened = False
+
+    def __enter__(self) -> "SandboxSession":
+        self.open()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        self.close()
+        return False
+
+    def open(self) -> None:
+        """
+        Start Playwright and launch the shared browser.
+
+        Never raises: failures are stored and surfaced as error results from
+        test_rules() so the validator keeps its per-rule error handling.
+        """
+        if self._opened or self._fatal_error:
+            return
+
+        try:
+            from ..crawler.browser import (
+                ENVIRONMENTS,
+                _STEALTH_LAUNCH_ARGS,
+                _apply_stealth,
+                _import_playwright,
+            )
+        except Exception as exc:
+            self._fatal_error = f"browser helpers unavailable: {exc}"
+            logger.exception(self._fatal_error)
+            return
+
+        try:
+            sync_playwright, _, timeout_error_cls = _import_playwright()
+        except ImportError as exc:
+            self._fatal_error = str(exc)
+            logger.exception("Playwright import failed")
+            return
+
+        self._apply_stealth = _apply_stealth
+        self._timeout_error_cls = timeout_error_cls
+
+        profile = ENVIRONMENTS.get(self.environment, ENVIRONMENTS["desktop"])
+        self._ua = profile["user_agent"]
+        self._context_kwargs = {
+            "user_agent": self._ua,
+            "viewport": profile["viewport"],
+            "device_scale_factor": profile["device_scale_factor"],
+            "is_mobile": profile["is_mobile"],
+            "has_touch": profile["has_touch"],
+            "locale": "en-US",
+            "timezone_id": "America/New_York",
+            "extra_http_headers": {"Accept-Language": "en-US,en;q=0.9"},
+        }
+
+        logger.debug(
+            "Sandbox session starting in '%s' environment (viewport %s, mobile=%s)",
+            self.environment,
+            profile["viewport"],
+            profile["is_mobile"],
         )
-    except Exception as exc:
-        result.error = f"browser helpers unavailable: {exc}"
-        logger.exception(result.error)
-        return result
 
-    try:
-        sync_playwright, _, PlaywrightTimeoutError = _import_playwright()
-    except ImportError as exc:
-        result.error = str(exc)
-        logger.exception("Playwright import failed")
-        return result
-
-    profile = ENVIRONMENTS.get(environment, ENVIRONMENTS["desktop"])
-    ua = profile["user_agent"]
-    context_kwargs: Dict[str, Any] = {
-        "user_agent": ua,
-        "viewport": profile["viewport"],
-        "device_scale_factor": profile["device_scale_factor"],
-        "is_mobile": profile["is_mobile"],
-        "has_touch": profile["has_touch"],
-        "locale": "en-US",
-        "timezone_id": "America/New_York",
-        "extra_http_headers": {"Accept-Language": "en-US,en;q=0.9"},
-    }
-
-    logger.debug(
-        "Sandbox running in '%s' environment (viewport %s, mobile=%s)",
-        environment,
-        profile["viewport"],
-        profile["is_mobile"],
-    )
-
-    try:
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(
+        try:
+            self._playwright = sync_playwright().start()
+            self._browser = self._playwright.chromium.launch(
                 headless=True,
                 args=_STEALTH_LAUNCH_ARGS,
             )
+        except Exception as exc:
+            self._fatal_error = f"sandbox browser failed for {self.url}: {exc}"
+            logger.exception(self._fatal_error)
+            self.close()
+            return
 
+        self._opened = True
+
+    def close(self) -> None:
+        for closeable in ("_reference_context", "_browser"):
+            handle = getattr(self, closeable)
+            if handle is not None:
+                try:
+                    handle.close()
+                except Exception:
+                    pass
+                setattr(self, closeable, None)
+
+        if self._playwright is not None:
             try:
-                # ------------------------------------------------------
-                # Reference page: no adblock rules.
-                # ------------------------------------------------------
-                reference_context = browser.new_context(**context_kwargs)
-                reference_page = reference_context.new_page()
-                _apply_stealth(reference_page, user_agent=ua)
+                self._playwright.stop()
+            except Exception:
+                pass
+            self._playwright = None
 
-                _load_page(reference_page, url, PlaywrightTimeoutError)
+        self._reference_page = None
+        self._opened = False
 
-                reference_state = _capture_page_state(
-                    reference_page,
-                    candidate_cosmetic_selectors,
-                )
-                reference_context.close()
+    def test_rules(
+        self,
+        rules: List[str],
+        capture_screenshot: bool = True,
+    ) -> SandboxResult:
+        """
+        Test one candidate rule set against the live page.
 
-                # ------------------------------------------------------
-                # Baseline page: existing/current rules only.
-                # ------------------------------------------------------
-                baseline_context = browser.new_context(**context_kwargs)
-                baseline_page = baseline_context.new_page()
-                _apply_stealth(baseline_page, user_agent=ua)
-                setattr(baseline_page, "_adblock_document_url", url)
+        Costs a single page load once the session reference is warm.
+        """
+        result = SandboxResult(url=self.url, passed=False)
 
-                if existing_rules:
-                    _apply_network_rules(baseline_page, existing_rules)
-                    _load_page(baseline_page, url, PlaywrightTimeoutError)
-                    _apply_cosmetic_rules(baseline_page, existing_rules)
-                    time.sleep(PAGE_SETTLE_DELAY_SECONDS)
-                else:
-                    _load_page(baseline_page, url, PlaywrightTimeoutError)
+        candidate_rules = [
+            str(rule).strip()
+            for rule in rules
+            if rule and str(rule).strip()
+        ]
 
-                baseline_ticket_state = _capture_ticket_state(
-                    baseline_page,
-                    safe_ticket_context,
-                )
-                baseline_context.close()
+        if not candidate_rules:
+            result.error = "no candidate rules supplied"
+            return result
 
-                # ------------------------------------------------------
-                # Test page: existing/current rules + candidate patch.
-                # ------------------------------------------------------
-                test_context = browser.new_context(**context_kwargs)
-                test_page = test_context.new_page()
-                _apply_stealth(test_page, user_agent=ua)
-                setattr(test_page, "_adblock_document_url", url)
+        existing_rules = self.existing_rules
+        if not _should_apply_existing_rules(self.problem_type, candidate_rules):
+            existing_rules = []
 
-                _apply_network_rules(test_page, all_test_rules)
-                _load_page(test_page, url, PlaywrightTimeoutError)
-                _apply_cosmetic_rules(test_page, all_test_rules)
+        all_test_rules = existing_rules + candidate_rules
 
-                time.sleep(PAGE_SETTLE_DELAY_SECONDS)
+        result.existing_rules_count = len(existing_rules)
+        result.candidate_rules_count = len(candidate_rules)
 
-                tested_state = _capture_page_state(
-                    test_page,
-                    candidate_cosmetic_selectors,
-                )
-                tested_ticket_state = _capture_ticket_state(
-                    test_page,
-                    safe_ticket_context,
-                )
+        candidate_cosmetic_selectors = _extract_applicable_cosmetic_selectors(
+            candidate_rules,
+            self.url,
+        )
 
-                tested_screenshot = test_page.screenshot(
+        candidate_network_block_rules = [
+            parsed for parsed in (_parse_network_rule(rule) for rule in candidate_rules)
+            if parsed is not None and not parsed.is_exception
+        ]
+
+        if not self._opened:
+            self.open()
+
+        if self._fatal_error:
+            result.error = self._fatal_error
+            result.unreachable = self._fatal_unreachable
+            return result
+
+        if not self._ensure_reference(result):
+            return result
+
+        # The reference page stays loaded across calls; only the (cheap) state
+        # evaluation is repeated because each rule set has its own selectors.
+        reference_state = _capture_page_state(
+            self._reference_page,
+            candidate_cosmetic_selectors,
+        )
+
+        baseline_ticket_state = self._baseline_state(bool(existing_rules), result)
+        if baseline_ticket_state is None:
+            return result
+
+        # ------------------------------------------------------
+        # Test page: existing/current rules + candidate patch.
+        # ------------------------------------------------------
+        try:
+            test_context = self._browser.new_context(**self._context_kwargs)
+        except Exception as exc:
+            self._record_error(result, exc)
+            return result
+
+        try:
+            test_page = test_context.new_page()
+            self._apply_stealth(test_page, user_agent=self._ua)
+            setattr(test_page, "_adblock_document_url", self.url)
+
+            _apply_network_rules(test_page, all_test_rules)
+            _load_page(test_page, self.url, self._timeout_error_cls)
+            _apply_cosmetic_rules(test_page, all_test_rules)
+
+            time.sleep(COSMETIC_SETTLE_DELAY_SECONDS)
+
+            tested_state = _capture_page_state(
+                test_page,
+                candidate_cosmetic_selectors,
+            )
+            tested_ticket_state = _capture_ticket_state(
+                test_page,
+                self.ticket_context,
+            )
+
+            if capture_screenshot:
+                result.tested_screenshot = test_page.screenshot(
                     full_page=True,
                     timeout=DEFAULT_TIMEOUT_MS,
                 )
 
-                result.tested_screenshot = tested_screenshot
-                result.blocked_requests = list(
-                    getattr(test_page, "_adblock_blocked_requests", [])
-                )
+            result.blocked_requests = list(
+                getattr(test_page, "_adblock_blocked_requests", [])
+            )
 
-                blocked_by_rule = getattr(test_page, "_adblock_blocked_by_rule", {})
-                result.candidate_blocked_requests = _candidate_blocked_requests(
-                    candidate_rules,
-                    blocked_by_rule,
-                )
-
+            blocked_by_rule = getattr(test_page, "_adblock_blocked_by_rule", {})
+            result.candidate_blocked_requests = _candidate_blocked_requests(
+                candidate_rules,
+                blocked_by_rule,
+            )
+        except Exception as exc:
+            self._record_error(result, exc)
+            return result
+        finally:
+            try:
                 test_context.close()
+            except Exception:
+                pass
 
-            finally:
-                browser.close()
+        _finalize_sandbox_result(
+            result=result,
+            url=self.url,
+            problem_type=self.problem_type,
+            ticket_context=self.ticket_context,
+            candidate_network_block_rules=candidate_network_block_rules,
+            candidate_cosmetic_selectors=candidate_cosmetic_selectors,
+            reference_state=reference_state,
+            tested_state=tested_state,
+            baseline_ticket_state=baseline_ticket_state,
+            tested_ticket_state=tested_ticket_state,
+        )
 
-    except Exception as exc:
+        return result
+
+    def _ensure_reference(self, result: SandboxResult) -> bool:
+        """
+        Load the no-rules reference page once and keep it open for the session.
+        """
+        if self._reference_page is not None:
+            return True
+
+        try:
+            # --------------------------------------------------
+            # Reference page: no adblock rules.
+            # --------------------------------------------------
+            self._reference_context = self._browser.new_context(**self._context_kwargs)
+            self._reference_page = self._reference_context.new_page()
+            self._apply_stealth(self._reference_page, user_agent=self._ua)
+            _load_page(self._reference_page, self.url, self._timeout_error_cls)
+            return True
+        except Exception as exc:
+            # The URL is most likely unreachable — fail this and every
+            # subsequent test fast instead of re-loading once per rule.
+            self._record_error(result, exc)
+            self._fatal_error = result.error
+            self._fatal_unreachable = result.unreachable
+
+            if self._reference_context is not None:
+                try:
+                    self._reference_context.close()
+                except Exception:
+                    pass
+
+            self._reference_context = None
+            self._reference_page = None
+            return False
+
+    def _baseline_state(
+        self,
+        use_existing_rules: bool,
+        result: SandboxResult,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Return the ticket state of the baseline page (existing rules only).
+
+        Without existing rules the baseline conditions are identical to the
+        reference page, so its (cached) ticket state is reused instead of
+        loading the page a second time.
+        """
+        if not use_existing_rules:
+            if self._reference_ticket_state is None:
+                self._reference_ticket_state = _capture_ticket_state(
+                    self._reference_page,
+                    self.ticket_context,
+                )
+            return self._reference_ticket_state
+
+        if self._baseline_ticket_state is not None:
+            return self._baseline_ticket_state
+
+        # --------------------------------------------------
+        # Baseline page: existing/current rules only.
+        # --------------------------------------------------
+        try:
+            baseline_context = self._browser.new_context(**self._context_kwargs)
+        except Exception as exc:
+            self._record_error(result, exc)
+            return None
+
+        try:
+            baseline_page = baseline_context.new_page()
+            self._apply_stealth(baseline_page, user_agent=self._ua)
+            setattr(baseline_page, "_adblock_document_url", self.url)
+
+            _apply_network_rules(baseline_page, self.existing_rules)
+            _load_page(baseline_page, self.url, self._timeout_error_cls)
+            _apply_cosmetic_rules(baseline_page, self.existing_rules)
+
+            time.sleep(COSMETIC_SETTLE_DELAY_SECONDS)
+
+            self._baseline_ticket_state = _capture_ticket_state(
+                baseline_page,
+                self.ticket_context,
+            )
+        except Exception as exc:
+            self._record_error(result, exc)
+            return None
+        finally:
+            try:
+                baseline_context.close()
+            except Exception:
+                pass
+
+        return self._baseline_ticket_state
+
+    def _record_error(self, result: SandboxResult, exc: Exception) -> None:
         error_str = str(exc)
-        result.error = f"sandbox browser failed for {url}: {exc}"
+        result.error = f"sandbox browser failed for {self.url}: {exc}"
 
         if any(pat in error_str for pat in _UNREACHABLE_PATTERNS):
             result.unreachable = True
             logger.warning(
                 "Sandbox unreachable (connection error) for %s: %s",
-                url,
+                self.url,
                 error_str.splitlines()[0],
             )
         else:
             logger.exception(result.error)
 
-        return result
-
+def _finalize_sandbox_result(
+    result: SandboxResult,
+    url: str,
+    problem_type: str,
+    ticket_context: Dict[str, Any],
+    candidate_network_block_rules: List["_NetworkRule"],
+    candidate_cosmetic_selectors: List[str],
+    reference_state: Dict[str, Any],
+    tested_state: Dict[str, Any],
+    baseline_ticket_state: Dict[str, Any],
+    tested_ticket_state: Dict[str, Any],
+) -> None:
+    """
+    Evaluate reference vs tested state and fill pass/fail fields on result.
+    """
     # ------------------------------------------------------------------
     # Evaluate candidate ad blocking.
     # ------------------------------------------------------------------
@@ -861,14 +1087,14 @@ def run_sandbox(
     # Evaluate ticket-specific behavior.
     # ------------------------------------------------------------------
     baseline_ticket_ok, baseline_ticket_errors = _evaluate_ticket_assertions(
-        safe_ticket_context,
+        ticket_context,
         baseline_ticket_state,
     )
     result.baseline_ticket_assertions_passed = baseline_ticket_ok
     result.baseline_ticket_assertion_errors = baseline_ticket_errors
 
     ticket_ok, ticket_errors = _evaluate_ticket_assertions(
-        safe_ticket_context,
+        ticket_context,
         tested_ticket_state,
     )
     result.ticket_assertions_passed = ticket_ok
@@ -918,8 +1144,6 @@ def run_sandbox(
             url,
             result.ticket_assertion_errors,
         )
-
-    return result
 
 
 def _apply_network_rules(page, rules: List[str]) -> None:

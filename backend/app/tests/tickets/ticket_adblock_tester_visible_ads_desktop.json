@@ -1,0 +1,14 @@
+{
+  "platform": "desktop",
+  "problem_type": "specific_ad_not_blocked",
+  "request": "[Desktop][Adblock] - adblock-tester.com: Some advertising test elements remain visible",
+  "description": "Some advertising test containers remain visible after Adblock mode is enabled.",
+  "steps": [
+    "Open https://adblock-tester.com",
+    "Enable Adblock mode",
+    "Wait for the test page to finish loading",
+    "Scroll through the advertising test sections"
+  ],
+  "actual": "Some advertising test containers remain visible.",
+  "expected": "Advertising test containers should be blocked while the test score and page controls remain visible."
+}

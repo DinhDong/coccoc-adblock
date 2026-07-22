@@ -1,0 +1,14 @@
+﻿{
+    "description":  "The search box, header, and navigation controls should remain visible when Adblock mode is enabled. This ticket checks that rule generation does not hide important page controls.",
+    "request":  "[Desktop][Adblock] - rophim10.live/phimhay: Search and header should remain visible",
+    "steps":  [
+                  "Open https://rophim10.live/phimhay",
+                  "Enable Adblock mode",
+                  "Observe the header, navigation, and search box",
+                  "Verify that the controls remain visible and usable"
+              ],
+    "expected":  "Search, header, and navigation controls remain visible while Adblock mode is enabled.",
+    "problem_type":  "ui_hidden",
+    "platform":  "desktop",
+    "actual":  "Search, header, or navigation controls may be hidden."
+}

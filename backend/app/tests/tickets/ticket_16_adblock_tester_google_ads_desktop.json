@@ -1,0 +1,15 @@
+﻿{
+    "description":  "Actual Google advertising containers remain visible on the AdBlock Tester page. Only advertising containers should be blocked. The test score, service rows, status messages, switches, explanatory content, and page controls must remain visible.",
+    "request":  "[Desktop][Adblock] - adblock-tester.com: Google advertising containers remain visible",
+    "steps":  [
+                  "Open https://adblock-tester.com",
+                  "Enable Adblock mode",
+                  "Wait for the page and advertising tests to finish loading",
+                  "Observe the Google AdSense test containers",
+                  "Verify that the score and test controls remain usable"
+              ],
+    "expected":  "The actual advertising containers are hidden while the test score, status rows, switches, explanatory content, and page controls remain visible.",
+    "problem_type":  "specific_ad_not_blocked",
+    "platform":  "desktop",
+    "actual":  "One or more Google advertising containers remain visible on the test page."
+}

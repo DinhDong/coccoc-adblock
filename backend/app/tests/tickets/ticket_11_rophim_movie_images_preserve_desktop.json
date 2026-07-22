@@ -1,0 +1,14 @@
+﻿{
+    "description":  "Movie poster images or hero images may fail to display when Adblock mode is enabled. Advertisement resources can be blocked, but normal movie images and page media should remain visible.",
+    "request":  "[Desktop][Adblock] - rophim10.live/phimhay: Movie poster images should remain visible",
+    "steps":  [
+                  "Open https://rophim10.live/phimhay",
+                  "Enable Adblock mode",
+                  "Observe movie poster images, hero images, and carousel images",
+                  "Verify that normal media remains visible"
+              ],
+    "expected":  "Movie poster images and normal media remain visible while advertising resources are blocked.",
+    "problem_type":  "content_broken_image",
+    "platform":  "desktop",
+    "actual":  "Some normal movie images may be missing or broken."
+}

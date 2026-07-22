@@ -1,0 +1,14 @@
+﻿{
+    "description":  "Visible ad containers may remain on the page. The system should block clear ad containers while preserving movie lists, navigation, search, category cards, and normal page content.",
+    "request":  "[Desktop][Adblock] - rophim10.live/phimhay: Block visible ad containers",
+    "steps":  [
+                  "Open https://rophim10.live/phimhay",
+                  "Enable Adblock mode",
+                  "Observe visible ad containers",
+                  "Verify that normal page content remains usable"
+              ],
+    "expected":  "Visible ad containers are hidden while normal content remains visible.",
+    "problem_type":  "specific_ad_not_blocked",
+    "platform":  "desktop",
+    "actual":  "Visible ad containers may remain on the page."
+}

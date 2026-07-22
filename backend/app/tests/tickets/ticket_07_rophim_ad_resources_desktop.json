@@ -1,0 +1,14 @@
+﻿{
+    "description":  "Ad-related image or banner resources may continue loading on the page. Only clear ad-related resources should be blocked. Normal media, movie posters, navigation, and page content must remain available.",
+    "request":  "[Desktop][Adblock] - rophim10.live/phimhay: Block ad-related resources",
+    "steps":  [
+                  "Open https://rophim10.live/phimhay",
+                  "Enable Adblock mode",
+                  "Observe visible advertisements and related network resources",
+                  "Verify that normal movie images and page content remain available"
+              ],
+    "expected":  "Ad-related resources are blocked while normal media and page content remain available.",
+    "problem_type":  "specific_ad_not_blocked",
+    "platform":  "desktop",
+    "actual":  "Ad-related resources may continue loading."
+}

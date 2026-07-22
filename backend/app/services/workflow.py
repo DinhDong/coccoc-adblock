@@ -60,6 +60,11 @@ try:
 except ImportError:
     pass
 
+from app.database import (
+    save_crawl_input,
+    save_rule_output,
+    save_rule_validation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -258,6 +263,28 @@ def run_rule_generation(
             ensure_ascii=False,
         )
 
+    try:
+        save_rule_output(
+            report_id=report_id,
+            rules=rules_data,
+            input_tokens=(
+                int(token_usage.get("prompt_tokens", 0))
+                if isinstance(token_usage, Mapping)
+                else None
+            ),
+            output_tokens=(
+                int(token_usage.get("completion_tokens", 0))
+                if isinstance(token_usage, Mapping)
+                else None
+            ),
+            status="generated",
+        )
+    except Exception as exc:
+        logger.warning(
+            "Stage 1: failed saving rule output to DB: %s",
+            exc,
+        )
+
     register_rules(
         domain,
         [
@@ -415,6 +442,19 @@ def run_rule_validation(
             file,
             indent=2,
             ensure_ascii=False,
+        )
+
+    try:
+        save_rule_validation(
+            report_id=report_id,
+            validation_result=validation_data,
+            after_screenshot=combined_screenshot_path,
+            status="validated",
+        )
+    except Exception as exc:
+        logger.warning(
+            "Stage 2: failed saving validation result to DB: %s",
+            exc,
         )
 
     logger.info(
@@ -646,6 +686,23 @@ def run_pipeline(
 
     env = crawl_result.get("environment", "desktop")
     page_url = crawl_result.get("url", "unknown")
+    crawl_elapsed_ms = _extract_crawl_elapsed_ms(crawl_result)
+
+    try:
+        save_crawl_input(
+            report_id=report_id,
+            domain=get_domain(page_url),
+            url=page_url,
+            ticket_context=crawl_result.get("ticket_context", {}),
+            status="success",
+            crawl_duration_ms=crawl_elapsed_ms,
+            before_screenshot=crawl_result.get("files", {}).get("screenshot", ""),
+        )
+    except Exception:
+        logger.warning(
+            "Pipeline: could not save existing crawl result to DB for %s",
+            report_id,
+        )
     normalized_ticket_context = crawl_result.get(
         "ticket_context",
         {},

@@ -4,12 +4,13 @@ from typing import Any, Dict, Optional
 
 try:
     from dotenv import load_dotenv
+    from pathlib import Path
 
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    load_dotenv(os.path.join(root, ".env.local"))
-    load_dotenv(os.path.join(root, ".env"))
-    load_dotenv(os.path.join(root, "..", ".env.local"))
-    load_dotenv(os.path.join(root, "..", ".env"))
+    repo_root = Path(__file__).resolve().parents[2]
+    load_dotenv(repo_root / ".env.local")
+    load_dotenv(repo_root / ".env")
+    load_dotenv(repo_root / "backend" / ".env.local")
+    load_dotenv(repo_root / "backend" / ".env")
 except ImportError:
     pass
 

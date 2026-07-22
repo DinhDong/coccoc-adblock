@@ -1,0 +1,341 @@
+import json
+import os
+from typing import Any, Dict, Optional
+
+try:
+    from dotenv import load_dotenv
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    load_dotenv(os.path.join(root, ".env.local"))
+    load_dotenv(os.path.join(root, ".env"))
+    load_dotenv(os.path.join(root, "..", ".env.local"))
+    load_dotenv(os.path.join(root, "..", ".env"))
+except ImportError:
+    pass
+
+import pymysql
+from pymysql.cursors import DictCursor
+
+_db_schema_initialized = False
+
+MYSQL_HOST = os.getenv("MYSQL_HOST", "127.0.0.1")
+MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
+MYSQL_USER = os.getenv("MYSQL_USER")
+MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD")
+MYSQL_DATABASE = os.getenv("MYSQL_DATABASE")
+
+
+def get_connection():
+    if not MYSQL_USER or not MYSQL_PASSWORD or not MYSQL_DATABASE:
+        raise RuntimeError(
+            "Missing MySQL configuration. Please set MYSQL_USER, MYSQL_PASSWORD, and MYSQL_DATABASE."
+        )
+
+    return pymysql.connect(
+        host=MYSQL_HOST,
+        port=MYSQL_PORT,
+        user=MYSQL_USER,
+        password=MYSQL_PASSWORD,
+        database=MYSQL_DATABASE,
+        charset="utf8mb4",
+        cursorclass=DictCursor,
+        autocommit=True,
+    )
+
+
+def _json_value(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _ensure_schema() -> None:
+    global _db_schema_initialized
+    if _db_schema_initialized:
+        return
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+CREATE TABLE IF NOT EXISTS crawl_inputs (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    report_id VARCHAR(255) UNIQUE,
+    domain TEXT NOT NULL,
+    domain_type VARCHAR(50),
+    jira_ticket_code VARCHAR(255),
+    url TEXT NOT NULL,
+    ad_type VARCHAR(100),
+    ticket_context JSON,
+    before_screenshot TEXT,
+    crawl_duration_ms INT,
+    status VARCHAR(50) DEFAULT 'pending',
+    error_message TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+)"""
+            )
+            cur.execute(
+                """
+CREATE TABLE IF NOT EXISTS rule_outputs (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    input_id BIGINT NOT NULL,
+    rules JSON,
+    input_tokens INT,
+    output_tokens INT,
+    validation_result JSON,
+    after_screenshot TEXT,
+    status VARCHAR(50) DEFAULT 'generated',
+    error_message TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (input_id) REFERENCES crawl_inputs(id) ON DELETE CASCADE
+)"""
+            )
+
+            cur.execute("SHOW COLUMNS FROM crawl_inputs LIKE 'report_id'")
+            if not cur.fetchone():
+                cur.execute(
+                    "ALTER TABLE crawl_inputs ADD COLUMN report_id VARCHAR(255) UNIQUE AFTER id"
+                )
+
+    _db_schema_initialized = True
+
+
+def _get_crawl_input_id(report_id: str) -> Optional[int]:
+    _ensure_schema()
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM crawl_inputs WHERE report_id=%s",
+                (report_id,),
+            )
+            row = cur.fetchone()
+            return row["id"] if row else None
+
+
+def save_crawl_input(
+    report_id: str,
+    domain: str,
+    url: str,
+    ticket_context: Optional[Dict[str, Any]] = None,
+    status: str = "pending",
+    error_message: Optional[str] = None,
+    crawl_duration_ms: Optional[int] = None,
+    before_screenshot: Optional[str] = None,
+    domain_type: Optional[str] = None,
+    jira_ticket_code: Optional[str] = None,
+    ad_type: Optional[str] = None,
+) -> int:
+    _ensure_schema()
+    record = {
+        "report_id": report_id,
+        "domain": domain,
+        "domain_type": domain_type,
+        "jira_ticket_code": jira_ticket_code,
+        "url": url,
+        "ad_type": ad_type,
+        "ticket_context": _json_value(ticket_context),
+        "before_screenshot": before_screenshot,
+        "crawl_duration_ms": crawl_duration_ms,
+        "status": status,
+        "error_message": error_message,
+    }
+
+    existing_id = _get_crawl_input_id(report_id)
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            if existing_id:
+                cur.execute(
+                    """
+UPDATE crawl_inputs
+SET domain=%s,
+    domain_type=%s,
+    jira_ticket_code=%s,
+    url=%s,
+    ad_type=%s,
+    ticket_context=%s,
+    before_screenshot=%s,
+    crawl_duration_ms=%s,
+    status=%s,
+    error_message=%s,
+    updated_at=NOW()
+WHERE report_id=%s
+""",
+                    (
+                        record["domain"],
+                        record["domain_type"],
+                        record["jira_ticket_code"],
+                        record["url"],
+                        record["ad_type"],
+                        record["ticket_context"],
+                        record["before_screenshot"],
+                        record["crawl_duration_ms"],
+                        record["status"],
+                        record["error_message"],
+                        report_id,
+                    ),
+                )
+                return existing_id
+
+            cur.execute(
+                """
+INSERT INTO crawl_inputs (
+    report_id,
+    domain,
+    domain_type,
+    jira_ticket_code,
+    url,
+    ad_type,
+    ticket_context,
+    before_screenshot,
+    crawl_duration_ms,
+    status,
+    error_message
+) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+""",
+                (
+                    record["report_id"],
+                    record["domain"],
+                    record["domain_type"],
+                    record["jira_ticket_code"],
+                    record["url"],
+                    record["ad_type"],
+                    record["ticket_context"],
+                    record["before_screenshot"],
+                    record["crawl_duration_ms"],
+                    record["status"],
+                    record["error_message"],
+                ),
+            )
+            return cur.lastrowid
+
+
+def _get_rule_output_id(input_id: int) -> Optional[int]:
+    _ensure_schema()
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM rule_outputs WHERE input_id=%s",
+                (input_id,),
+            )
+            row = cur.fetchone()
+            return row["id"] if row else None
+
+
+def save_rule_output(
+    report_id: str,
+    rules: Any,
+    input_tokens: Optional[int] = None,
+    output_tokens: Optional[int] = None,
+    status: str = "generated",
+    error_message: Optional[str] = None,
+) -> int:
+    _ensure_schema()
+    input_id = _get_crawl_input_id(report_id)
+    if input_id is None:
+        raise RuntimeError(f"No crawl_inputs row found for report_id={report_id}")
+
+    rules_json = _json_value(rules)
+    existing_id = _get_rule_output_id(input_id)
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            if existing_id:
+                cur.execute(
+                    """
+UPDATE rule_outputs
+SET rules=%s,
+    input_tokens=%s,
+    output_tokens=%s,
+    status=%s,
+    error_message=%s,
+    updated_at=NOW()
+WHERE input_id=%s
+""",
+                    (
+                        rules_json,
+                        input_tokens,
+                        output_tokens,
+                        status,
+                        error_message,
+                        input_id,
+                    ),
+                )
+                return existing_id
+
+            cur.execute(
+                """
+INSERT INTO rule_outputs (
+    input_id,
+    rules,
+    input_tokens,
+    output_tokens,
+    status,
+    error_message
+) VALUES (%s,%s,%s,%s,%s,%s)
+""",
+                (
+                    input_id,
+                    rules_json,
+                    input_tokens,
+                    output_tokens,
+                    status,
+                    error_message,
+                ),
+            )
+            return cur.lastrowid
+
+
+def save_rule_validation(
+    report_id: str,
+    validation_result: Any,
+    after_screenshot: Optional[str] = None,
+    status: str = "validated",
+) -> int:
+    _ensure_schema()
+    input_id = _get_crawl_input_id(report_id)
+    if input_id is None:
+        raise RuntimeError(f"No crawl_inputs row found for report_id={report_id}")
+
+    validation_json = _json_value(validation_result)
+    existing_id = _get_rule_output_id(input_id)
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            if existing_id:
+                cur.execute(
+                    """
+UPDATE rule_outputs
+SET validation_result=%s,
+    after_screenshot=%s,
+    status=%s,
+    updated_at=NOW()
+WHERE input_id=%s
+""",
+                    (
+                        validation_json,
+                        after_screenshot,
+                        status,
+                        input_id,
+                    ),
+                )
+                return existing_id
+
+            cur.execute(
+                """
+INSERT INTO rule_outputs (
+    input_id,
+    validation_result,
+    after_screenshot,
+    status
+) VALUES (%s,%s,%s,%s)
+""",
+                (
+                    input_id,
+                    validation_json,
+                    after_screenshot,
+                    status,
+                ),
+            )
+            return cur.lastrowid

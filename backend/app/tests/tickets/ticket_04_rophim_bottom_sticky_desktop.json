@@ -1,4 +1,4 @@
-﻿{
+{
     "description":  "A bottom sticky advertisement may remain visible near the bottom of the page. Only the bottom sticky ad should be blocked. Navigation, movie cards, search, sponsor sections, and normal page content must remain visible.",
     "request":  "[Desktop][Adblock] - rophim10.live/phimhay: Block bottom sticky advertisement",
     "steps":  [

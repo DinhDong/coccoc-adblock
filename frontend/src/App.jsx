@@ -117,12 +117,31 @@ export default function App() {
     setModal(null);
   };
 
-  const createTicket = (data, runNow) => {
+  const createTicket = async (data, runNow) => {
     const id = "u" + uid.current++;
     nextRpt.current++;
-    setTickets((ts) => [{ id, state: "draft", created: todayISO(), createdBy: CURRENT_USER.k, ...data }, ...ts]);
+    const ticketPayload = {
+      id,
+      state: "draft",
+      created: todayISO(),
+      createdBy: CURRENT_USER.k,
+      ...data,
+    };
+
+    setTickets((ts) => [ticketPayload, ...ts]);
     setModal(null);
     setTab("draft");
+
+    try {
+      await fetch("http://127.0.0.1:5000/api/tickets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(ticketPayload),
+      });
+    } catch (error) {
+      console.error("Failed to save ticket to backend", error);
+    }
+
     if (runNow) setTimeout(() => runPipeline(id), 350);
   };
 

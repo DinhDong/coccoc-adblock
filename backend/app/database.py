@@ -50,6 +50,11 @@ def _json_value(value: Any) -> Optional[str]:
     return json.dumps(value, ensure_ascii=False)
 
 
+def _column_exists(cursor, table_name: str, column_name: str) -> bool:
+    cursor.execute("SHOW COLUMNS FROM `%s` LIKE %%s" % table_name, (column_name,))
+    return cursor.fetchone() is not None
+
+
 def _ensure_schema() -> None:
     global _db_schema_initialized
     if _db_schema_initialized:
@@ -61,41 +66,42 @@ def _ensure_schema() -> None:
                 """
 CREATE TABLE IF NOT EXISTS crawl_inputs (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    report_id VARCHAR(255) UNIQUE,
     domain TEXT NOT NULL,
     domain_type VARCHAR(50),
     jira_ticket_code VARCHAR(255),
     url TEXT NOT NULL,
     ad_type VARCHAR(100),
-    ticket_context JSON,
+    ticket_context TEXT,
     before_screenshot TEXT,
     crawl_duration_ms INT,
     status VARCHAR(50) DEFAULT 'pending',
     error_message TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 )"""
             )
             cur.execute(
                 """
 CREATE TABLE IF NOT EXISTS rule_outputs (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    input_id BIGINT NOT NULL,
-    rules JSON,
+    input_id BIGINT,
+    rules TEXT,
     input_tokens INT,
     output_tokens INT,
     validation_result JSON,
     after_screenshot TEXT,
     status VARCHAR(50) DEFAULT 'generated',
     error_message TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (input_id) REFERENCES crawl_inputs(id) ON DELETE CASCADE
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_rule_outputs_crawl_inputs
+        FOREIGN KEY (input_id)
+        REFERENCES crawl_inputs(id)
+        ON DELETE CASCADE
 )"""
             )
 
-            cur.execute("SHOW COLUMNS FROM crawl_inputs LIKE 'report_id'")
-            if not cur.fetchone():
+            if not _column_exists(cur, "crawl_inputs", "report_id"):
                 cur.execute(
                     "ALTER TABLE crawl_inputs ADD COLUMN report_id VARCHAR(255) UNIQUE AFTER id"
                 )
@@ -107,10 +113,16 @@ def _get_crawl_input_id(report_id: str) -> Optional[int]:
     _ensure_schema()
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT id FROM crawl_inputs WHERE report_id=%s",
-                (report_id,),
-            )
+            if _column_exists(cur, "crawl_inputs", "report_id"):
+                cur.execute(
+                    "SELECT id FROM crawl_inputs WHERE report_id=%s",
+                    (report_id,),
+                )
+            else:
+                cur.execute(
+                    "SELECT id FROM crawl_inputs WHERE jira_ticket_code=%s",
+                    (report_id,),
+                )
             row = cur.fetchone()
             return row["id"] if row else None
 
@@ -133,7 +145,7 @@ def save_crawl_input(
         "report_id": report_id,
         "domain": domain,
         "domain_type": domain_type,
-        "jira_ticket_code": jira_ticket_code,
+        "jira_ticket_code": jira_ticket_code or report_id,
         "url": url,
         "ad_type": ad_type,
         "ticket_context": _json_value(ticket_context),
@@ -146,6 +158,72 @@ def save_crawl_input(
     existing_id = _get_crawl_input_id(report_id)
     with get_connection() as conn:
         with conn.cursor() as cur:
+            if _column_exists(cur, "crawl_inputs", "report_id"):
+                if existing_id:
+                    cur.execute(
+                        """
+UPDATE crawl_inputs
+SET domain=%s,
+    domain_type=%s,
+    jira_ticket_code=%s,
+    url=%s,
+    ad_type=%s,
+    ticket_context=%s,
+    before_screenshot=%s,
+    crawl_duration_ms=%s,
+    status=%s,
+    error_message=%s,
+    updated_at=NOW()
+WHERE report_id=%s
+""",
+                        (
+                            record["domain"],
+                            record["domain_type"],
+                            record["jira_ticket_code"],
+                            record["url"],
+                            record["ad_type"],
+                            record["ticket_context"],
+                            record["before_screenshot"],
+                            record["crawl_duration_ms"],
+                            record["status"],
+                            record["error_message"],
+                            report_id,
+                        ),
+                    )
+                    return existing_id
+
+                cur.execute(
+                    """
+INSERT INTO crawl_inputs (
+    report_id,
+    domain,
+    domain_type,
+    jira_ticket_code,
+    url,
+    ad_type,
+    ticket_context,
+    before_screenshot,
+    crawl_duration_ms,
+    status,
+    error_message
+) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+""",
+                    (
+                        record["report_id"],
+                        record["domain"],
+                        record["domain_type"],
+                        record["jira_ticket_code"],
+                        record["url"],
+                        record["ad_type"],
+                        record["ticket_context"],
+                        record["before_screenshot"],
+                        record["crawl_duration_ms"],
+                        record["status"],
+                        record["error_message"],
+                    ),
+                )
+                return cur.lastrowid
+
             if existing_id:
                 cur.execute(
                     """
@@ -161,7 +239,7 @@ SET domain=%s,
     status=%s,
     error_message=%s,
     updated_at=NOW()
-WHERE report_id=%s
+WHERE jira_ticket_code=%s
 """,
                     (
                         record["domain"],
@@ -182,7 +260,6 @@ WHERE report_id=%s
             cur.execute(
                 """
 INSERT INTO crawl_inputs (
-    report_id,
     domain,
     domain_type,
     jira_ticket_code,
@@ -193,10 +270,9 @@ INSERT INTO crawl_inputs (
     crawl_duration_ms,
     status,
     error_message
-) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
 """,
                 (
-                    record["report_id"],
                     record["domain"],
                     record["domain_type"],
                     record["jira_ticket_code"],

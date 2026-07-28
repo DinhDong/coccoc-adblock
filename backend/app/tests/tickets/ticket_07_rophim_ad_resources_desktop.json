@@ -1,4 +1,4 @@
-﻿{
+{
     "description":  "Ad-related image or banner resources may continue loading on the page. Only clear ad-related resources should be blocked. Normal media, movie posters, navigation, and page content must remain available.",
     "request":  "[Desktop][Adblock] - rophim10.live/phimhay: Block ad-related resources",
     "steps":  [

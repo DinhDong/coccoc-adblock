@@ -1,4 +1,4 @@
-﻿{
+{
     "description":  "Visible advertisement containers may remain on the page. Only clear ad containers should be blocked. Movie posters, navigation, search, and normal page content must remain visible.",
     "request":  "[Desktop][Adblock] - motchilltv.tf: Block visible ad containers",
     "steps":  [

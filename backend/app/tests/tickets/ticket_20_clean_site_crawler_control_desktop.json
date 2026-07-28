@@ -1,4 +1,4 @@
-﻿{
+{
     "description":  "This is a clean-page control ticket used to verify that the crawler, workflow, and Docker/K8s environment do not crash on a simple page. It is not used to evaluate ad-blocking effectiveness.",
     "request":  "[Desktop][Crawler] - example.com: Control case for clean-page crawling",
     "steps":  [

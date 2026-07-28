@@ -1,4 +1,4 @@
-﻿{
+{
     "description":  "The mobile header, search, and navigation controls should remain visible when Adblock mode is enabled. This ticket checks that generated rules do not break mobile navigation.",
     "request":  "[Android][Adblock] - rophim10.live/phimhay: Mobile navigation should remain visible",
     "steps":  [

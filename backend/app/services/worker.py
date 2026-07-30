@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_TICKETS_DIR = Path("app/tests/tickets")
 DEFAULT_LEDGER_FILE = Path("data/service_worker/processed_tickets.json")
 DEFAULT_SLEEP_SECONDS = 300
-DEFAULT_MAX_IDLE_CYCLES = 2
+DEFAULT_MAX_IDLE_CYCLES = 0  # 0 = run forever
 
 SUCCESS_PIPELINE_STATUSES = {"ok", "generated", "no_rules"}
 TERMINAL_FILE_STATUSES = {"completed", "failed"}

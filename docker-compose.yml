@@ -20,7 +20,7 @@ services:
     build: ./backend
     env_file: .env.local
     command: ["app.services.worker"]
-    restart: "no"
+    restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy

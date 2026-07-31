@@ -17,6 +17,19 @@
 #   docker compose run --rm backend pytest app/tests/ -v
 #   docker compose down                   # stop; data preserved
 #   docker compose down -v                # stop + delete MySQL data
+#
+# Outputs land in ./backend/data (bind-mounted, so they survive the container):
+#   data/rule_outputs/results/<report_id>_rules.json
+#   data/rule_outputs/validation/<report_id>_validation.json
+#   data/rule_outputs/screenshots/<report_id>_before.png         # clean reference page
+#   data/rule_outputs/screenshots/<report_id>_before_boxed.png   # + boxes drawn, with legend
+#   data/rule_outputs/screenshots/<report_id>_with_rules.png     # all passing rules applied
+#
+# The validation JSON carries preview_capture plus a per-rule preview block of
+# bounding boxes measured against _before.png, for the moderator CMS overlays.
+# _before_boxed.png is a convenience render of those boxes; re-render it for any
+# finished report without re-running the pipeline:
+#   docker compose run --rm backend app.validator.preview_render <report_id>
 # ==========================================================================
 
 services:

@@ -5,9 +5,15 @@
 # save crawl error information
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
+
+from app.storage.s3_storage import create_s3_storage_from_env
+
+
+logger = logging.getLogger(__name__)
 
 
 class CrawlStorage:
@@ -31,6 +37,14 @@ class CrawlStorage:
             base_dir: Root directory where crawler outputs will be saved.
         """
         self.base_dir = Path(base_dir)
+
+        # S3/Ceph is optional. If configuration is invalid or the service is
+        # temporarily unavailable, local crawler storage must still work.
+        try:
+            self.s3_storage = create_s3_storage_from_env()
+        except Exception:
+            logger.exception("Failed to initialize Ceph/S3 storage; using local storage only")
+            self.s3_storage = None
 
         self.html_dir = self.base_dir / "html"
         self.screenshot_dir = self.base_dir / "screenshots"
@@ -110,6 +124,56 @@ class CrawlStorage:
 
         return str(file_path)
 
+    def upload_screenshot(
+        self,
+        report_id: str,
+        screenshot_bytes: bytes,
+    ) -> Optional[str]:
+        """
+        Upload a crawler screenshot to Ceph/S3.
+
+        Local screenshot saving remains the primary fallback. This method returns
+        None when S3 is disabled, the screenshot is empty, or the upload fails.
+
+        Args:
+            report_id: Unique ID of the crawl report.
+            screenshot_bytes: PNG bytes from browser.py.
+
+        Returns:
+            S3 URI when the upload succeeds, otherwise None.
+        """
+        if self.s3_storage is None:
+            return None
+
+        if not screenshot_bytes:
+            logger.warning(
+                "Skipping Ceph/S3 upload because screenshot is empty for report %s",
+                report_id,
+            )
+            return None
+
+        safe_id = self._safe_report_id(report_id)
+        object_key = f"crawl_outputs/screenshots/{safe_id}.png"
+
+        try:
+            s3_uri = self.s3_storage.upload_bytes(
+                object_key=object_key,
+                data=screenshot_bytes,
+                content_type="image/png",
+            )
+            logger.info(
+                "Uploaded screenshot to Ceph/S3 for report %s: %s",
+                report_id,
+                s3_uri,
+            )
+            return s3_uri
+        except Exception:
+            logger.exception(
+                "Failed to upload screenshot to Ceph/S3 for report %s",
+                report_id,
+            )
+            return None
+
     def save_result(self, report_id: str, result: Dict[str, Any]) -> str:
         """
         Save final crawl result as JSON.
@@ -185,6 +249,7 @@ class CrawlStorage:
         summary: Optional[Dict[str, Any]] = None,
         html_path: str = "",
         screenshot_path: str = "",
+        screenshot_s3_uri: Optional[str] = None,
         errors: Optional[List[str]] = None,
         fallbacks_used: Optional[List[str]] = None,
         alerts: Optional[List[str]] = None,
@@ -206,7 +271,8 @@ class CrawlStorage:
             ad_candidates: List of ad candidate dicts with suggested rules.
             summary: Detection summary (networks found, confidence breakdown).
             html_path: Path to saved HTML file.
-            screenshot_path: Path to saved screenshot file.
+            screenshot_path: Path to saved local screenshot file.
+            screenshot_s3_uri: Ceph/S3 URI for the uploaded screenshot.
             errors: List of errors found during crawling.
             fallbacks_used: List of fallback actions already tried.
             alerts: List of warning/alert messages.
@@ -226,6 +292,7 @@ class CrawlStorage:
             "files": {
                 "html": html_path,
                 "screenshot": screenshot_path,
+                "screenshot_s3": screenshot_s3_uri,
             },
 
             "network_requests": network_requests or {},

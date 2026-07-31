@@ -273,6 +273,10 @@ class CrawlService:
                 report_id,
                 render_result.screenshot_bytes,
             )
+            screenshot_s3_uri = self.storage.upload_screenshot(
+                report_id,
+                render_result.screenshot_bytes,
+            )
 
             result_data = {
                 "url": url,
@@ -299,6 +303,7 @@ class CrawlService:
                 "files": {
                     "html": html_path,
                     "screenshot": screenshot_path,
+                    "screenshot_s3": screenshot_s3_uri,
                 },
             }
 

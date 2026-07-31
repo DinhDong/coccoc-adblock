@@ -87,7 +87,7 @@ def create_app():
             update_ticket_status(report_id, "failed")
             return {"ok": False, "error": str(exc)}, 500
 
-        if result.get("status") in {"review", "validated", "generated", "no_rules"}:
+        if result.get("status") in {"review", "validated", "generated", "no_rules", "ok"}:
             update_ticket_status(report_id, "review")
         elif result.get("status") == "crawl_failed":
             update_ticket_status(report_id, "crawl_failed")

@@ -194,6 +194,14 @@ def validate_rules(
     try:
         syntax_results = check_syntax_batch(rule_strings)
         _assert_result_count("syntax", len(rule_strings), len(syntax_results))
+        # Detailed syntax logging for terminal visibility
+        for rule, sres in zip(rule_strings, syntax_results):
+            logger.info(
+                "Syntax check | rule=%r | valid=%s | error=%s",
+                rule,
+                bool(getattr(sres, "valid", False)),
+                getattr(sres, "error", None),
+            )
     except Exception as exc:
         reason = f"syntax validator error: {exc}"
         for idx, rule in enumerate(rule_strings):
@@ -238,6 +246,14 @@ def validate_rules(
         try:
             scope_results = check_scope_batch(scope_rules)
             _assert_result_count("scope", len(scope_rules), len(scope_results))
+            # Detailed scope logging
+            for rule, sres in zip(scope_rules, scope_results):
+                logger.info(
+                    "Scope check | rule=%r | safe=%s | detail=%s",
+                    rule,
+                    bool(getattr(sres, "safe", False)),
+                    getattr(sres, "detail", None),
+                )
         except Exception as exc:
             reason = f"scope validator error: {exc}"
 
@@ -300,6 +316,15 @@ def validate_rules(
             problem_type=resolved_problem_type,
             has_direct_evidence=has_direct_evidence,
             ticket_context=context,
+        )
+
+        # Log policy decision for visibility
+        logger.info(
+            "Policy check | rule=%r | valid=%s | direction=%s | error=%s",
+            rule,
+            bool(getattr(policy_result, "valid", False)),
+            getattr(policy_result, "rule_direction", None),
+            getattr(policy_result, "error", None),
         )
 
         if not policy_result.valid:
@@ -378,11 +403,23 @@ def validate_rules(
                 policy_result=policy_result,
             )
 
+            # Rich sandbox logging for diagnostics
             logger.info(
                 "Sandbox tested rule in %.1fs | passed=%s | rule=%s",
                 time.perf_counter() - started,
                 passed,
                 rule,
+            )
+            logger.info(
+                "Sandbox details | rule=%r | ads_blocked=%s | page_functional=%s | ticket_assertions_passed=%s | blocked_requests=%s | candidate_blocked_requests=%s | broken_selectors=%s | error=%s",
+                rule,
+                getattr(sandbox_result, "ads_blocked", None),
+                getattr(sandbox_result, "page_functional", None),
+                getattr(sandbox_result, "ticket_assertions_passed", None),
+                getattr(sandbox_result, "blocked_requests", None),
+                getattr(sandbox_result, "candidate_blocked_requests", None),
+                getattr(sandbox_result, "broken_selectors", None),
+                getattr(sandbox_result, "error", None),
             )
 
             outcomes[idx] = RuleValidationOutcome(

@@ -912,6 +912,35 @@ def render_url(
     except PlaywrightError as exc:
         error_message = f"Playwright error while rendering {url}: {exc}"
         logger.exception(error_message)
+        # If rendering failed while running with a visible browser, try
+        # one headless retry. Some sites or environments cause the browser
+        # to be closed unexpectedly in headful mode; retrying headless
+        # often recovers the crawl without user intervention.
+        if not headless:
+            logger.warning("Render failed in headful mode; retrying headless for %s", url)
+            try:
+                return render_url(
+                    url=url,
+                    screenshot_path=screenshot_path,
+                    timeout_ms=timeout_ms,
+                    wait_until=wait_until,
+                    browser_type=browser_type,
+                    headless=True,
+                    enable_scroll=enable_scroll,
+                    scroll_step=scroll_step,
+                    max_scrolls=max_scrolls,
+                    network_idle_timeout_ms=network_idle_timeout_ms,
+                    capture_requests=capture_requests,
+                    page_load_delay_ms=page_load_delay_ms,
+                    stealth=stealth,
+                    user_agent=user_agent,
+                    environment=environment,
+                    focus_region=focus_region,
+                )
+            except Exception:
+                # Fall through and return the original error result.
+                pass
+
         result.error = error_message
     except Exception as exc:
         error_message = f"Unexpected error while rendering {url}: {exc}"

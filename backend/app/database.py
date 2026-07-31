@@ -106,6 +106,11 @@ CREATE TABLE IF NOT EXISTS rule_outputs (
                     "ALTER TABLE crawl_inputs ADD COLUMN report_id VARCHAR(255) UNIQUE AFTER id"
                 )
 
+            if _column_exists(cur, "crawl_inputs", "report_id"):
+                cur.execute(
+                    "UPDATE crawl_inputs SET report_id = jira_ticket_code WHERE report_id IS NULL AND jira_ticket_code IS NOT NULL"
+                )
+
     _db_schema_initialized = True
 
 
@@ -124,7 +129,26 @@ def _get_crawl_input_id(report_id: str) -> Optional[int]:
                     (report_id,),
                 )
             row = cur.fetchone()
-            return row["id"] if row else None
+            if row:
+                return row["id"]
+
+            # Fallback: some older rows may have the report name embedded in
+            # the JSON `ticket_context` text but not in `report_id` or
+            # `jira_ticket_code`. Try a simple LIKE search to locate those
+            # rows and return the id if found. This helps avoid creating a
+            # duplicate crawl_inputs row with a generated UUID when the
+            # frontend supplied a stable `name` but the DB row only contains
+            # it inside `ticket_context`.
+            try:
+                pattern = f"%{report_id}%"
+                cur.execute(
+                    "SELECT id FROM crawl_inputs WHERE ticket_context LIKE %s",
+                    (pattern,),
+                )
+                row2 = cur.fetchone()
+                return row2["id"] if row2 else None
+            except Exception:
+                return None
 
 
 def save_crawl_input(
@@ -298,6 +322,21 @@ def _get_rule_output_id(input_id: int) -> Optional[int]:
             )
             row = cur.fetchone()
             return row["id"] if row else None
+
+
+def rule_output_exists(report_id: str) -> bool:
+    _ensure_schema()
+    input_id = _get_crawl_input_id(report_id)
+    if input_id is None:
+        return False
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM rule_outputs WHERE input_id=%s",
+                (input_id,),
+            )
+            return cur.fetchone() is not None
 
 
 def save_rule_output(

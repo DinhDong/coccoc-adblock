@@ -64,6 +64,7 @@ from app.database import (
     save_crawl_input,
     save_rule_output,
     save_rule_validation,
+    rule_output_exists,
 )
 from app.tickets import update_ticket_status
 
@@ -79,6 +80,50 @@ def _separator(title: str) -> None:
     print(f"\n{'=' * 60}")
     print(f"  {title}")
     print(f"{'=' * 60}\n")
+
+
+def _ensure_rule_outputs_from_files(report_id: str, rules_path: Path, validation_path: Path) -> None:
+    if rule_output_exists(report_id):
+        return
+
+    if rules_path.exists():
+        try:
+            with open(rules_path, encoding="utf-8") as file:
+                rules_data = json.load(file)
+
+            save_rule_output(
+                report_id=report_id,
+                rules=rules_data,
+                input_tokens=None,
+                output_tokens=None,
+                status=rules_data.get("status", "generated"),
+            )
+        except Exception as exc:
+            logger.warning(
+                "Fallback: failed to save rule output from file for %s: %s",
+                report_id,
+                exc,
+                exc_info=True,
+            )
+
+    if validation_path.exists():
+        try:
+            with open(validation_path, encoding="utf-8") as file:
+                validation_data = json.load(file)
+
+            save_rule_validation(
+                report_id=report_id,
+                validation_result=validation_data,
+                after_screenshot=validation_data.get("combined_screenshot"),
+                status=validation_data.get("status", "validated"),
+            )
+        except Exception as exc:
+            logger.warning(
+                "Fallback: failed to save validation output from file for %s: %s",
+                report_id,
+                exc,
+                exc_info=True,
+            )
 
 
 def _elapsed_ms(started_at: float) -> int:
@@ -284,6 +329,7 @@ def run_rule_generation(
         logger.warning(
             "Stage 1: failed saving rule output to DB: %s",
             exc,
+            exc_info=True,
         )
 
     register_rules(
@@ -456,6 +502,7 @@ def run_rule_validation(
         logger.warning(
             "Stage 2: failed saving validation result to DB: %s",
             exc,
+            exc_info=True,
         )
 
     logger.info(
@@ -746,6 +793,14 @@ def run_pipeline(
         print(f"  Crawl time: {crawl_elapsed_ms} ms")
 
     try:
+        update_ticket_status(report_id, "generating")
+    except Exception:
+        logger.warning(
+            "Pipeline: could not set generating status for %s",
+            report_id,
+        )
+
+    try:
         save_crawl_input(
             report_id=report_id,
             domain=get_domain(page_url),
@@ -857,6 +912,20 @@ def run_pipeline(
                 report_id,
             )
 
+        try:
+            save_rule_output(
+                report_id=report_id,
+                rules=[],
+                input_tokens=None,
+                output_tokens=None,
+                status="no_rules",
+            )
+        except Exception as exc:
+            logger.warning(
+                "Pipeline: failed saving empty rule output to DB: %s",
+                exc,
+            )
+
         if verbose:
             print(
                 "  No new rules generated — "
@@ -937,6 +1006,14 @@ def run_pipeline(
     if verbose:
         _separator(
             f"Stage 2: Rule Validation — {report_id}"
+        )
+
+    try:
+        update_ticket_status(report_id, "validating")
+    except Exception:
+        logger.warning(
+            "Pipeline: could not set validating status for %s",
+            report_id,
         )
 
     try:
@@ -1032,6 +1109,20 @@ def run_pipeline(
                 "for moderator review"
             )
 
+    try:
+        _ensure_rule_outputs_from_files(
+            report_id,
+            rules_path,
+            validation_path,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Pipeline: fallback rule_outputs persistence failed for %s: %s",
+            report_id,
+            exc,
+            exc_info=True,
+        )
+
     return {
         "report_id": report_id,
         "url": page_url,
@@ -1067,7 +1158,7 @@ def run_pipeline(
             "combined_sandbox_passed",
             False,
         ),
-        "status": "ok",
+        "status": "review",
     }
 
 

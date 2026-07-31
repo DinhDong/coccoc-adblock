@@ -1,4 +1,5 @@
 import json
+import uuid
 from typing import Any, Dict
 from urllib.parse import urlparse
 
@@ -39,7 +40,7 @@ def persist_ticket_to_db(ticket: Dict[str, Any]) -> int:
     }
 
     return save_crawl_input(
-        report_id=ticket.get("id") or ticket.get("name"),
+        report_id=(ticket.get("id") or ticket.get("name") or str(uuid.uuid4())),
         domain=domain,
         url=url,
         ticket_context=payload,

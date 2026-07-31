@@ -21,9 +21,11 @@ export default function App() {
   const backendUrl = "http://127.0.0.1:5000";
   const [, setNowTick] = useState(0);
   const timers = useRef({});
-  const uid = useRef(100);
   const nextRpt = useRef(148);
   const syncedTeammate = useRef(false);
+
+  const makeTicketId = () =>
+    window.crypto?.randomUUID?.() ?? `u${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
   const setT = (id, patch) =>
     setTickets((ts) =>
@@ -68,8 +70,7 @@ export default function App() {
 
   const runPipeline = async (id) => {
     clearFor(id);
-    setT(id, { runStartedAt: nowISO(), state: "inprocess", stage: null });
-    await updateTicketStatusInBackend(id, "inprocess");
+    setT(id, { runStartedAt: nowISO(), state: "inprocess", stage: "crawl" });
 
     const ticket = tickets.find((t) => t.id === id);
     if (!ticket) return;
@@ -164,7 +165,10 @@ export default function App() {
   };
 
   const createTicket = async (data, runNow) => {
-    const id = "u" + uid.current++;
+    // Use the user-provided name as the stable report id when available,
+    // otherwise fall back to a generated id. This prevents the report from
+    // being later replaced by a UUID identifier.
+    const id = (data && data.name && data.name.trim()) ? data.name.trim() : makeTicketId();
     nextRpt.current++;
     const ticketPayload = {
       id,
@@ -189,7 +193,10 @@ export default function App() {
     }
 
     if (runNow) {
-      setTimeout(() => runPipeline(id), 350);
+      // Ensure the frontend ticket list is refreshed so `runPipeline` can
+      // reliably find the created ticket by id (state updates can be async).
+      await loadTickets();
+      runPipeline(id);
     }
   };
 

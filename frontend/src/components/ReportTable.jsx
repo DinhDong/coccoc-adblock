@@ -6,6 +6,7 @@ import StatusBadge from "./StatusBadge.jsx";
 function rulesSummary(t) {
   if (t.state === "draft") return <span className="ad-mute">—</span>;
   if (t.state === "inprocess") return <span className="ad-mute">Generating…</span>;
+  if (t.state === "failed") return <span className="ad-failtext">Run failed — no rules produced</span>;
   if (t.state === "review") {
     const p = passedRules(t).length;
     return <span>{p}/{(t.rules || []).length} passed pre-test</span>;

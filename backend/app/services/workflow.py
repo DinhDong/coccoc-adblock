@@ -200,6 +200,18 @@ def run_rule_generation(
         if fallback_used is None:
             fallback_used = token_usage.get("fallback_used")
 
+    generation_error = getattr(generation_result, "error", "")
+
+    if generation_error:
+        # Generation aborted (missing API key, network/LLM failure). Do not let
+        # this reach the caller as an ordinary empty result — it is a failure.
+        logger.error(
+            "Stage 1: rule generation failed for %s: %s",
+            report_id,
+            generation_error,
+        )
+        raise RuntimeError(f"Rule generation failed: {generation_error}")
+
     if not generated_rules:
         logger.warning(
             "Stage 1: no rules generated for %s | generation_elapsed_ms=%d",
@@ -242,14 +254,6 @@ def run_rule_generation(
 
     total_skipped = len(internal_dupes) + len(external_dupes)
 
-    if not rules:
-        logger.info(
-            "Stage 1: all %d generated rule(s) were duplicates for %s",
-            len(generated_rules),
-            report_id,
-        )
-        return []
-
     OUT_RESULTS.mkdir(parents=True, exist_ok=True)
     rules_path = OUT_RESULTS / f"{report_id}_rules.json"
 
@@ -262,7 +266,7 @@ def run_rule_generation(
         "problem_type": problem_type,
         "resolution_strategy": resolution_strategy,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "status": "generated",
+        "status": "generated" if rules else "no_rules",
         "crawl_elapsed_ms": crawl_elapsed_ms,
         "generation_elapsed_ms": generation_elapsed_ms,
         "rule_count": len(rules),
@@ -323,7 +327,7 @@ def run_rule_generation(
                 if isinstance(token_usage, Mapping)
                 else None
             ),
-            status="generated",
+            status="generated" if rules else "no_rules",
         )
     except Exception as exc:
         logger.warning(
@@ -331,6 +335,18 @@ def run_rule_generation(
             exc,
             exc_info=True,
         )
+
+    if not rules:
+        # Everything the model proposed was already known. The blob written
+        # above still carries duplicates_skipped so the UI can explain why
+        # this run has nothing to review.
+        logger.info(
+            "Stage 1: all %d generated rule(s) were duplicates for %s",
+            len(generated_rules),
+            report_id,
+        )
+        _log_token_usage(token_usage)
+        return []
 
     register_rules(
         domain,
@@ -913,9 +929,13 @@ def run_pipeline(
             )
 
         try:
+            # Prefer the blob Stage 1 wrote — when every candidate was a
+            # duplicate it carries duplicates_skipped, which the UI needs to
+            # explain the empty result. Fall back to [] if Stage 1 never got
+            # far enough to write one.
             save_rule_output(
                 report_id=report_id,
-                rules=[],
+                rules=rules_data or [],
                 input_tokens=None,
                 output_tokens=None,
                 status="no_rules",

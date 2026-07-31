@@ -7,6 +7,7 @@ try:
         fetch_all_tickets,
         update_ticket_status,
         delete_ticket,
+        record_run_failure,
     )
 except ImportError:  # pragma: no cover
     from app.tickets import (
@@ -14,6 +15,7 @@ except ImportError:  # pragma: no cover
         fetch_all_tickets,
         update_ticket_status,
         delete_ticket,
+        record_run_failure,
     )
 
 try:
@@ -85,14 +87,27 @@ def create_app():
             )
         except Exception as exc:
             update_ticket_status(report_id, "failed")
+            record_run_failure(report_id, str(exc))
             return {"ok": False, "error": str(exc)}, 500
 
         if result.get("status") in {"review", "validated", "generated", "no_rules", "ok"}:
             update_ticket_status(report_id, "review")
         elif result.get("status") == "crawl_failed":
             update_ticket_status(report_id, "crawl_failed")
+            record_run_failure(
+                report_id,
+                "Crawl failed at stage '%s': %s"
+                % (
+                    result.get("crawl_stage", "unknown"),
+                    result.get("crawl_error", "unknown error"),
+                ),
+            )
         else:
             update_ticket_status(report_id, "failed")
+            record_run_failure(
+                report_id,
+                result.get("error") or "Pipeline returned status '%s'" % result.get("status"),
+            )
 
         return {"ok": True, "result": result}, 200
 

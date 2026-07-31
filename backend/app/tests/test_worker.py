@@ -2,7 +2,9 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+import app.services.worker as worker_module
 from app.services.worker import (
     FileJobSource,
     build_job_from_ticket,
@@ -67,7 +69,7 @@ class WorkerFileModeTests(unittest.TestCase):
 
             self.assertIsNone(source.claim_next())
 
-    def test_worker_stops_after_two_idle_sleep_cycles(self) -> None:
+    def test_worker_keeps_polling_until_explicitly_stopped(self) -> None:
         class EmptySource:
             name = "empty"
 
@@ -84,14 +86,26 @@ class WorkerFileModeTests(unittest.TestCase):
             def mark_failed(self, job, error_message, output):
                 raise AssertionError("No job should fail")
 
-        source = EmptySource()
+        class TestStopFlag:
+            def __init__(self) -> None:
+                self.value = False
+                self.wait_count = 0
 
-        processed = run_worker(
-            source=source,
-            sleep_seconds=0,
-            max_idle_cycles=2,
-            once=False,
-        )
+            def install(self) -> None:
+                pass
+
+            def wait(self, _seconds: int) -> None:
+                self.wait_count += 1
+                if self.wait_count == 3:
+                    self.value = True
+
+        source = EmptySource()
+        with patch.object(worker_module, "StopFlag", TestStopFlag):
+            processed = run_worker(
+                source=source,
+                sleep_seconds=0,
+                once=False,
+            )
 
         self.assertEqual(processed, 0)
         self.assertEqual(source.claim_count, 3)

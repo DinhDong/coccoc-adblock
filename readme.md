@@ -40,7 +40,7 @@ Worker modes:
 - `auto` (default): use DB mode when `DATABASE_URL` is configured and `crawl_inputs` / `rule_outputs` exist; otherwise use file mode.
 - `files`: scan `backend/app/tests/tickets/*.json`, skip already processed tickets in `backend/data/service_worker/processed_tickets.json`, then run crawl -> generate -> validate.
 - `db`: poll `crawl_inputs` where `status = 'new'`, mark jobs `processing`, write `rule_outputs`, then mark inputs `completed` or `failed`.
-- When no jobs are available, the worker sleeps for `WORKER_SLEEP_SECONDS`; after `WORKER_MAX_IDLE_CYCLES=2` idle sleep cycles it exits cleanly.
+- When no jobs are available, the worker sleeps for `WORKER_SLEEP_SECONDS` and keeps polling until it receives a stop signal.
 
 Useful commands:
 
@@ -58,7 +58,7 @@ docker compose run --rm backend app.services.worker --source db --once
 docker compose run --rm backend app.services.worker --sleep 60
 
 # Keep waiting forever when idle
-docker compose run --rm backend app.services.worker --max-idle 0
+docker compose run --rm backend app.services.worker
 ```
 
 Failed jobs are terminal. Admins renew them manually by changing DB status back

@@ -44,7 +44,6 @@ logger = logging.getLogger(__name__)
 DEFAULT_TICKETS_DIR = Path("app/tests/tickets")
 DEFAULT_LEDGER_FILE = Path("data/service_worker/processed_tickets.json")
 DEFAULT_SLEEP_SECONDS = 300
-DEFAULT_MAX_IDLE_CYCLES = 0  # 0 = run forever
 
 SUCCESS_PIPELINE_STATUSES = {"ok", "generated", "no_rules"}
 TERMINAL_FILE_STATUSES = {"completed", "failed"}
@@ -331,22 +330,19 @@ def run_worker(
     source: JobSource,
     sleep_seconds: int = DEFAULT_SLEEP_SECONDS,
     once: bool = False,
-    max_idle_cycles: int = DEFAULT_MAX_IDLE_CYCLES,
     run_validation: bool = True,
     skip_external: bool = False,
     headless: bool = True,
 ) -> int:
     processed = 0
-    idle_cycles = 0
     should_stop = StopFlag()
     should_stop.install()
 
     logger.info(
-        "Worker started source=%s sleep=%ss once=%s max_idle=%s",
+        "Worker started source=%s sleep=%ss once=%s",
         source.name,
         sleep_seconds,
         once,
-        max_idle_cycles or "unlimited",
     )
 
     try:
@@ -358,26 +354,13 @@ def run_worker(
                     logger.info("No pending requests. Exiting because --once is set.")
                     return processed
 
-                if max_idle_cycles > 0 and idle_cycles >= max_idle_cycles:
-                    logger.info(
-                        "Reached max idle cycles (%s). Stopping worker.",
-                        max_idle_cycles,
-                    )
-                    return processed
-
-                idle_cycles += 1
                 logger.info(
-                    "No pending requests, sleeping %ss... (idle %s/%s)",
+                    "No pending requests, sleeping %ss...",
                     sleep_seconds,
-                    idle_cycles,
-                    max_idle_cycles if max_idle_cycles > 0 else "unlimited",
                 )
 
                 should_stop.wait(sleep_seconds)
                 continue
-
-            # Reset idle counter when work is found
-            idle_cycles = 0
 
             process_job(
                 source=source,
@@ -851,12 +834,6 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="Open a visible browser window during crawl.",
     )
-    parser.add_argument(
-        "--max-idle",
-        type=int,
-        default=int(os.getenv("WORKER_MAX_IDLE_CYCLES", str(DEFAULT_MAX_IDLE_CYCLES))),
-        help="Stop after this many consecutive idle sleep cycles. Use 0 for unlimited.",
-    )
     return parser.parse_args(argv)
 
 
@@ -875,7 +852,6 @@ def main(argv: Optional[list[str]] = None) -> int:
         source=source,
         sleep_seconds=max(args.sleep, 1),
         once=args.once,
-        max_idle_cycles=max(args.max_idle, 0),
         run_validation=not args.no_sandbox,
         skip_external=args.no_external,
         headless=not args.no_headless,

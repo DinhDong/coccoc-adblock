@@ -474,6 +474,7 @@ def run_rule_validation(
     )
 
     return {
+        "status": "review",
         "total": report.total,
         "passed": report.passed_count,
         "failed": report.failed,

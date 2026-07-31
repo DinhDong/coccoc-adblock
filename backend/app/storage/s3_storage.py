@@ -9,15 +9,19 @@ from botocore.config import Config
 
 def _required_env(name: str) -> str:
     value = os.getenv(name, "").strip()
+
     if not value:
         raise RuntimeError(f"Missing required environment variable: {name}")
+
     return value
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
     value = os.getenv(name)
+
     if value is None:
         return default
+
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
@@ -32,8 +36,14 @@ class S3Storage:
             endpoint_url=_required_env("AWS_ENDPOINT"),
             aws_access_key_id=_required_env("S3_ACCESS_KEY"),
             aws_secret_access_key=_required_env("S3_SECRET_KEY"),
-            region_name=os.getenv("AWS_DEFAULT_REGION", "us-east-1"),
-            verify=_env_bool("S3_VERIFY_SSL", default=True),
+            region_name=os.getenv(
+                "AWS_DEFAULT_REGION",
+                "us-east-1",
+            ),
+            verify=_env_bool(
+                "S3_VERIFY_SSL",
+                default=True,
+            ),
             config=Config(
                 signature_version="s3v4",
                 request_checksum_calculation="when_required",
@@ -58,6 +68,19 @@ class S3Storage:
         data: bytes,
         content_type: str,
     ) -> str:
+        """
+        Upload raw bytes to Ceph.
+
+        Returns:
+            Stable S3 URI such as:
+            s3://dev-capstone/images/screenshots/report-1/file.png
+        """
+        if not object_key.strip():
+            raise ValueError("object_key must not be empty")
+
+        if not data:
+            raise ValueError("data must not be empty")
+
         self.client.put_object(
             Bucket=self.bucket,
             Key=object_key,
@@ -67,8 +90,46 @@ class S3Storage:
 
         return f"s3://{self.bucket}/{object_key}"
 
+    def generate_download_url(
+        self,
+        *,
+        object_key: str,
+        expires_in: int = 900,
+    ) -> str:
+        """
+        Generate a temporary URL for viewing/downloading an object.
+
+        Args:
+            object_key: Path of the object inside the bucket.
+            expires_in: URL lifetime in seconds.
+        """
+        if not object_key.strip():
+            raise ValueError("object_key must not be empty")
+
+        return self.client.generate_presigned_url(
+            ClientMethod="get_object",
+            Params={
+                "Bucket": self.bucket,
+                "Key": object_key,
+            },
+            ExpiresIn=expires_in,
+        )
+
+    def delete_object(self, *, object_key: str) -> None:
+        """Delete an object from Ceph."""
+
+        if not object_key.strip():
+            raise ValueError("object_key must not be empty")
+
+        self.client.delete_object(
+            Bucket=self.bucket,
+            Key=object_key,
+        )
+
 
 def create_s3_storage_from_env() -> Optional[S3Storage]:
+    """Create S3 storage only when S3_ENABLED is true."""
+
     if not _env_bool("S3_ENABLED", default=False):
         return None
 

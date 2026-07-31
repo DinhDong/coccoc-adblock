@@ -1,7 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { STATE_ORDER, STAGES, CURRENT_USER } from "./constants.js";
 import { nowISO, todayISO, makeRules } from "./utils.js";
-import { SEED } from "./data/seed.js";
 import Layout from "./components/Layout.jsx";
 import ReportDetail from "./components/ReportDetail.jsx";
 import NewReportModal from "./components/NewReportModal.jsx";
@@ -11,7 +10,7 @@ import Trend from "./pages/Trend.jsx";
 import Performance from "./pages/Performance.jsx";
 
 export default function App() {
-  const [tickets, setTickets] = useState(SEED);
+  const [tickets, setTickets] = useState([]);
   const [modal, setModal] = useState(null); // {kind:'ticket',id} | {kind:'new'}
   const [query, setQuery] = useState("");
   const [view, setView] = useState("reports"); // "reports" | "dashboard" | "trend" | "performance"
@@ -19,6 +18,7 @@ export default function App() {
   const [userFilter, setUserFilter] = useState("all");
   const [refreshing, setRefreshing] = useState(false);
   const [lastSync, setLastSync] = useState(() => new Date());
+  const backendUrl = "http://127.0.0.1:5000";
   const [, setNowTick] = useState(0);
   const timers = useRef({});
   const uid = useRef(100);
@@ -33,6 +33,30 @@ export default function App() {
   const pushTimer = (id, tid) => { (timers.current[id] = timers.current[id] || []).push(tid); };
   const clearFor = (id) => { (timers.current[id] || []).forEach(clearTimeout); timers.current[id] = []; };
 
+  const loadTickets = async () => {
+    try {
+      const response = await fetch(`${backendUrl}/api/tickets`);
+      if (!response.ok) throw new Error(`Ticket load failed: ${response.status}`);
+      const data = await response.json();
+      setTickets(data.tickets || []);
+      setLastSync(new Date());
+    } catch (error) {
+      console.error("Failed to load tickets from backend", error);
+    }
+  };
+
+  const updateTicketStatusInBackend = async (id, status) => {
+    try {
+      await fetch(`${backendUrl}/api/tickets/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+    } catch (error) {
+      console.error(`Failed to update ticket ${id} status`, error);
+    }
+  };
+
   const advance = (id, stageIdx) => {
     if (stageIdx >= STAGES.length) {
       setT(id, (t) => ({ state: "review", stage: null, rules: makeRules(t), reviewReadyAt: nowISO() }));
@@ -42,8 +66,39 @@ export default function App() {
     pushTimer(id, setTimeout(() => advance(id, stageIdx + 1), 2700 + stageIdx * 500));
   };
 
-  const runPipeline = (id) => { clearFor(id); setT(id, { runStartedAt: nowISO() }); advance(id, 0); setTab("review"); };
-  const cancelRun = (id) => { clearFor(id); setT(id, { state: "draft", stage: null, runStartedAt: null }); setTab("draft"); };
+  const runPipeline = async (id) => {
+    clearFor(id);
+    setT(id, { runStartedAt: nowISO(), state: "inprocess", stage: null });
+    await updateTicketStatusInBackend(id, "inprocess");
+
+    const ticket = tickets.find((t) => t.id === id);
+    if (!ticket) return;
+
+    try {
+      await fetch(`${backendUrl}/api/tickets/${encodeURIComponent(id)}/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          url: ticket.url,
+          environment: ticket.env,
+          ticket_context: {
+            focus: ticket.focus,
+            targets: ticket.targets,
+            notes: ticket.notes,
+            createdBy: ticket.createdBy,
+            created: ticket.created,
+          },
+          focus_region: ticket.focus,
+        }),
+      });
+    } catch (error) {
+      console.error(`Failed to run pipeline for ticket ${id}`, error);
+    }
+
+    await refreshBoard();
+    setTab("review");
+  };
+  const cancelRun = async (id) => { clearFor(id); setT(id, { state: "draft", stage: null, runStartedAt: null }); await updateTicketStatusInBackend(id, "draft"); setTab("draft"); };
 
   // resume seeded in-process reports; clear all timers on unmount
   useEffect(() => {
@@ -55,6 +110,10 @@ export default function App() {
     });
     return () => Object.values(timers.current).flat().forEach(clearTimeout);
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    loadTickets();
   }, []);
 
   useEffect(() => {
@@ -75,40 +134,17 @@ export default function App() {
       rules: t.rules.map((r, i) => (i === ruleIdx ? { ...r, decision: r.decision === val ? undefined : val } : r)),
     }));
 
-  const finishReview = (id) => {
+  const finishReview = async (id) => {
     setT(id, { state: "done", doneAt: todayISO(), reviewedAt: nowISO(), reviewedBy: CURRENT_USER.k });
+    await updateTicketStatusInBackend(id, "done");
     setTab("done");
   };
 
-  const refreshBoard = () => {
+  const refreshBoard = async () => {
     if (refreshing) return;
     setRefreshing(true);
-    // stub: in the real CMS this re-fetches the report list from the API
-    setTimeout(() => {
-      if (!syncedTeammate.current) {
-        // simulate a report another moderator created since our last sync
-        syncedTeammate.current = true;
-        const id = "u" + uid.current++;
-        setTickets((ts) => [
-          {
-            id, name: "RPT-2026-0143", url: "https://baomoi.com", env: "android",
-            state: "review", created: todayISO(), createdBy: "hien.khuong",
-            runStartedAt: new Date(Date.now() - 22 * 60000).toISOString(),
-            reviewReadyAt: new Date(Date.now() - 20 * 60000).toISOString(),
-            focus: "", targets: [], notes: "Synced from another moderator's session.",
-            rules: [
-              { text: "baomoi.com##.bm-ads", status: "passed", conf: 0.9 },
-              { text: "||media1.admicro.vn^$third-party", status: "passed", conf: 0.93 },
-              { text: "baomoi.com##div[data-zone]", status: "passed", conf: 0.8 },
-              { text: "baomoi.com##.story__meta", status: "failed", conf: 0.36, reason: "Hid article bylines." },
-            ],
-          },
-          ...ts,
-        ]);
-      }
-      setLastSync(new Date());
-      setRefreshing(false);
-    }, 850);
+    await loadTickets();
+    setRefreshing(false);
   };
 
   const deleteTicket = (id) => {
@@ -117,13 +153,34 @@ export default function App() {
     setModal(null);
   };
 
-  const createTicket = (data, runNow) => {
+  const createTicket = async (data, runNow) => {
     const id = "u" + uid.current++;
     nextRpt.current++;
-    setTickets((ts) => [{ id, state: "draft", created: todayISO(), createdBy: CURRENT_USER.k, ...data }, ...ts]);
+    const ticketPayload = {
+      id,
+      state: "draft",
+      created: todayISO(),
+      createdBy: CURRENT_USER.k,
+      ...data,
+    };
+
+    setTickets((ts) => [ticketPayload, ...ts]);
     setModal(null);
     setTab("draft");
-    if (runNow) setTimeout(() => runPipeline(id), 350);
+
+    try {
+      await fetch("http://127.0.0.1:5000/api/tickets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(ticketPayload),
+      });
+    } catch (error) {
+      console.error("Failed to save ticket to backend", error);
+    }
+
+    if (runNow) {
+      setTimeout(() => runPipeline(id), 350);
+    }
   };
 
   const q = query.trim().toLowerCase();

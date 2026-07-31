@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 from urllib.parse import urlparse
 
-from app.database import save_crawl_input
 from ..crawler.browser import render_url
 from ..crawler.extractor import PageExtractor
 from ..crawler.detector import detect_ads
@@ -104,9 +103,6 @@ class CrawlService:
         )
         if effective_focus:
             safe_ticket_context["focus_region"] = effective_focus
-
-        parsed_url = urlparse(url)
-        domain = parsed_url.hostname or url
 
         logger.info(
             "Starting crawl for URL: %s (report_id: %s, ticket_type: %s, focus: %s)",
@@ -308,23 +304,6 @@ class CrawlService:
 
             result_path = self.storage.save_result(report_id, result_data)
             result_data["files"]["result"] = result_path
-
-            try:
-                save_crawl_input(
-                    report_id=report_id,
-                    domain=domain,
-                    url=url,
-                    ticket_context=safe_ticket_context,
-                    status="success",
-                    crawl_duration_ms=result_data["render"]["elapsed_ms"],
-                    before_screenshot=screenshot_path,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Could not save crawl input to DB for %s: %s",
-                    report_id,
-                    exc,
-                )
 
         except Exception as exc:
             logger.error("Failed to save results for %s: %s", url, exc)

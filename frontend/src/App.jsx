@@ -147,8 +147,18 @@ export default function App() {
     setRefreshing(false);
   };
 
-  const deleteTicket = (id) => {
+  const deleteTicket = async (id) => {
     clearFor(id);
+    try {
+      const response = await fetch(`${backendUrl}/api/tickets/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        throw new Error(`delete failed ${response.status}`);
+      }
+    } catch (error) {
+      console.error(`Failed to delete ticket ${id}`, error);
+    }
     setTickets((ts) => ts.filter((t) => t.id !== id));
     setModal(null);
   };

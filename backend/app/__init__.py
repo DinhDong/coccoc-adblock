@@ -6,12 +6,14 @@ try:
         persist_ticket_to_db,
         fetch_all_tickets,
         update_ticket_status,
+        delete_ticket,
     )
 except ImportError:  # pragma: no cover
     from app.tickets import (
         persist_ticket_to_db,
         fetch_all_tickets,
         update_ticket_status,
+        delete_ticket,
     )
 
 try:
@@ -71,7 +73,7 @@ def create_app():
         if not url:
             return {"error": "url is required"}, 400
 
-        update_ticket_status(report_id, "inprocess")
+        update_ticket_status(report_id, "crawling")
 
         try:
             result = run_pipeline(
@@ -85,14 +87,21 @@ def create_app():
             update_ticket_status(report_id, "failed")
             return {"ok": False, "error": str(exc)}, 500
 
-        if result.get("status") in {"review", "validated"}:
+        if result.get("status") in {"review", "validated", "generated", "no_rules"}:
             update_ticket_status(report_id, "review")
-        elif result.get("status") in {"generated", "no_rules"}:
-            update_ticket_status(report_id, "review")
+        elif result.get("status") == "crawl_failed":
+            update_ticket_status(report_id, "crawl_failed")
         else:
             update_ticket_status(report_id, "failed")
 
         return {"ok": True, "result": result}, 200
+
+    @app.delete("/api/tickets/<report_id>")
+    def remove_ticket(report_id):
+        deleted = delete_ticket(report_id)
+        if deleted == 0:
+            return {"error": "ticket not found"}, 404
+        return {"ok": True, "deleted": deleted}, 200
 
     return app
 

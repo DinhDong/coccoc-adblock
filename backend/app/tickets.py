@@ -49,6 +49,32 @@ def persist_ticket_to_db(ticket: Dict[str, Any]) -> int:
     )
 
 
+def _normalize_ticket_state(status: str) -> tuple[str, str | None]:
+    if not status:
+        return "draft", None
+
+    status = status.lower()
+    if status in {"crawling", "generating", "validating", "inprocess"}:
+        stage = {
+            "crawling": "crawl",
+            "generating": "generate",
+            "validating": "validate",
+            "inprocess": "crawl",
+        }[status]
+        return "inprocess", stage
+
+    if status in {"review", "generated", "validated", "no_rules"}:
+        return "review", None
+
+    if status == "done":
+        return "done", None
+
+    if status in {"draft", "submitted"}:
+        return "draft", None
+
+    return "draft", None
+
+
 def fetch_all_tickets() -> list[Dict[str, Any]]:
     """Load tickets from the database for the frontend."""
     with get_connection() as conn:
@@ -61,6 +87,7 @@ def fetch_all_tickets() -> list[Dict[str, Any]]:
     tickets: list[Dict[str, Any]] = []
     for row in rows:
         ticket_context = _parse_ticket_context(row.get("ticket_context"))
+        state, stage = _normalize_ticket_state(row.get("status") or ticket_context.get("state", "draft"))
         ticket = {
             "id": row.get("report_id") or ticket_context.get("name") or f"db-{row.get('created_at')}",
             "name": ticket_context.get("name") or row.get("report_id"),
@@ -70,7 +97,8 @@ def fetch_all_tickets() -> list[Dict[str, Any]]:
             "targets": ticket_context.get("targets", []),
             "notes": ticket_context.get("notes", ""),
             "createdBy": ticket_context.get("createdBy", "unknown"),
-            "state": row.get("status") or ticket_context.get("state", "draft"),
+            "state": state,
+            "stage": stage,
             "created": ticket_context.get("created") or (row.get("created_at").isoformat() if row.get("created_at") else None),
             "updatedAt": row.get("updated_at").isoformat() if row.get("updated_at") else None,
         }
@@ -86,5 +114,16 @@ def update_ticket_status(report_id: str, status: str) -> int:
             cur.execute(
                 "UPDATE crawl_inputs SET status=%s, updated_at=NOW() WHERE report_id=%s",
                 (status, report_id),
+            )
+            return cur.rowcount
+
+
+def delete_ticket(report_id: str) -> int:
+    """Delete a ticket from crawl_inputs."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM crawl_inputs WHERE report_id=%s",
+                (report_id,),
             )
             return cur.rowcount

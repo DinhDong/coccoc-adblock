@@ -65,6 +65,7 @@ from app.database import (
     save_rule_output,
     save_rule_validation,
 )
+from app.tickets import update_ticket_status
 
 logger = logging.getLogger(__name__)
 
@@ -626,6 +627,7 @@ def run_pipeline(
         )
 
         if crawl_outcome.get("status") != "success":
+            update_ticket_status(report_id, "crawl_failed")
             return {
                 "report_id": report_id,
                 "url": url,
@@ -743,6 +745,22 @@ def run_pipeline(
         print(f"  Strategy: {resolution_strategy}")
         print(f"  Crawl time: {crawl_elapsed_ms} ms")
 
+    try:
+        save_crawl_input(
+            report_id=report_id,
+            domain=get_domain(page_url),
+            url=page_url,
+            ticket_context=normalized_ticket_context,
+            status="generating",
+            crawl_duration_ms=crawl_elapsed_ms,
+            before_screenshot=crawl_screenshot,
+        )
+    except Exception:
+        logger.warning(
+            "Pipeline: could not update generate status for %s",
+            report_id,
+        )
+
     domain = get_domain(page_url)
     existing = get_existing_rules(domain)
     discard_existing = False
@@ -822,6 +840,22 @@ def run_pipeline(
         workflow_elapsed_ms = _elapsed_ms(
             workflow_started
         )
+
+        try:
+            save_crawl_input(
+                report_id=report_id,
+                domain=get_domain(page_url),
+                url=page_url,
+                ticket_context=normalized_ticket_context,
+                status="review",
+                crawl_duration_ms=crawl_elapsed_ms,
+                before_screenshot=crawl_screenshot,
+            )
+        except Exception:
+            logger.warning(
+                "Pipeline: could not update review status for %s",
+                report_id,
+            )
 
         if verbose:
             print(
@@ -903,6 +937,22 @@ def run_pipeline(
     if verbose:
         _separator(
             f"Stage 2: Rule Validation — {report_id}"
+        )
+
+    try:
+        save_crawl_input(
+            report_id=report_id,
+            domain=get_domain(page_url),
+            url=page_url,
+            ticket_context=normalized_ticket_context,
+            status="validating",
+            crawl_duration_ms=crawl_elapsed_ms,
+            before_screenshot=crawl_screenshot,
+        )
+    except Exception:
+        logger.warning(
+            "Pipeline: could not update validating status for %s",
+            report_id,
         )
 
     validation = run_rule_validation(

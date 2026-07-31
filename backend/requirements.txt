@@ -6,6 +6,10 @@ python-dotenv>=1.0.0
 Pillow>=10.0.0
 PyMySQL>=1.1.0
 cryptography>=42.0.0
+boto3>=1.35
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+python-multipart>=0.0.9,<1.0
 
 # Test runner — the Dockerfile and docker-compose both document
 #   docker compose run --rm backend pytest app/tests/ -v

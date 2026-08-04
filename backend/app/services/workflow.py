@@ -60,6 +60,13 @@ try:
 except ImportError:
     pass
 
+from app.database import (
+    save_crawl_input,
+    save_rule_output,
+    save_rule_validation,
+    rule_output_exists,
+)
+from app.tickets import update_ticket_status
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +80,50 @@ def _separator(title: str) -> None:
     print(f"\n{'=' * 60}")
     print(f"  {title}")
     print(f"{'=' * 60}\n")
+
+
+def _ensure_rule_outputs_from_files(report_id: str, rules_path: Path, validation_path: Path) -> None:
+    if rule_output_exists(report_id):
+        return
+
+    if rules_path.exists():
+        try:
+            with open(rules_path, encoding="utf-8") as file:
+                rules_data = json.load(file)
+
+            save_rule_output(
+                report_id=report_id,
+                rules=rules_data,
+                input_tokens=None,
+                output_tokens=None,
+                status=rules_data.get("status", "generated"),
+            )
+        except Exception as exc:
+            logger.warning(
+                "Fallback: failed to save rule output from file for %s: %s",
+                report_id,
+                exc,
+                exc_info=True,
+            )
+
+    if validation_path.exists():
+        try:
+            with open(validation_path, encoding="utf-8") as file:
+                validation_data = json.load(file)
+
+            save_rule_validation(
+                report_id=report_id,
+                validation_result=validation_data,
+                after_screenshot=validation_data.get("combined_screenshot"),
+                status=validation_data.get("status", "validated"),
+            )
+        except Exception as exc:
+            logger.warning(
+                "Fallback: failed to save validation output from file for %s: %s",
+                report_id,
+                exc,
+                exc_info=True,
+            )
 
 
 def _elapsed_ms(started_at: float) -> int:
@@ -149,6 +200,18 @@ def run_rule_generation(
         if fallback_used is None:
             fallback_used = token_usage.get("fallback_used")
 
+    generation_error = getattr(generation_result, "error", "")
+
+    if generation_error:
+        # Generation aborted (missing API key, network/LLM failure). Do not let
+        # this reach the caller as an ordinary empty result — it is a failure.
+        logger.error(
+            "Stage 1: rule generation failed for %s: %s",
+            report_id,
+            generation_error,
+        )
+        raise RuntimeError(f"Rule generation failed: {generation_error}")
+
     if not generated_rules:
         logger.warning(
             "Stage 1: no rules generated for %s | generation_elapsed_ms=%d",
@@ -191,14 +254,6 @@ def run_rule_generation(
 
     total_skipped = len(internal_dupes) + len(external_dupes)
 
-    if not rules:
-        logger.info(
-            "Stage 1: all %d generated rule(s) were duplicates for %s",
-            len(generated_rules),
-            report_id,
-        )
-        return []
-
     OUT_RESULTS.mkdir(parents=True, exist_ok=True)
     rules_path = OUT_RESULTS / f"{report_id}_rules.json"
 
@@ -211,7 +266,7 @@ def run_rule_generation(
         "problem_type": problem_type,
         "resolution_strategy": resolution_strategy,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "status": "generated",
+        "status": "generated" if rules else "no_rules",
         "crawl_elapsed_ms": crawl_elapsed_ms,
         "generation_elapsed_ms": generation_elapsed_ms,
         "rule_count": len(rules),
@@ -257,6 +312,41 @@ def run_rule_generation(
             indent=2,
             ensure_ascii=False,
         )
+
+    try:
+        save_rule_output(
+            report_id=report_id,
+            rules=rules_data,
+            input_tokens=(
+                int(token_usage.get("prompt_tokens", 0))
+                if isinstance(token_usage, Mapping)
+                else None
+            ),
+            output_tokens=(
+                int(token_usage.get("completion_tokens", 0))
+                if isinstance(token_usage, Mapping)
+                else None
+            ),
+            status="generated" if rules else "no_rules",
+        )
+    except Exception as exc:
+        logger.warning(
+            "Stage 1: failed saving rule output to DB: %s",
+            exc,
+            exc_info=True,
+        )
+
+    if not rules:
+        # Everything the model proposed was already known. The blob written
+        # above still carries duplicates_skipped so the UI can explain why
+        # this run has nothing to review.
+        logger.info(
+            "Stage 1: all %d generated rule(s) were duplicates for %s",
+            len(generated_rules),
+            report_id,
+        )
+        _log_token_usage(token_usage)
+        return []
 
     register_rules(
         domain,
@@ -415,6 +505,20 @@ def run_rule_validation(
             file,
             indent=2,
             ensure_ascii=False,
+        )
+
+    try:
+        save_rule_validation(
+            report_id=report_id,
+            validation_result=validation_data,
+            after_screenshot=combined_screenshot_path,
+            status="validated",
+        )
+    except Exception as exc:
+        logger.warning(
+            "Stage 2: failed saving validation result to DB: %s",
+            exc,
+            exc_info=True,
         )
 
     logger.info(
@@ -602,6 +706,7 @@ def run_pipeline(
         )
 
         if crawl_outcome.get("status") != "success":
+            update_ticket_status(report_id, "crawl_failed")
             return {
                 "report_id": report_id,
                 "url": url,
@@ -702,6 +807,30 @@ def run_pipeline(
         print(f"  Strategy: {resolution_strategy}")
         print(f"  Crawl time: {crawl_elapsed_ms} ms")
 
+    try:
+        update_ticket_status(report_id, "generating")
+    except Exception:
+        logger.warning(
+            "Pipeline: could not set generating status for %s",
+            report_id,
+        )
+
+    try:
+        save_crawl_input(
+            report_id=report_id,
+            domain=get_domain(page_url),
+            url=page_url,
+            ticket_context=normalized_ticket_context,
+            status="generating",
+            crawl_duration_ms=crawl_elapsed_ms,
+            before_screenshot=crawl_screenshot,
+        )
+    except Exception:
+        logger.warning(
+            "Pipeline: could not update generate status for %s",
+            report_id,
+        )
+
     domain = get_domain(page_url)
     existing = get_existing_rules(domain)
     discard_existing = False
@@ -781,6 +910,40 @@ def run_pipeline(
         workflow_elapsed_ms = _elapsed_ms(
             workflow_started
         )
+
+        try:
+            save_crawl_input(
+                report_id=report_id,
+                domain=get_domain(page_url),
+                url=page_url,
+                ticket_context=normalized_ticket_context,
+                status="review",
+                crawl_duration_ms=crawl_elapsed_ms,
+                before_screenshot=crawl_screenshot,
+            )
+        except Exception:
+            logger.warning(
+                "Pipeline: could not update review status for %s",
+                report_id,
+            )
+
+        try:
+            # Prefer the blob Stage 1 wrote — when every candidate was a
+            # duplicate it carries duplicates_skipped, which the UI needs to
+            # explain the empty result. Fall back to [] if Stage 1 never got
+            # far enough to write one.
+            save_rule_output(
+                report_id=report_id,
+                rules=rules_data or [],
+                input_tokens=None,
+                output_tokens=None,
+                status="no_rules",
+            )
+        except Exception as exc:
+            logger.warning(
+                "Pipeline: failed saving empty rule output to DB: %s",
+                exc,
+            )
 
         if verbose:
             print(
@@ -864,6 +1027,30 @@ def run_pipeline(
             f"Stage 2: Rule Validation — {report_id}"
         )
 
+    try:
+        update_ticket_status(report_id, "validating")
+    except Exception:
+        logger.warning(
+            "Pipeline: could not set validating status for %s",
+            report_id,
+        )
+
+    try:
+        save_crawl_input(
+            report_id=report_id,
+            domain=get_domain(page_url),
+            url=page_url,
+            ticket_context=normalized_ticket_context,
+            status="validating",
+            crawl_duration_ms=crawl_elapsed_ms,
+            before_screenshot=crawl_screenshot,
+        )
+    except Exception:
+        logger.warning(
+            "Pipeline: could not update validating status for %s",
+            report_id,
+        )
+
     validation = run_rule_validation(
         rules=rules,
         url=page_url,
@@ -941,6 +1128,20 @@ def run_pipeline(
                 "for moderator review"
             )
 
+    try:
+        _ensure_rule_outputs_from_files(
+            report_id,
+            rules_path,
+            validation_path,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Pipeline: fallback rule_outputs persistence failed for %s: %s",
+            report_id,
+            exc,
+            exc_info=True,
+        )
+
     return {
         "report_id": report_id,
         "url": page_url,
@@ -976,7 +1177,7 @@ def run_pipeline(
             "combined_sandbox_passed",
             False,
         ),
-        "status": "ok",
+        "status": "review",
     }
 
 

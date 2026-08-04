@@ -5,12 +5,14 @@ services:
     image: mysql:8.0
     restart: unless-stopped
     env_file: .env.local
+    environment:
+      MYSQL_TCP_PORT: 6446
     ports:
-      - "3306:3306"
+      - "6446:6446"
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-P", "6446"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -21,9 +23,6 @@ services:
     env_file: .env.local
     command: ["app.services.worker"]
     restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
     volumes:
       - ./backend/data:/app/data
       - ./backend/app/tests/tickets:/app/app/tests/tickets:ro

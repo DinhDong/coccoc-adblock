@@ -1,4 +1,4 @@
-import { X, ExternalLink, CheckCircle2, XCircle } from "lucide-react";
+import { X, ExternalLink, CheckCircle2, XCircle, AlertTriangle } from "lucide-react";
 import { STAGES, ENVS, CURRENT_USER, userOf } from "../constants.js";
 import { fmtDate, passedRules, approvedRules } from "../utils.js";
 import { Person } from "./Avatar.jsx";
@@ -18,6 +18,42 @@ function StepList({ current }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function DuplicateWarning({ dupes, ruleCount }) {
+  const total = dupes?.total || 0;
+  if (!total) return null;
+
+  const parts = [];
+  if (dupes.internal) parts.push(`${dupes.internal} already in the rule registry for this domain`);
+  if (dupes.external) parts.push(`${dupes.external} already covered by a public filter list`);
+
+  return (
+    <div className="ad-warnbox">
+      <AlertTriangle className="ad-warnicon" />
+      <div>
+        <div className="ad-warntitle">
+          {total} duplicate rule{total === 1 ? "" : "s"} skipped
+          {ruleCount === 0 && " — nothing left to review"}
+        </div>
+        <div className="ad-warnbody">
+          The model proposed {total + ruleCount} rule{total + ruleCount === 1 ? "" : "s"}, but{" "}
+          {parts.join(" and ")}. Duplicates are dropped before validation.
+          {ruleCount === 0 && " Clear this domain from the rule registry to re-propose them."}
+        </div>
+        {dupes.rules?.length > 0 && (
+          <details className="ad-warndetails">
+            <summary>Show skipped rules</summary>
+            <ul>
+              {dupes.rules.map((r, i) => (
+                <li key={i}>{r}</li>
+              ))}
+            </ul>
+          </details>
+        )}
+      </div>
     </div>
   );
 }
@@ -117,10 +153,29 @@ export default function ReportDetail({ t, onClose, onRun, onCancelRun, onDelete,
           </div>
         )}
 
-        {t.state !== "draft" && (
+        {/* StepList marks every stage complete when `current` is null, so a
+            failed run must not render it — the failure box below says what
+            actually happened. */}
+        {t.state !== "draft" && t.state !== "failed" && (
           <div className="ad-msection">
             <h3>Pipeline</h3>
             <StepList current={t.state === "inprocess" ? t.stage : null} />
+          </div>
+        )}
+
+        {t.state === "failed" && (
+          <div className="ad-msection">
+            <h3>Run failed</h3>
+            <div className="ad-warnbox ad-errbox">
+              <AlertTriangle className="ad-warnicon" />
+              <div>
+                <div className="ad-warntitle">The pipeline stopped before producing rules</div>
+                <div className="ad-warnbody">
+                  {t.errorMessage || "No error detail was recorded for this run."}
+                </div>
+                <div className="ad-warnbody">Fix the cause, then run the report again.</div>
+              </div>
+            </div>
           </div>
         )}
 
@@ -133,6 +188,7 @@ export default function ReportDetail({ t, onClose, onRun, onCancelRun, onDelete,
 
             <div className="ad-msection">
               <h3>{t.state === "review" ? "Candidate rules — decide each one" : "Rules"}</h3>
+              <DuplicateWarning dupes={t.duplicates} ruleCount={(t.rules || []).length} />
               <table className="ad-ruletable">
                 <thead>
                   <tr>
@@ -150,7 +206,11 @@ export default function ReportDetail({ t, onClose, onRun, onCancelRun, onDelete,
                         {r.status === "failed" && <div className="ad-rulereason">Auto-rejected — {r.reason}</div>}
                       </td>
                       <td><span className={"ad-pill " + (r.status === "passed" ? "pass" : "fail")}>{r.status}</span></td>
-                      <td><span className="ad-conf">{Math.round(r.conf * 100)}%</span></td>
+                      <td>
+                        <span className="ad-conf">
+                          {typeof r.conf === "number" ? `${Math.round(r.conf * 100)}%` : "—"}
+                        </span>
+                      </td>
                       <td>
                         {t.state === "review" && r.status === "passed" && (
                           <span className="ad-decide">
@@ -185,6 +245,12 @@ export default function ReportDetail({ t, onClose, onRun, onCancelRun, onDelete,
           <>
             <span className="ad-tally">The pipeline is processing this report. Refresh to see updates.</span>
             <button className="ad-btn ad-btn-ghost" onClick={onCancelRun}>Cancel run</button>
+          </>
+        )}
+        {t.state === "failed" && (
+          <>
+            <button className="ad-btn ad-btn-danger" onClick={onDelete}>Delete report</button>
+            <button className="ad-btn ad-btn-primary" onClick={onRun}>Run again</button>
           </>
         )}
         {t.state === "review" && (

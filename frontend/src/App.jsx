@@ -21,9 +21,11 @@ export default function App() {
   const [lastSync, setLastSync] = useState(() => new Date());
   const [, setNowTick] = useState(0);
   const timers = useRef({});
-  const uid = useRef(100);
   const nextRpt = useRef(148);
   const syncedTeammate = useRef(false);
+
+  const makeTicketId = () =>
+    window.crypto?.randomUUID?.() ?? `u${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
   const setT = (id, patch) =>
     setTickets((ts) =>
@@ -42,8 +44,46 @@ export default function App() {
     pushTimer(id, setTimeout(() => advance(id, stageIdx + 1), 2700 + stageIdx * 500));
   };
 
-  const runPipeline = (id) => { clearFor(id); setT(id, { runStartedAt: nowISO() }); advance(id, 0); setTab("review"); };
-  const cancelRun = (id) => { clearFor(id); setT(id, { state: "draft", stage: null, runStartedAt: null }); setTab("draft"); };
+  // ticketOverride lets a caller run a ticket that is not in `tickets` yet.
+  // A just-created ticket never is: setTickets/loadTickets only schedule a
+  // re-render, so the `tickets` captured by this closure is still the
+  // pre-create list and the lookup below would miss.
+  const runPipeline = async (id, ticketOverride) => {
+    clearFor(id);
+    setT(id, { runStartedAt: nowISO(), state: "inprocess", stage: "crawl" });
+
+    const ticket = ticketOverride || tickets.find((t) => t.id === id);
+    if (!ticket) {
+      console.error(`Cannot run pipeline: ticket ${id} not found`);
+      setT(id, { state: "draft", stage: null, runStartedAt: null });
+      return;
+    }
+
+    try {
+      await fetch(`${backendUrl}/api/tickets/${encodeURIComponent(id)}/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          url: ticket.url,
+          environment: ticket.env,
+          ticket_context: {
+            focus: ticket.focus,
+            targets: ticket.targets,
+            notes: ticket.notes,
+            createdBy: ticket.createdBy,
+            created: ticket.created,
+          },
+          focus_region: ticket.focus,
+        }),
+      });
+    } catch (error) {
+      console.error(`Failed to run pipeline for ticket ${id}`, error);
+    }
+
+    await refreshBoard();
+    setTab("review");
+  };
+  const cancelRun = async (id) => { clearFor(id); setT(id, { state: "draft", stage: null, runStartedAt: null }); await updateTicketStatusInBackend(id, "draft"); setTab("draft"); };
 
   // resume seeded in-process reports; clear all timers on unmount
   useEffect(() => {
@@ -111,19 +151,48 @@ export default function App() {
     }, 850);
   };
 
-  const deleteTicket = (id) => {
+  const deleteTicket = async (id) => {
     clearFor(id);
+    try {
+      const response = await fetch(`${backendUrl}/api/tickets/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        throw new Error(`delete failed ${response.status}`);
+      }
+    } catch (error) {
+      console.error(`Failed to delete ticket ${id}`, error);
+    }
     setTickets((ts) => ts.filter((t) => t.id !== id));
     setModal(null);
   };
 
-  const createTicket = (data, runNow) => {
-    const id = "u" + uid.current++;
+  const createTicket = async (data, runNow) => {
+    // Use the user-provided name as the stable report id when available,
+    // otherwise fall back to a generated id. This prevents the report from
+    // being later replaced by a UUID identifier.
+    const id = (data && data.name && data.name.trim()) ? data.name.trim() : makeTicketId();
     nextRpt.current++;
     setTickets((ts) => [{ id, state: "draft", created: todayISO(), createdBy: CURRENT_USER.k, ...data }, ...ts]);
     setModal(null);
     setTab("draft");
-    if (runNow) setTimeout(() => runPipeline(id), 350);
+
+    try {
+      await fetch("http://127.0.0.1:5000/api/tickets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(ticketPayload),
+      });
+    } catch (error) {
+      console.error("Failed to save ticket to backend", error);
+    }
+
+    if (runNow) {
+      // Hand the payload straight to runPipeline — it cannot look the ticket
+      // up by id yet, and awaiting keeps the run tied to this call so a
+      // failure surfaces instead of leaving the ticket sitting as a draft.
+      await runPipeline(id, ticketPayload);
+    }
   };
 
   const q = query.trim().toLowerCase();
@@ -149,9 +218,12 @@ export default function App() {
   }, [filtered]);
 
   const ghosts = byState.inprocess || [];
+  // Failed runs need a moderator to look at them, so they surface in Review
+  // alongside in-process rows rather than getting a tab of their own.
+  const failures = byState.failed || [];
   const items =
     tab === "all" ? filtered
-    : tab === "review" ? [...(byState.review || []), ...ghosts]
+    : tab === "review" ? [...failures, ...(byState.review || []), ...ghosts]
     : byState[tab] || [];
 
   const openTicket = modal?.kind === "ticket" ? tickets.find((t) => t.id === modal.id) : null;

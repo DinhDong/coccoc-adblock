@@ -1237,6 +1237,2458 @@
         "created_at": "2026-07-10T03:14:43.213298+00:00",
         "updated_at": "2026-07-10T03:14:43.213309+00:00"
       }
+    },
+    "app/tests/tickets/ticket_01_rophim_popup_floating_desktop.json": {
+      "status": "completed",
+      "updated_at": "2026-08-04T01:48:37.571526+00:00",
+      "created_at": "2026-08-04T01:46:51.761515+00:00",
+      "report_id": "ticket_01_rophim_popup_floating_desktop",
+      "domain": "rophim10.live",
+      "jira_ticket_code": "ticket_01_rophim_popup_floating_desktop",
+      "url": "https://rophim10.live/phimhay",
+      "environment": "desktop",
+      "processed_at": "2026-08-04T01:48:37.571526+00:00",
+      "output": {
+        "input_id": null,
+        "report_id": "ticket_01_rophim_popup_floating_desktop",
+        "url": "https://rophim10.live/phimhay",
+        "rules": [],
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "validation_result": {
+          "report_id": "ticket_01_rophim_popup_floating_desktop",
+          "url": "https://rophim10.live/phimhay",
+          "environment": "desktop",
+          "problem_type": "specific_ad_not_blocked",
+          "resolution_strategy": "block_visible_ad",
+          "processing_mode": "ticket_aware",
+          "crawl_elapsed_ms": 89645,
+          "generation_elapsed_ms": null,
+          "validation_elapsed_ms": null,
+          "workflow_elapsed_ms": 13757,
+          "rules_generated": 0,
+          "rules_passed": 0,
+          "rules_failed": 0,
+          "passing_rules": [],
+          "status": "no_rules"
+        },
+        "after_screenshot": "",
+        "status": "no_rules",
+        "error_message": "",
+        "crawl_duration_ms": 105553,
+        "created_at": "2026-08-04T01:48:37.571504+00:00",
+        "updated_at": "2026-08-04T01:48:37.571518+00:00"
+      }
+    },
+    "app/tests/tickets/ticket_02_rophim_popup_floating_android.json": {
+      "status": "failed",
+      "updated_at": "2026-08-04T01:48:38.863937+00:00",
+      "created_at": "2026-08-04T01:48:37.672250+00:00",
+      "report_id": "ticket_02_rophim_popup_floating_android",
+      "domain": "rophim10.live",
+      "jira_ticket_code": "ticket_02_rophim_popup_floating_android",
+      "url": "https://rophim10.live/phimhay",
+      "environment": "android",
+      "processed_at": "2026-08-04T01:48:38.863937+00:00",
+      "error_message": "Playwright error while rendering https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"load\"\n",
+      "output": {
+        "input_id": null,
+        "report_id": "ticket_02_rophim_popup_floating_android",
+        "url": "https://rophim10.live/phimhay",
+        "rules": [
+          "rophim10.live##div.sspp-area"
+        ],
+        "input_tokens": 4030,
+        "output_tokens": 78,
+        "validation_result": {
+          "report_id": "ticket_02_rophim_popup_floating_android",
+          "url": "https://rophim10.live/phimhay",
+          "environment": "android",
+          "processing_mode": "ticket_aware",
+          "ticket_context": {
+            "platform": "android",
+            "problem_type": "specific_ad_not_blocked",
+            "resolution_strategy": "block_visible_ad",
+            "focus_region": "",
+            "request": "[Android][Adblock] - rophim10.live/phimhay: Block popup and floating ads only",
+            "description": "Popup, modal, overlay, or floating ads may appear on the mobile page. Only popup and floating ads should be blocked. Movie cards, navigation, search, category cards, bookmaker sections, and normal page content must remain visible.",
+            "steps": [
+              "Open https://rophim10.live/phimhay using Android environment",
+              "Enable Adblock mode",
+              "Observe popup, modal, overlay, and floating ad containers",
+              "Verify that movie cards and navigation remain usable"
+            ],
+            "actual": "Popup, modal, overlay, or floating ads may remain visible on mobile.",
+            "expected": "Popup, modal, overlay, and floating ads are hidden while the mobile page remains usable.",
+            "target_to_block": [
+              "popup modal",
+              "popup ad content",
+              "popup ad container",
+              "popup image/ad creative container",
+              "modal content container",
+              "modal backdrop",
+              "fullscreen overlay",
+              "floating ad container",
+              "sticky floating ad"
+            ],
+            "target_to_preserve": [
+              "movie cards",
+              "main hero area",
+              "category/topic cards",
+              "navigation/header/search",
+              "footer",
+              "normal page content",
+              "banner ads",
+              "native ads",
+              "bookmaker ads",
+              "sponsor/bookmaker sections",
+              "main content",
+              "navigation",
+              "forms",
+              "media",
+              "user controls"
+            ],
+            "validation_hints": {
+              "inferred_scope": "popup_floating_only",
+              "allowed_candidate_categories": [
+                "popup_overlay",
+                "floating_ad",
+                "ad_container"
+              ],
+              "disallowed_candidate_categories": [
+                "ad_network_request",
+                "ad_iframe"
+              ],
+              "must_not_generate_rules": [
+                "*adserver*",
+                "*banner*",
+                "*banners*",
+                "*native*",
+                "*bookmaker*",
+                "*sponsor*",
+                "*sponsored*"
+              ]
+            },
+            "current_rules": [],
+            "matched_rules": [],
+            "blocked_resources": [],
+            "evidence_level": "url_only_best_effort",
+            "raw": {}
+          },
+          "problem_type": "specific_ad_not_blocked",
+          "resolution_strategy": "block_visible_ad",
+          "timestamp": "2026-07-31T04:23:46.790083+00:00",
+          "crawl_elapsed_ms": 7290,
+          "generation_elapsed_ms": 2339,
+          "validation_elapsed_ms": 610,
+          "validated_rule_count": 1,
+          "average_validation_time_per_rule_ms": 610.0,
+          "total": 1,
+          "passed": 0,
+          "failed": 1,
+          "passing_rules": [],
+          "combined_screenshot": "",
+          "combined_sandbox": null,
+          "outcomes": [
+            {
+              "rule": "rophim10.live##div.sspp-area",
+              "passed": false,
+              "failure_stage": "sandbox",
+              "failure_reason": "sandbox browser failed for https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"domcontentloaded\"\n",
+              "syntax": {
+                "rule": "rophim10.live##div.sspp-area",
+                "valid": true,
+                "error": null
+              },
+              "scope": {
+                "rule": "rophim10.live##div.sspp-area",
+                "safe": true,
+                "risk": null,
+                "detail": null
+              },
+              "policy": {
+                "rule": "rophim10.live##div.sspp-area",
+                "valid": true,
+                "problem_type": "specific_ad_not_blocked",
+                "resolution_strategy": "block_visible_ad",
+                "rule_direction": "cosmetic_hide",
+                "error": null
+              },
+              "sandbox": {
+                "url": "https://rophim10.live/phimhay",
+                "passed": false,
+                "ads_blocked": false,
+                "page_functional": false,
+                "ticket_assertions_passed": true,
+                "ticket_assertion_errors": [],
+                "baseline_ticket_assertions_passed": true,
+                "baseline_ticket_assertion_errors": [],
+                "existing_rules_count": 0,
+                "candidate_rules_count": 1,
+                "blocked_requests": [],
+                "candidate_blocked_requests": [],
+                "missing_ad_selectors": [],
+                "hidden_ad_selectors": [],
+                "broken_selectors": [],
+                "error": "sandbox browser failed for https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"domcontentloaded\"\n",
+                "unreachable": false,
+                "tested_screenshot_saved": false
+              }
+            }
+          ],
+          "workflow_elapsed_ms": 6612
+        },
+        "after_screenshot": "",
+        "status": "crawl_failed",
+        "error_message": "Playwright error while rendering https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"load\"\n",
+        "crawl_duration_ms": 997,
+        "created_at": "2026-08-04T01:48:38.863912+00:00",
+        "updated_at": "2026-08-04T01:48:38.863925+00:00"
+      }
+    },
+    "app/tests/tickets/ticket_03_rophim_popup_floating_ios.json": {
+      "status": "failed",
+      "updated_at": "2026-08-04T01:48:40.801911+00:00",
+      "created_at": "2026-08-04T01:48:38.952896+00:00",
+      "report_id": "ticket_03_rophim_popup_floating_ios",
+      "domain": "rophim10.live",
+      "jira_ticket_code": "ticket_03_rophim_popup_floating_ios",
+      "url": "https://rophim10.live/phimhay",
+      "environment": "ios",
+      "processed_at": "2026-08-04T01:48:40.801911+00:00",
+      "error_message": "Playwright error while rendering https://rophim10.live/phimhay: Page.goto: Peer failed to perform TLS handshake: The TLS connection was non-properly terminated.\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"load\"\n",
+      "output": {
+        "input_id": null,
+        "report_id": "ticket_03_rophim_popup_floating_ios",
+        "url": "https://rophim10.live/phimhay",
+        "rules": [],
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "validation_result": {
+          "report_id": "ticket_03_rophim_popup_floating_ios",
+          "url": "https://rophim10.live/phimhay",
+          "environment": "ios",
+          "ticket_context": {
+            "description": "Popup, modal, overlay, or floating ads may appear on the iOS page. Only popup and floating ads should be blocked. Movie cards, navigation, search, category cards, bookmaker sections, and normal page content must remain visible.",
+            "request": "[iOS][Adblock] - rophim10.live/phimhay: Block popup and floating ads only",
+            "steps": [
+              "Open https://rophim10.live/phimhay using iOS environment",
+              "Enable Adblock mode",
+              "Observe popup, modal, overlay, and floating ad containers",
+              "Verify that movie cards and navigation remain usable"
+            ],
+            "expected": "Popup, modal, overlay, and floating ads are hidden while the iOS page remains usable.",
+            "problem_type": "specific_ad_not_blocked",
+            "platform": "ios",
+            "actual": "Popup, modal, overlay, or floating ads may remain visible on iOS."
+          },
+          "problem_type": "specific_ad_not_blocked",
+          "resolution_strategy": "unknown",
+          "processing_mode": "ticket_aware",
+          "crawl_elapsed_ms": null,
+          "generation_elapsed_ms": null,
+          "validation_elapsed_ms": null,
+          "workflow_elapsed_ms": null,
+          "rules_generated": 0,
+          "rules_passed": 0,
+          "rules_failed": 0,
+          "passing_rules": [],
+          "status": "crawl_failed",
+          "crawl_stage": "render",
+          "crawl_error": "Playwright error while rendering https://rophim10.live/phimhay: Page.goto: Peer failed to perform TLS handshake: The TLS connection was non-properly terminated.\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"load\"\n"
+        },
+        "after_screenshot": "",
+        "status": "crawl_failed",
+        "error_message": "Playwright error while rendering https://rophim10.live/phimhay: Page.goto: Peer failed to perform TLS handshake: The TLS connection was non-properly terminated.\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"load\"\n",
+        "crawl_duration_ms": 1770,
+        "created_at": "2026-08-04T01:48:40.801845+00:00",
+        "updated_at": "2026-08-04T01:48:40.801866+00:00"
+      }
+    },
+    "app/tests/tickets/ticket_04_rophim_bottom_sticky_desktop.json": {
+      "status": "failed",
+      "updated_at": "2026-08-04T01:48:41.810577+00:00",
+      "created_at": "2026-08-04T01:48:40.919422+00:00",
+      "report_id": "ticket_04_rophim_bottom_sticky_desktop",
+      "domain": "rophim10.live",
+      "jira_ticket_code": "ticket_04_rophim_bottom_sticky_desktop",
+      "url": "https://rophim10.live/phimhay",
+      "environment": "desktop",
+      "processed_at": "2026-08-04T01:48:41.810577+00:00",
+      "error_message": "Playwright error while rendering https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"load\"\n",
+      "output": {
+        "input_id": null,
+        "report_id": "ticket_04_rophim_bottom_sticky_desktop",
+        "url": "https://rophim10.live/phimhay",
+        "rules": [],
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "validation_result": {
+          "report_id": "ticket_04_rophim_bottom_sticky_desktop",
+          "url": "https://rophim10.live/phimhay",
+          "environment": "desktop",
+          "ticket_context": {
+            "description": "A bottom sticky advertisement may remain visible near the bottom of the page. Only the bottom sticky ad should be blocked. Navigation, movie cards, search, sponsor sections, and normal page content must remain visible.",
+            "request": "[Desktop][Adblock] - rophim10.live/phimhay: Block bottom sticky advertisement",
+            "steps": [
+              "Open https://rophim10.live/phimhay",
+              "Enable Adblock mode",
+              "Observe the bottom sticky advertisement area",
+              "Verify that movie lists and page controls remain visible"
+            ],
+            "expected": "The bottom sticky advertisement is hidden while normal page content remains visible.",
+            "problem_type": "specific_ad_not_blocked",
+            "platform": "desktop",
+            "actual": "A bottom sticky advertisement may remain visible."
+          },
+          "problem_type": "specific_ad_not_blocked",
+          "resolution_strategy": "unknown",
+          "processing_mode": "ticket_aware",
+          "crawl_elapsed_ms": null,
+          "generation_elapsed_ms": null,
+          "validation_elapsed_ms": null,
+          "workflow_elapsed_ms": null,
+          "rules_generated": 0,
+          "rules_passed": 0,
+          "rules_failed": 0,
+          "passing_rules": [],
+          "status": "crawl_failed",
+          "crawl_stage": "render",
+          "crawl_error": "Playwright error while rendering https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"load\"\n"
+        },
+        "after_screenshot": "",
+        "status": "crawl_failed",
+        "error_message": "Playwright error while rendering https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"load\"\n",
+        "crawl_duration_ms": 857,
+        "created_at": "2026-08-04T01:48:41.810559+00:00",
+        "updated_at": "2026-08-04T01:48:41.810572+00:00"
+      }
+    },
+    "app/tests/tickets/ticket_05_rophim_side_floating_desktop.json": {
+      "status": "failed",
+      "updated_at": "2026-08-04T01:48:43.097161+00:00",
+      "created_at": "2026-08-04T01:48:41.863847+00:00",
+      "report_id": "ticket_05_rophim_side_floating_desktop",
+      "domain": "rophim10.live",
+      "jira_ticket_code": "ticket_05_rophim_side_floating_desktop",
+      "url": "https://rophim10.live/phimhay",
+      "environment": "desktop",
+      "processed_at": "2026-08-04T01:48:43.097161+00:00",
+      "error_message": "Playwright error while rendering https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"load\"\n",
+      "output": {
+        "input_id": null,
+        "report_id": "ticket_05_rophim_side_floating_desktop",
+        "url": "https://rophim10.live/phimhay",
+        "rules": [
+          "rophim10.live##div.banner-bottom-double",
+          "rophim10.live##div.banner-bottom-double__item"
+        ],
+        "input_tokens": 3989,
+        "output_tokens": 78,
+        "validation_result": {
+          "report_id": "ticket_05_rophim_side_floating_desktop",
+          "url": "https://rophim10.live/phimhay",
+          "environment": "desktop",
+          "processing_mode": "ticket_aware",
+          "ticket_context": {
+            "platform": "desktop",
+            "problem_type": "specific_ad_not_blocked",
+            "resolution_strategy": "block_visible_ad",
+            "focus_region": "",
+            "request": "[Desktop][Adblock] - rophim10.live/phimhay: Block side floating ads",
+            "description": "Side floating advertisement containers may appear around the page content. Only side floating ads should be blocked. Header, search, category cards, movie cards, and normal page content must remain visible.",
+            "steps": [
+              "Open https://rophim10.live/phimhay",
+              "Enable Adblock mode",
+              "Observe left or right floating advertisement containers",
+              "Verify that the page remains usable after these ads are hidden"
+            ],
+            "actual": "Side floating ads may remain visible.",
+            "expected": "Side floating ads are hidden while normal page content remains visible.",
+            "target_to_block": [
+              "popup modal",
+              "popup ad content",
+              "popup ad container",
+              "popup image/ad creative container",
+              "modal content container",
+              "modal backdrop",
+              "fullscreen overlay",
+              "floating ad container",
+              "sticky floating ad"
+            ],
+            "target_to_preserve": [
+              "movie cards",
+              "main hero area",
+              "category/topic cards",
+              "navigation/header/search",
+              "footer",
+              "normal page content",
+              "main content",
+              "navigation",
+              "forms",
+              "media",
+              "user controls"
+            ],
+            "validation_hints": {
+              "inferred_scope": "popup_floating_only",
+              "allowed_candidate_categories": [
+                "popup_overlay",
+                "floating_ad",
+                "ad_container"
+              ],
+              "disallowed_candidate_categories": [
+                "ad_network_request",
+                "ad_iframe"
+              ],
+              "must_not_generate_rules": [
+                "*adserver*"
+              ]
+            },
+            "current_rules": [],
+            "matched_rules": [],
+            "blocked_resources": [],
+            "evidence_level": "url_only_best_effort",
+            "raw": {}
+          },
+          "problem_type": "specific_ad_not_blocked",
+          "resolution_strategy": "block_visible_ad",
+          "timestamp": "2026-07-31T04:24:32.512736+00:00",
+          "crawl_elapsed_ms": 39632,
+          "generation_elapsed_ms": 1432,
+          "validation_elapsed_ms": 677,
+          "validated_rule_count": 2,
+          "average_validation_time_per_rule_ms": 338.5,
+          "total": 2,
+          "passed": 0,
+          "failed": 2,
+          "passing_rules": [],
+          "combined_screenshot": "",
+          "combined_sandbox": null,
+          "outcomes": [
+            {
+              "rule": "rophim10.live##div.banner-bottom-double",
+              "passed": false,
+              "failure_stage": "sandbox",
+              "failure_reason": "sandbox browser failed for https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"domcontentloaded\"\n",
+              "syntax": {
+                "rule": "rophim10.live##div.banner-bottom-double",
+                "valid": true,
+                "error": null
+              },
+              "scope": {
+                "rule": "rophim10.live##div.banner-bottom-double",
+                "safe": true,
+                "risk": null,
+                "detail": null
+              },
+              "policy": {
+                "rule": "rophim10.live##div.banner-bottom-double",
+                "valid": true,
+                "problem_type": "specific_ad_not_blocked",
+                "resolution_strategy": "block_visible_ad",
+                "rule_direction": "cosmetic_hide",
+                "error": null
+              },
+              "sandbox": {
+                "url": "https://rophim10.live/phimhay",
+                "passed": false,
+                "ads_blocked": false,
+                "page_functional": false,
+                "ticket_assertions_passed": true,
+                "ticket_assertion_errors": [],
+                "baseline_ticket_assertions_passed": true,
+                "baseline_ticket_assertion_errors": [],
+                "existing_rules_count": 0,
+                "candidate_rules_count": 1,
+                "blocked_requests": [],
+                "candidate_blocked_requests": [],
+                "missing_ad_selectors": [],
+                "hidden_ad_selectors": [],
+                "broken_selectors": [],
+                "error": "sandbox browser failed for https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"domcontentloaded\"\n",
+                "unreachable": false,
+                "tested_screenshot_saved": false
+              }
+            },
+            {
+              "rule": "rophim10.live##div.banner-bottom-double__item",
+              "passed": false,
+              "failure_stage": "sandbox",
+              "failure_reason": "sandbox browser failed for https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"domcontentloaded\"\n",
+              "syntax": {
+                "rule": "rophim10.live##div.banner-bottom-double__item",
+                "valid": true,
+                "error": null
+              },
+              "scope": {
+                "rule": "rophim10.live##div.banner-bottom-double__item",
+                "safe": true,
+                "risk": null,
+                "detail": null
+              },
+              "policy": {
+                "rule": "rophim10.live##div.banner-bottom-double__item",
+                "valid": true,
+                "problem_type": "specific_ad_not_blocked",
+                "resolution_strategy": "block_visible_ad",
+                "rule_direction": "cosmetic_hide",
+                "error": null
+              },
+              "sandbox": {
+                "url": "https://rophim10.live/phimhay",
+                "passed": false,
+                "ads_blocked": false,
+                "page_functional": false,
+                "ticket_assertions_passed": true,
+                "ticket_assertion_errors": [],
+                "baseline_ticket_assertions_passed": true,
+                "baseline_ticket_assertion_errors": [],
+                "existing_rules_count": 0,
+                "candidate_rules_count": 1,
+                "blocked_requests": [],
+                "candidate_blocked_requests": [],
+                "missing_ad_selectors": [],
+                "hidden_ad_selectors": [],
+                "broken_selectors": [],
+                "error": "sandbox browser failed for https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"domcontentloaded\"\n",
+                "unreachable": false,
+                "tested_screenshot_saved": false
+              }
+            }
+          ],
+          "workflow_elapsed_ms": 2204
+        },
+        "after_screenshot": "",
+        "status": "crawl_failed",
+        "error_message": "Playwright error while rendering https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"load\"\n",
+        "crawl_duration_ms": 1018,
+        "created_at": "2026-08-04T01:48:43.097133+00:00",
+        "updated_at": "2026-08-04T01:48:43.097148+00:00"
+      }
+    },
+    "app/tests/tickets/ticket_06_rophim_banner_ads_desktop.json": {
+      "status": "failed",
+      "updated_at": "2026-08-04T01:48:44.382693+00:00",
+      "created_at": "2026-08-04T01:48:43.361627+00:00",
+      "report_id": "ticket_06_rophim_banner_ads_desktop",
+      "domain": "rophim10.live",
+      "jira_ticket_code": "ticket_06_rophim_banner_ads_desktop",
+      "url": "https://rophim10.live/phimhay",
+      "environment": "desktop",
+      "processed_at": "2026-08-04T01:48:44.382693+00:00",
+      "error_message": "Playwright error while rendering https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"load\"\n",
+      "output": {
+        "input_id": null,
+        "report_id": "ticket_06_rophim_banner_ads_desktop",
+        "url": "https://rophim10.live/phimhay",
+        "rules": [],
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "validation_result": {
+          "report_id": "ticket_06_rophim_banner_ads_desktop",
+          "url": "https://rophim10.live/phimhay",
+          "environment": "desktop",
+          "ticket_context": {
+            "description": "Visible banner advertising containers may remain on the page. Only clear banner ads should be blocked. Movie cards, navigation, search, category cards, and normal content must remain visible.",
+            "request": "[Desktop][Adblock] - rophim10.live/phimhay: Block visible banner ads",
+            "steps": [
+              "Open https://rophim10.live/phimhay",
+              "Enable Adblock mode",
+              "Observe visible banner advertising containers",
+              "Verify that movie cards and normal content remain visible"
+            ],
+            "expected": "Visible banner ads are hidden while normal page content remains visible.",
+            "problem_type": "specific_ad_not_blocked",
+            "platform": "desktop",
+            "actual": "One or more visible banner ads may remain visible."
+          },
+          "problem_type": "specific_ad_not_blocked",
+          "resolution_strategy": "unknown",
+          "processing_mode": "ticket_aware",
+          "crawl_elapsed_ms": null,
+          "generation_elapsed_ms": null,
+          "validation_elapsed_ms": null,
+          "workflow_elapsed_ms": null,
+          "rules_generated": 0,
+          "rules_passed": 0,
+          "rules_failed": 0,
+          "passing_rules": [],
+          "status": "crawl_failed",
+          "crawl_stage": "render",
+          "crawl_error": "Playwright error while rendering https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"load\"\n"
+        },
+        "after_screenshot": "",
+        "status": "crawl_failed",
+        "error_message": "Playwright error while rendering https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"load\"\n",
+        "crawl_duration_ms": 870,
+        "created_at": "2026-08-04T01:48:44.382665+00:00",
+        "updated_at": "2026-08-04T01:48:44.382684+00:00"
+      }
+    },
+    "app/tests/tickets/ticket_07_rophim_ad_resources_desktop.json": {
+      "status": "failed",
+      "updated_at": "2026-08-04T01:48:45.471940+00:00",
+      "created_at": "2026-08-04T01:48:44.508988+00:00",
+      "report_id": "ticket_07_rophim_ad_resources_desktop",
+      "domain": "rophim10.live",
+      "jira_ticket_code": "ticket_07_rophim_ad_resources_desktop",
+      "url": "https://rophim10.live/phimhay",
+      "environment": "desktop",
+      "processed_at": "2026-08-04T01:48:45.471940+00:00",
+      "error_message": "Playwright error while rendering https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"load\"\n",
+      "output": {
+        "input_id": null,
+        "report_id": "ticket_07_rophim_ad_resources_desktop",
+        "url": "https://rophim10.live/phimhay",
+        "rules": [],
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "validation_result": {
+          "report_id": "ticket_07_rophim_ad_resources_desktop",
+          "url": "https://rophim10.live/phimhay",
+          "environment": "desktop",
+          "ticket_context": {
+            "description": "Ad-related image or banner resources may continue loading on the page. Only clear ad-related resources should be blocked. Normal media, movie posters, navigation, and page content must remain available.",
+            "request": "[Desktop][Adblock] - rophim10.live/phimhay: Block ad-related resources",
+            "steps": [
+              "Open https://rophim10.live/phimhay",
+              "Enable Adblock mode",
+              "Observe visible advertisements and related network resources",
+              "Verify that normal movie images and page content remain available"
+            ],
+            "expected": "Ad-related resources are blocked while normal media and page content remain available.",
+            "problem_type": "specific_ad_not_blocked",
+            "platform": "desktop",
+            "actual": "Ad-related resources may continue loading."
+          },
+          "problem_type": "specific_ad_not_blocked",
+          "resolution_strategy": "unknown",
+          "processing_mode": "ticket_aware",
+          "crawl_elapsed_ms": null,
+          "generation_elapsed_ms": null,
+          "validation_elapsed_ms": null,
+          "workflow_elapsed_ms": null,
+          "rules_generated": 0,
+          "rules_passed": 0,
+          "rules_failed": 0,
+          "passing_rules": [],
+          "status": "crawl_failed",
+          "crawl_stage": "render",
+          "crawl_error": "Playwright error while rendering https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"load\"\n"
+        },
+        "after_screenshot": "",
+        "status": "crawl_failed",
+        "error_message": "Playwright error while rendering https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"load\"\n",
+        "crawl_duration_ms": 722,
+        "created_at": "2026-08-04T01:48:45.471922+00:00",
+        "updated_at": "2026-08-04T01:48:45.471935+00:00"
+      }
+    },
+    "app/tests/tickets/ticket_08_rophim_general_visible_ads_desktop.json": {
+      "status": "failed",
+      "updated_at": "2026-08-04T01:48:46.480258+00:00",
+      "created_at": "2026-08-04T01:48:45.694943+00:00",
+      "report_id": "ticket_08_rophim_general_visible_ads_desktop",
+      "domain": "rophim10.live",
+      "jira_ticket_code": "ticket_08_rophim_general_visible_ads_desktop",
+      "url": "https://rophim10.live/phimhay",
+      "environment": "desktop",
+      "processed_at": "2026-08-04T01:48:46.480258+00:00",
+      "error_message": "Playwright error while rendering https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"load\"\n",
+      "output": {
+        "input_id": null,
+        "report_id": "ticket_08_rophim_general_visible_ads_desktop",
+        "url": "https://rophim10.live/phimhay",
+        "rules": [],
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "validation_result": {
+          "report_id": "ticket_08_rophim_general_visible_ads_desktop",
+          "url": "https://rophim10.live/phimhay",
+          "environment": "desktop",
+          "ticket_context": {
+            "description": "Visible ad containers may remain on the page. The system should block clear ad containers while preserving movie lists, navigation, search, category cards, and normal page content.",
+            "request": "[Desktop][Adblock] - rophim10.live/phimhay: Block visible ad containers",
+            "steps": [
+              "Open https://rophim10.live/phimhay",
+              "Enable Adblock mode",
+              "Observe visible ad containers",
+              "Verify that normal page content remains usable"
+            ],
+            "expected": "Visible ad containers are hidden while normal content remains visible.",
+            "problem_type": "specific_ad_not_blocked",
+            "platform": "desktop",
+            "actual": "Visible ad containers may remain on the page."
+          },
+          "problem_type": "specific_ad_not_blocked",
+          "resolution_strategy": "unknown",
+          "processing_mode": "ticket_aware",
+          "crawl_elapsed_ms": null,
+          "generation_elapsed_ms": null,
+          "validation_elapsed_ms": null,
+          "workflow_elapsed_ms": null,
+          "rules_generated": 0,
+          "rules_passed": 0,
+          "rules_failed": 0,
+          "passing_rules": [],
+          "status": "crawl_failed",
+          "crawl_stage": "render",
+          "crawl_error": "Playwright error while rendering https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"load\"\n"
+        },
+        "after_screenshot": "",
+        "status": "crawl_failed",
+        "error_message": "Playwright error while rendering https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"load\"\n",
+        "crawl_duration_ms": 686,
+        "created_at": "2026-08-04T01:48:46.480229+00:00",
+        "updated_at": "2026-08-04T01:48:46.480249+00:00"
+      }
+    },
+    "app/tests/tickets/ticket_09_rophim_search_header_preserve_desktop.json": {
+      "status": "failed",
+      "updated_at": "2026-08-04T01:48:47.669599+00:00",
+      "created_at": "2026-08-04T01:48:46.751571+00:00",
+      "report_id": "ticket_09_rophim_search_header_preserve_desktop",
+      "domain": "rophim10.live",
+      "jira_ticket_code": "ticket_09_rophim_search_header_preserve_desktop",
+      "url": "https://rophim10.live/phimhay",
+      "environment": "desktop",
+      "processed_at": "2026-08-04T01:48:47.669599+00:00",
+      "error_message": "Playwright error while rendering https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"load\"\n",
+      "output": {
+        "input_id": null,
+        "report_id": "ticket_09_rophim_search_header_preserve_desktop",
+        "url": "https://rophim10.live/phimhay",
+        "rules": [],
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "validation_result": {
+          "report_id": "ticket_09_rophim_search_header_preserve_desktop",
+          "url": "https://rophim10.live/phimhay",
+          "environment": "desktop",
+          "ticket_context": {
+            "description": "The search box, header, and navigation controls should remain visible when Adblock mode is enabled. This ticket checks that rule generation does not hide important page controls.",
+            "request": "[Desktop][Adblock] - rophim10.live/phimhay: Search and header should remain visible",
+            "steps": [
+              "Open https://rophim10.live/phimhay",
+              "Enable Adblock mode",
+              "Observe the header, navigation, and search box",
+              "Verify that the controls remain visible and usable"
+            ],
+            "expected": "Search, header, and navigation controls remain visible while Adblock mode is enabled.",
+            "problem_type": "ui_hidden",
+            "platform": "desktop",
+            "actual": "Search, header, or navigation controls may be hidden."
+          },
+          "problem_type": "ui_hidden",
+          "resolution_strategy": "unknown",
+          "processing_mode": "ticket_aware",
+          "crawl_elapsed_ms": null,
+          "generation_elapsed_ms": null,
+          "validation_elapsed_ms": null,
+          "workflow_elapsed_ms": null,
+          "rules_generated": 0,
+          "rules_passed": 0,
+          "rules_failed": 0,
+          "passing_rules": [],
+          "status": "crawl_failed",
+          "crawl_stage": "render",
+          "crawl_error": "Playwright error while rendering https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"load\"\n"
+        },
+        "after_screenshot": "",
+        "status": "crawl_failed",
+        "error_message": "Playwright error while rendering https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"load\"\n",
+        "crawl_duration_ms": 755,
+        "created_at": "2026-08-04T01:48:47.669582+00:00",
+        "updated_at": "2026-08-04T01:48:47.669594+00:00"
+      }
+    },
+    "app/tests/tickets/ticket_10_rophim_mobile_navigation_preserve_android.json": {
+      "status": "completed",
+      "updated_at": "2026-08-04T01:49:34.640849+00:00",
+      "created_at": "2026-08-04T01:48:47.929636+00:00",
+      "report_id": "ticket_10_rophim_mobile_navigation_preserve_android",
+      "domain": "rophim10.live",
+      "jira_ticket_code": "ticket_10_rophim_mobile_navigation_preserve_android",
+      "url": "https://rophim10.live/phimhay",
+      "environment": "android",
+      "processed_at": "2026-08-04T01:49:34.640849+00:00",
+      "output": {
+        "input_id": null,
+        "report_id": "ticket_10_rophim_mobile_navigation_preserve_android",
+        "url": "https://rophim10.live/phimhay",
+        "rules": [
+          "rophim10.live#@#.search",
+          "rophim10.live#@#.search-box",
+          "rophim10.live#@#input[type='search']",
+          "rophim10.live#@#header",
+          "rophim10.live#@#nav",
+          "rophim10.live#@#.header",
+          "rophim10.live#@#.navbar",
+          "rophim10.live#@#.menu"
+        ],
+        "input_tokens": 3869,
+        "output_tokens": 78,
+        "validation_result": {
+          "report_id": "ticket_10_rophim_mobile_navigation_preserve_android",
+          "url": "https://rophim10.live/phimhay",
+          "environment": "android",
+          "processing_mode": "ticket_aware",
+          "ticket_context": {
+            "platform": "android",
+            "problem_type": "ui_hidden",
+            "resolution_strategy": "restore_hidden_ui",
+            "focus_region": "",
+            "request": "[Android][Adblock] - rophim10.live/phimhay: Mobile navigation should remain visible",
+            "description": "The mobile header, search, and navigation controls should remain visible when Adblock mode is enabled. This ticket checks that generated rules do not break mobile navigation.",
+            "steps": [
+              "Open https://rophim10.live/phimhay using Android environment",
+              "Enable Adblock mode",
+              "Observe the mobile header, search, and navigation controls",
+              "Verify that the page remains usable"
+            ],
+            "actual": "Mobile search, header, or navigation controls may be hidden.",
+            "expected": "Mobile search, header, and navigation controls remain visible while Adblock mode is enabled.",
+            "target_to_block": [],
+            "target_to_preserve": [
+              "header",
+              "navigation",
+              "search bar",
+              "menu bar",
+              "main content"
+            ],
+            "validation_hints": {
+              "must_show_any_selector_groups": [
+                {
+                  "name": "search",
+                  "selectors": [
+                    ".search",
+                    ".search-box",
+                    "input[type='search']",
+                    "[class*='search']",
+                    "[id*='search']"
+                  ],
+                  "min": 1
+                },
+                {
+                  "name": "menu_or_navigation",
+                  "selectors": [
+                    "header",
+                    "nav",
+                    ".header",
+                    ".navbar",
+                    ".menu",
+                    "[class*='menu']",
+                    "[class*='nav']",
+                    "[class*='header']"
+                  ],
+                  "min": 1
+                }
+              ]
+            },
+            "current_rules": [],
+            "matched_rules": [],
+            "blocked_resources": [],
+            "evidence_level": "url_only_best_effort",
+            "raw": {}
+          },
+          "problem_type": "ui_hidden",
+          "resolution_strategy": "restore_hidden_ui",
+          "timestamp": "2026-08-04T01:49:34.369323+00:00",
+          "crawl_elapsed_ms": 31769,
+          "generation_elapsed_ms": 2045,
+          "validation_elapsed_ms": 11734,
+          "validated_rule_count": 8,
+          "average_validation_time_per_rule_ms": 1466.75,
+          "total": 8,
+          "passed": 0,
+          "failed": 8,
+          "passing_rules": [],
+          "combined_screenshot": "",
+          "combined_sandbox": null,
+          "outcomes": [
+            {
+              "rule": "rophim10.live#@#.search",
+              "passed": false,
+              "failure_stage": "sandbox",
+              "failure_reason": "sandbox browser failed for https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"domcontentloaded\"\n",
+              "syntax": {
+                "rule": "rophim10.live#@#.search",
+                "valid": true,
+                "error": null
+              },
+              "scope": {
+                "rule": "rophim10.live#@#.search",
+                "safe": true,
+                "risk": null,
+                "detail": null
+              },
+              "policy": {
+                "rule": "rophim10.live#@#.search",
+                "valid": true,
+                "problem_type": "ui_hidden",
+                "resolution_strategy": "restore_hidden_ui",
+                "rule_direction": "cosmetic_exception",
+                "error": null
+              },
+              "sandbox": {
+                "url": "https://rophim10.live/phimhay",
+                "passed": false,
+                "ads_blocked": false,
+                "page_functional": false,
+                "ticket_assertions_passed": true,
+                "ticket_assertion_errors": [],
+                "baseline_ticket_assertions_passed": true,
+                "baseline_ticket_assertion_errors": [],
+                "existing_rules_count": 0,
+                "candidate_rules_count": 1,
+                "blocked_requests": [],
+                "candidate_blocked_requests": [],
+                "missing_ad_selectors": [],
+                "hidden_ad_selectors": [],
+                "broken_selectors": [],
+                "error": "sandbox browser failed for https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"domcontentloaded\"\n",
+                "unreachable": false,
+                "tested_screenshot_saved": false
+              }
+            },
+            {
+              "rule": "rophim10.live#@#.search-box",
+              "passed": false,
+              "failure_stage": "sandbox",
+              "failure_reason": "sandbox browser failed for https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"domcontentloaded\"\n",
+              "syntax": {
+                "rule": "rophim10.live#@#.search-box",
+                "valid": true,
+                "error": null
+              },
+              "scope": {
+                "rule": "rophim10.live#@#.search-box",
+                "safe": true,
+                "risk": null,
+                "detail": null
+              },
+              "policy": {
+                "rule": "rophim10.live#@#.search-box",
+                "valid": true,
+                "problem_type": "ui_hidden",
+                "resolution_strategy": "restore_hidden_ui",
+                "rule_direction": "cosmetic_exception",
+                "error": null
+              },
+              "sandbox": {
+                "url": "https://rophim10.live/phimhay",
+                "passed": false,
+                "ads_blocked": false,
+                "page_functional": false,
+                "ticket_assertions_passed": true,
+                "ticket_assertion_errors": [],
+                "baseline_ticket_assertions_passed": true,
+                "baseline_ticket_assertion_errors": [],
+                "existing_rules_count": 0,
+                "candidate_rules_count": 1,
+                "blocked_requests": [],
+                "candidate_blocked_requests": [],
+                "missing_ad_selectors": [],
+                "hidden_ad_selectors": [],
+                "broken_selectors": [],
+                "error": "sandbox browser failed for https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"domcontentloaded\"\n",
+                "unreachable": false,
+                "tested_screenshot_saved": false
+              }
+            },
+            {
+              "rule": "rophim10.live#@#input[type='search']",
+              "passed": false,
+              "failure_stage": "sandbox",
+              "failure_reason": "sandbox browser failed for https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"domcontentloaded\"\n",
+              "syntax": {
+                "rule": "rophim10.live#@#input[type='search']",
+                "valid": true,
+                "error": null
+              },
+              "scope": {
+                "rule": "rophim10.live#@#input[type='search']",
+                "safe": true,
+                "risk": null,
+                "detail": null
+              },
+              "policy": {
+                "rule": "rophim10.live#@#input[type='search']",
+                "valid": true,
+                "problem_type": "ui_hidden",
+                "resolution_strategy": "restore_hidden_ui",
+                "rule_direction": "cosmetic_exception",
+                "error": null
+              },
+              "sandbox": {
+                "url": "https://rophim10.live/phimhay",
+                "passed": false,
+                "ads_blocked": false,
+                "page_functional": false,
+                "ticket_assertions_passed": true,
+                "ticket_assertion_errors": [],
+                "baseline_ticket_assertions_passed": true,
+                "baseline_ticket_assertion_errors": [],
+                "existing_rules_count": 0,
+                "candidate_rules_count": 1,
+                "blocked_requests": [],
+                "candidate_blocked_requests": [],
+                "missing_ad_selectors": [],
+                "hidden_ad_selectors": [],
+                "broken_selectors": [],
+                "error": "sandbox browser failed for https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"domcontentloaded\"\n",
+                "unreachable": false,
+                "tested_screenshot_saved": false
+              }
+            },
+            {
+              "rule": "rophim10.live#@#header",
+              "passed": false,
+              "failure_stage": "sandbox",
+              "failure_reason": "sandbox browser failed for https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"domcontentloaded\"\n",
+              "syntax": {
+                "rule": "rophim10.live#@#header",
+                "valid": true,
+                "error": null
+              },
+              "scope": {
+                "rule": "rophim10.live#@#header",
+                "safe": true,
+                "risk": null,
+                "detail": null
+              },
+              "policy": {
+                "rule": "rophim10.live#@#header",
+                "valid": true,
+                "problem_type": "ui_hidden",
+                "resolution_strategy": "restore_hidden_ui",
+                "rule_direction": "cosmetic_exception",
+                "error": null
+              },
+              "sandbox": {
+                "url": "https://rophim10.live/phimhay",
+                "passed": false,
+                "ads_blocked": false,
+                "page_functional": false,
+                "ticket_assertions_passed": true,
+                "ticket_assertion_errors": [],
+                "baseline_ticket_assertions_passed": true,
+                "baseline_ticket_assertion_errors": [],
+                "existing_rules_count": 0,
+                "candidate_rules_count": 1,
+                "blocked_requests": [],
+                "candidate_blocked_requests": [],
+                "missing_ad_selectors": [],
+                "hidden_ad_selectors": [],
+                "broken_selectors": [],
+                "error": "sandbox browser failed for https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"domcontentloaded\"\n",
+                "unreachable": false,
+                "tested_screenshot_saved": false
+              }
+            },
+            {
+              "rule": "rophim10.live#@#nav",
+              "passed": false,
+              "failure_stage": "sandbox",
+              "failure_reason": "sandbox browser failed for https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"domcontentloaded\"\n",
+              "syntax": {
+                "rule": "rophim10.live#@#nav",
+                "valid": true,
+                "error": null
+              },
+              "scope": {
+                "rule": "rophim10.live#@#nav",
+                "safe": true,
+                "risk": null,
+                "detail": null
+              },
+              "policy": {
+                "rule": "rophim10.live#@#nav",
+                "valid": true,
+                "problem_type": "ui_hidden",
+                "resolution_strategy": "restore_hidden_ui",
+                "rule_direction": "cosmetic_exception",
+                "error": null
+              },
+              "sandbox": {
+                "url": "https://rophim10.live/phimhay",
+                "passed": false,
+                "ads_blocked": false,
+                "page_functional": false,
+                "ticket_assertions_passed": true,
+                "ticket_assertion_errors": [],
+                "baseline_ticket_assertions_passed": true,
+                "baseline_ticket_assertion_errors": [],
+                "existing_rules_count": 0,
+                "candidate_rules_count": 1,
+                "blocked_requests": [],
+                "candidate_blocked_requests": [],
+                "missing_ad_selectors": [],
+                "hidden_ad_selectors": [],
+                "broken_selectors": [],
+                "error": "sandbox browser failed for https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"domcontentloaded\"\n",
+                "unreachable": false,
+                "tested_screenshot_saved": false
+              }
+            },
+            {
+              "rule": "rophim10.live#@#.header",
+              "passed": false,
+              "failure_stage": "sandbox",
+              "failure_reason": "sandbox browser failed for https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"domcontentloaded\"\n",
+              "syntax": {
+                "rule": "rophim10.live#@#.header",
+                "valid": true,
+                "error": null
+              },
+              "scope": {
+                "rule": "rophim10.live#@#.header",
+                "safe": true,
+                "risk": null,
+                "detail": null
+              },
+              "policy": {
+                "rule": "rophim10.live#@#.header",
+                "valid": true,
+                "problem_type": "ui_hidden",
+                "resolution_strategy": "restore_hidden_ui",
+                "rule_direction": "cosmetic_exception",
+                "error": null
+              },
+              "sandbox": {
+                "url": "https://rophim10.live/phimhay",
+                "passed": false,
+                "ads_blocked": false,
+                "page_functional": false,
+                "ticket_assertions_passed": true,
+                "ticket_assertion_errors": [],
+                "baseline_ticket_assertions_passed": true,
+                "baseline_ticket_assertion_errors": [],
+                "existing_rules_count": 0,
+                "candidate_rules_count": 1,
+                "blocked_requests": [],
+                "candidate_blocked_requests": [],
+                "missing_ad_selectors": [],
+                "hidden_ad_selectors": [],
+                "broken_selectors": [],
+                "error": "sandbox browser failed for https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"domcontentloaded\"\n",
+                "unreachable": false,
+                "tested_screenshot_saved": false
+              }
+            },
+            {
+              "rule": "rophim10.live#@#.navbar",
+              "passed": false,
+              "failure_stage": "sandbox",
+              "failure_reason": "sandbox browser failed for https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"domcontentloaded\"\n",
+              "syntax": {
+                "rule": "rophim10.live#@#.navbar",
+                "valid": true,
+                "error": null
+              },
+              "scope": {
+                "rule": "rophim10.live#@#.navbar",
+                "safe": true,
+                "risk": null,
+                "detail": null
+              },
+              "policy": {
+                "rule": "rophim10.live#@#.navbar",
+                "valid": true,
+                "problem_type": "ui_hidden",
+                "resolution_strategy": "restore_hidden_ui",
+                "rule_direction": "cosmetic_exception",
+                "error": null
+              },
+              "sandbox": {
+                "url": "https://rophim10.live/phimhay",
+                "passed": false,
+                "ads_blocked": false,
+                "page_functional": false,
+                "ticket_assertions_passed": true,
+                "ticket_assertion_errors": [],
+                "baseline_ticket_assertions_passed": true,
+                "baseline_ticket_assertion_errors": [],
+                "existing_rules_count": 0,
+                "candidate_rules_count": 1,
+                "blocked_requests": [],
+                "candidate_blocked_requests": [],
+                "missing_ad_selectors": [],
+                "hidden_ad_selectors": [],
+                "broken_selectors": [],
+                "error": "sandbox browser failed for https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"domcontentloaded\"\n",
+                "unreachable": false,
+                "tested_screenshot_saved": false
+              }
+            },
+            {
+              "rule": "rophim10.live#@#.menu",
+              "passed": false,
+              "failure_stage": "sandbox",
+              "failure_reason": "sandbox browser failed for https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"domcontentloaded\"\n",
+              "syntax": {
+                "rule": "rophim10.live#@#.menu",
+                "valid": true,
+                "error": null
+              },
+              "scope": {
+                "rule": "rophim10.live#@#.menu",
+                "safe": true,
+                "risk": null,
+                "detail": null
+              },
+              "policy": {
+                "rule": "rophim10.live#@#.menu",
+                "valid": true,
+                "problem_type": "ui_hidden",
+                "resolution_strategy": "restore_hidden_ui",
+                "rule_direction": "cosmetic_exception",
+                "error": null
+              },
+              "sandbox": {
+                "url": "https://rophim10.live/phimhay",
+                "passed": false,
+                "ads_blocked": false,
+                "page_functional": false,
+                "ticket_assertions_passed": true,
+                "ticket_assertion_errors": [],
+                "baseline_ticket_assertions_passed": true,
+                "baseline_ticket_assertion_errors": [],
+                "existing_rules_count": 0,
+                "candidate_rules_count": 1,
+                "blocked_requests": [],
+                "candidate_blocked_requests": [],
+                "missing_ad_selectors": [],
+                "hidden_ad_selectors": [],
+                "broken_selectors": [],
+                "error": "sandbox browser failed for https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"domcontentloaded\"\n",
+                "unreachable": false,
+                "tested_screenshot_saved": false
+              }
+            }
+          ],
+          "workflow_elapsed_ms": 14199
+        },
+        "after_screenshot": "",
+        "status": "ok",
+        "error_message": "",
+        "crawl_duration_ms": 46627,
+        "created_at": "2026-08-04T01:49:34.640776+00:00",
+        "updated_at": "2026-08-04T01:49:34.640788+00:00"
+      }
+    },
+    "app/tests/tickets/ticket_11_rophim_movie_images_preserve_desktop.json": {
+      "status": "failed",
+      "updated_at": "2026-08-04T01:49:36.016350+00:00",
+      "created_at": "2026-08-04T01:49:34.714253+00:00",
+      "report_id": "ticket_11_rophim_movie_images_preserve_desktop",
+      "domain": "rophim10.live",
+      "jira_ticket_code": "ticket_11_rophim_movie_images_preserve_desktop",
+      "url": "https://rophim10.live/phimhay",
+      "environment": "desktop",
+      "processed_at": "2026-08-04T01:49:36.016350+00:00",
+      "error_message": "Playwright error while rendering https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"load\"\n",
+      "output": {
+        "input_id": null,
+        "report_id": "ticket_11_rophim_movie_images_preserve_desktop",
+        "url": "https://rophim10.live/phimhay",
+        "rules": [],
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "validation_result": {
+          "report_id": "ticket_11_rophim_movie_images_preserve_desktop",
+          "url": "https://rophim10.live/phimhay",
+          "environment": "desktop",
+          "ticket_context": {
+            "description": "Movie poster images or hero images may fail to display when Adblock mode is enabled. Advertisement resources can be blocked, but normal movie images and page media should remain visible.",
+            "request": "[Desktop][Adblock] - rophim10.live/phimhay: Movie poster images should remain visible",
+            "steps": [
+              "Open https://rophim10.live/phimhay",
+              "Enable Adblock mode",
+              "Observe movie poster images, hero images, and carousel images",
+              "Verify that normal media remains visible"
+            ],
+            "expected": "Movie poster images and normal media remain visible while advertising resources are blocked.",
+            "problem_type": "content_broken_image",
+            "platform": "desktop",
+            "actual": "Some normal movie images may be missing or broken."
+          },
+          "problem_type": "content_broken_image",
+          "resolution_strategy": "unknown",
+          "processing_mode": "ticket_aware",
+          "crawl_elapsed_ms": null,
+          "generation_elapsed_ms": null,
+          "validation_elapsed_ms": null,
+          "workflow_elapsed_ms": null,
+          "rules_generated": 0,
+          "rules_passed": 0,
+          "rules_failed": 0,
+          "passing_rules": [],
+          "status": "crawl_failed",
+          "crawl_stage": "render",
+          "crawl_error": "Playwright error while rendering https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"load\"\n"
+        },
+        "after_screenshot": "",
+        "status": "crawl_failed",
+        "error_message": "Playwright error while rendering https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"load\"\n",
+        "crawl_duration_ms": 1120,
+        "created_at": "2026-08-04T01:49:36.016331+00:00",
+        "updated_at": "2026-08-04T01:49:36.016345+00:00"
+      }
+    },
+    "app/tests/tickets/ticket_12_rophim_overlay_desktop.json": {
+      "status": "failed",
+      "updated_at": "2026-08-04T01:49:39.522843+00:00",
+      "created_at": "2026-08-04T01:49:36.452261+00:00",
+      "report_id": "ticket_12_rophim_overlay_desktop",
+      "domain": "rophim10.live",
+      "jira_ticket_code": "ticket_12_rophim_overlay_desktop",
+      "url": "https://rophim10.live/phimhay",
+      "environment": "desktop",
+      "processed_at": "2026-08-04T01:49:39.522843+00:00",
+      "error_message": "Playwright error while rendering https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"load\"\n",
+      "output": {
+        "input_id": null,
+        "report_id": "ticket_12_rophim_overlay_desktop",
+        "url": "https://rophim10.live/phimhay",
+        "rules": [],
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "validation_result": {
+          "report_id": "ticket_12_rophim_overlay_desktop",
+          "url": "https://rophim10.live/phimhay",
+          "environment": "desktop",
+          "ticket_context": {
+            "description": "An overlay, modal, or blocking layer may prevent interaction with the page. The overlay should be removed while normal page content, movie cards, search, and navigation remain usable.",
+            "request": "[Desktop][Adblock] - rophim10.live/phimhay: Remove overlay that blocks page interaction",
+            "steps": [
+              "Open https://rophim10.live/phimhay",
+              "Enable Adblock mode",
+              "Observe whether any overlay or modal blocks page interaction",
+              "Verify that the page is usable after the overlay is hidden"
+            ],
+            "expected": "The blocking overlay is hidden while normal page content remains usable.",
+            "problem_type": "anti_adblock_or_overlay",
+            "platform": "desktop",
+            "actual": "An overlay or modal may block page interaction."
+          },
+          "problem_type": "anti_adblock_or_overlay",
+          "resolution_strategy": "unknown",
+          "processing_mode": "ticket_aware",
+          "crawl_elapsed_ms": null,
+          "generation_elapsed_ms": null,
+          "validation_elapsed_ms": null,
+          "workflow_elapsed_ms": null,
+          "rules_generated": 0,
+          "rules_passed": 0,
+          "rules_failed": 0,
+          "passing_rules": [],
+          "status": "crawl_failed",
+          "crawl_stage": "render",
+          "crawl_error": "Playwright error while rendering https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"load\"\n"
+        },
+        "after_screenshot": "",
+        "status": "crawl_failed",
+        "error_message": "Playwright error while rendering https://rophim10.live/phimhay: Page.goto: net::ERR_CONNECTION_CLOSED at https://rophim10.live/phimhay\nCall log:\n  - navigating to \"https://rophim10.live/phimhay\", waiting until \"load\"\n",
+        "crawl_duration_ms": 2745,
+        "created_at": "2026-08-04T01:49:39.522825+00:00",
+        "updated_at": "2026-08-04T01:49:39.522838+00:00"
+      }
+    },
+    "app/tests/tickets/ticket_13_motchill_search_menu_android.json": {
+      "status": "failed",
+      "updated_at": "2026-08-04T01:49:44.252567+00:00",
+      "created_at": "2026-08-04T01:49:41.299167+00:00",
+      "report_id": "ticket_13_motchill_search_menu_android",
+      "domain": "motchilltv.tf",
+      "jira_ticket_code": "ticket_13_motchill_search_menu_android",
+      "url": "https://motchilltv.tf",
+      "environment": "android",
+      "processed_at": "2026-08-04T01:49:44.252567+00:00",
+      "error_message": "Playwright error while rendering https://motchilltv.tf: Page.goto: net::ERR_CONNECTION_CLOSED at https://motchilltv.tf/\nCall log:\n  - navigating to \"https://motchilltv.tf/\", waiting until \"load\"\n",
+      "output": {
+        "input_id": null,
+        "report_id": "ticket_13_motchill_search_menu_android",
+        "url": "https://motchilltv.tf",
+        "rules": [],
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "validation_result": {
+          "report_id": "ticket_13_motchill_search_menu_android",
+          "url": "https://motchilltv.tf",
+          "environment": "android",
+          "ticket_context": {
+            "description": "Search and menu controls should remain visible when Adblock mode is enabled. This ticket checks mobile UI preservation during rule generation and validation.",
+            "request": "[Android][Adblock] - motchilltv.tf: Search and menu controls should remain visible",
+            "steps": [
+              "Open https://motchilltv.tf using Android environment",
+              "Enable Adblock mode",
+              "Observe the search icon, menu icon, header, and navigation",
+              "Verify that the page remains usable"
+            ],
+            "expected": "Search and menu controls remain visible while Adblock mode is enabled.",
+            "problem_type": "ui_hidden",
+            "platform": "android",
+            "actual": "Search or menu controls may be hidden."
+          },
+          "problem_type": "ui_hidden",
+          "resolution_strategy": "unknown",
+          "processing_mode": "ticket_aware",
+          "crawl_elapsed_ms": null,
+          "generation_elapsed_ms": null,
+          "validation_elapsed_ms": null,
+          "workflow_elapsed_ms": null,
+          "rules_generated": 0,
+          "rules_passed": 0,
+          "rules_failed": 0,
+          "passing_rules": [],
+          "status": "crawl_failed",
+          "crawl_stage": "render",
+          "crawl_error": "Playwright error while rendering https://motchilltv.tf: Page.goto: net::ERR_CONNECTION_CLOSED at https://motchilltv.tf/\nCall log:\n  - navigating to \"https://motchilltv.tf/\", waiting until \"load\"\n"
+        },
+        "after_screenshot": "",
+        "status": "crawl_failed",
+        "error_message": "Playwright error while rendering https://motchilltv.tf: Page.goto: net::ERR_CONNECTION_CLOSED at https://motchilltv.tf/\nCall log:\n  - navigating to \"https://motchilltv.tf/\", waiting until \"load\"\n",
+        "crawl_duration_ms": 1842,
+        "created_at": "2026-08-04T01:49:44.252540+00:00",
+        "updated_at": "2026-08-04T01:49:44.252559+00:00"
+      }
+    },
+    "app/tests/tickets/ticket_14_motchill_search_menu_desktop.json": {
+      "status": "failed",
+      "updated_at": "2026-08-04T01:49:47.849453+00:00",
+      "created_at": "2026-08-04T01:49:45.052127+00:00",
+      "report_id": "ticket_14_motchill_search_menu_desktop",
+      "domain": "motchilltv.tf",
+      "jira_ticket_code": "ticket_14_motchill_search_menu_desktop",
+      "url": "https://motchilltv.tf",
+      "environment": "desktop",
+      "processed_at": "2026-08-04T01:49:47.849453+00:00",
+      "error_message": "Playwright error while rendering https://motchilltv.tf: Page.goto: net::ERR_CONNECTION_CLOSED at https://motchilltv.tf/\nCall log:\n  - navigating to \"https://motchilltv.tf/\", waiting until \"load\"\n",
+      "output": {
+        "input_id": null,
+        "report_id": "ticket_14_motchill_search_menu_desktop",
+        "url": "https://motchilltv.tf",
+        "rules": [],
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "validation_result": {
+          "report_id": "ticket_14_motchill_search_menu_desktop",
+          "url": "https://motchilltv.tf",
+          "environment": "desktop",
+          "ticket_context": {
+            "description": "Header search and navigation controls should remain visible when Adblock mode is enabled. This ticket checks that generated rules do not hide important UI controls.",
+            "request": "[Desktop][Adblock] - motchilltv.tf: Header search and navigation should remain visible",
+            "steps": [
+              "Open https://motchilltv.tf",
+              "Enable Adblock mode",
+              "Observe header, search, and navigation controls",
+              "Verify that page controls remain visible"
+            ],
+            "expected": "Header, search, and navigation controls remain visible while Adblock mode is enabled.",
+            "problem_type": "ui_hidden",
+            "platform": "desktop",
+            "actual": "Header, search, or navigation controls may be hidden."
+          },
+          "problem_type": "ui_hidden",
+          "resolution_strategy": "unknown",
+          "processing_mode": "ticket_aware",
+          "crawl_elapsed_ms": null,
+          "generation_elapsed_ms": null,
+          "validation_elapsed_ms": null,
+          "workflow_elapsed_ms": null,
+          "rules_generated": 0,
+          "rules_passed": 0,
+          "rules_failed": 0,
+          "passing_rules": [],
+          "status": "crawl_failed",
+          "crawl_stage": "render",
+          "crawl_error": "Playwright error while rendering https://motchilltv.tf: Page.goto: net::ERR_CONNECTION_CLOSED at https://motchilltv.tf/\nCall log:\n  - navigating to \"https://motchilltv.tf/\", waiting until \"load\"\n"
+        },
+        "after_screenshot": "",
+        "status": "crawl_failed",
+        "error_message": "Playwright error while rendering https://motchilltv.tf: Page.goto: net::ERR_CONNECTION_CLOSED at https://motchilltv.tf/\nCall log:\n  - navigating to \"https://motchilltv.tf/\", waiting until \"load\"\n",
+        "crawl_duration_ms": 1744,
+        "created_at": "2026-08-04T01:49:47.849436+00:00",
+        "updated_at": "2026-08-04T01:49:47.849449+00:00"
+      }
+    },
+    "app/tests/tickets/ticket_15_motchill_visible_ads_desktop.json": {
+      "status": "failed",
+      "updated_at": "2026-08-04T01:49:49.818192+00:00",
+      "created_at": "2026-08-04T01:49:48.933532+00:00",
+      "report_id": "ticket_15_motchill_visible_ads_desktop",
+      "domain": "motchilltv.tf",
+      "jira_ticket_code": "ticket_15_motchill_visible_ads_desktop",
+      "url": "https://motchilltv.tf",
+      "environment": "desktop",
+      "processed_at": "2026-08-04T01:49:49.818192+00:00",
+      "error_message": "Playwright error while rendering https://motchilltv.tf: Page.goto: net::ERR_CONNECTION_CLOSED at https://motchilltv.tf/\nCall log:\n  - navigating to \"https://motchilltv.tf/\", waiting until \"load\"\n",
+      "output": {
+        "input_id": null,
+        "report_id": "ticket_15_motchill_visible_ads_desktop",
+        "url": "https://motchilltv.tf",
+        "rules": [],
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "validation_result": {
+          "report_id": "ticket_15_motchill_visible_ads_desktop",
+          "url": "https://motchilltv.tf",
+          "environment": "desktop",
+          "ticket_context": {
+            "description": "Visible advertisement containers may remain on the page. Only clear ad containers should be blocked. Movie posters, navigation, search, and normal page content must remain visible.",
+            "request": "[Desktop][Adblock] - motchilltv.tf: Block visible ad containers",
+            "steps": [
+              "Open https://motchilltv.tf",
+              "Enable Adblock mode",
+              "Observe visible ad containers",
+              "Verify that normal movie content and navigation remain visible"
+            ],
+            "expected": "Visible ad containers are hidden while normal page content remains visible.",
+            "problem_type": "specific_ad_not_blocked",
+            "platform": "desktop",
+            "actual": "Visible ad containers may remain on the page."
+          },
+          "problem_type": "specific_ad_not_blocked",
+          "resolution_strategy": "unknown",
+          "processing_mode": "ticket_aware",
+          "crawl_elapsed_ms": null,
+          "generation_elapsed_ms": null,
+          "validation_elapsed_ms": null,
+          "workflow_elapsed_ms": null,
+          "rules_generated": 0,
+          "rules_passed": 0,
+          "rules_failed": 0,
+          "passing_rules": [],
+          "status": "crawl_failed",
+          "crawl_stage": "render",
+          "crawl_error": "Playwright error while rendering https://motchilltv.tf: Page.goto: net::ERR_CONNECTION_CLOSED at https://motchilltv.tf/\nCall log:\n  - navigating to \"https://motchilltv.tf/\", waiting until \"load\"\n"
+        },
+        "after_screenshot": "",
+        "status": "crawl_failed",
+        "error_message": "Playwright error while rendering https://motchilltv.tf: Page.goto: net::ERR_CONNECTION_CLOSED at https://motchilltv.tf/\nCall log:\n  - navigating to \"https://motchilltv.tf/\", waiting until \"load\"\n",
+        "crawl_duration_ms": 704,
+        "created_at": "2026-08-04T01:49:49.818160+00:00",
+        "updated_at": "2026-08-04T01:49:49.818184+00:00"
+      }
+    },
+    "app/tests/tickets/ticket_16_adblock_tester_google_ads_desktop.json": {
+      "status": "completed",
+      "updated_at": "2026-08-04T01:50:31.826339+00:00",
+      "created_at": "2026-08-04T01:49:50.222786+00:00",
+      "report_id": "ticket_16_adblock_tester_google_ads_desktop",
+      "domain": "adblock-tester.com",
+      "jira_ticket_code": "ticket_16_adblock_tester_google_ads_desktop",
+      "url": "https://adblock-tester.com",
+      "environment": "desktop",
+      "processed_at": "2026-08-04T01:50:31.826339+00:00",
+      "output": {
+        "input_id": null,
+        "report_id": "ticket_16_adblock_tester_google_ads_desktop",
+        "url": "https://adblock-tester.com",
+        "rules": [
+          "||doubleclick.net^$third-party,domain=adblock-tester.com"
+        ],
+        "input_tokens": 4679,
+        "output_tokens": 66,
+        "validation_result": {
+          "report_id": "ticket_16_adblock_tester_google_ads_desktop",
+          "url": "https://adblock-tester.com",
+          "environment": "desktop",
+          "processing_mode": "ticket_aware",
+          "ticket_context": {
+            "platform": "desktop",
+            "problem_type": "specific_ad_not_blocked",
+            "resolution_strategy": "block_visible_ad",
+            "focus_region": "",
+            "request": "[Desktop][Adblock] - adblock-tester.com: Google advertising containers remain visible",
+            "description": "Actual Google advertising containers remain visible on the AdBlock Tester page. Only advertising containers should be blocked. The test score, service rows, status messages, switches, explanatory content, and page controls must remain visible.",
+            "steps": [
+              "Open https://adblock-tester.com",
+              "Enable Adblock mode",
+              "Wait for the page and advertising tests to finish loading",
+              "Observe the Google AdSense test containers",
+              "Verify that the score and test controls remain usable"
+            ],
+            "actual": "One or more Google advertising containers remain visible on the test page.",
+            "expected": "The actual advertising containers are hidden while the test score, status rows, switches, explanatory content, and page controls remain visible.",
+            "target_to_block": [
+              "detected ad containers",
+              "ad iframes",
+              "ad network requests",
+              "sponsored or popup ad elements"
+            ],
+            "target_to_preserve": [
+              "main content",
+              "navigation",
+              "forms",
+              "media",
+              "user controls"
+            ],
+            "validation_hints": {},
+            "current_rules": [],
+            "matched_rules": [],
+            "blocked_resources": [],
+            "evidence_level": "url_only_best_effort",
+            "raw": {}
+          },
+          "problem_type": "specific_ad_not_blocked",
+          "resolution_strategy": "block_visible_ad",
+          "timestamp": "2026-08-04T01:50:31.528228+00:00",
+          "crawl_elapsed_ms": 12704,
+          "generation_elapsed_ms": 2758,
+          "validation_elapsed_ms": 20753,
+          "validated_rule_count": 1,
+          "average_validation_time_per_rule_ms": 20753.0,
+          "total": 1,
+          "passed": 1,
+          "failed": 0,
+          "passing_rules": [
+            "||doubleclick.net^$third-party,domain=adblock-tester.com"
+          ],
+          "combined_screenshot": "data/rule_outputs/screenshots/ticket_16_adblock_tester_google_ads_desktop_with_rules.png",
+          "combined_sandbox": {
+            "url": "https://adblock-tester.com",
+            "passed": true,
+            "ads_blocked": true,
+            "page_functional": true,
+            "ticket_assertions_passed": true,
+            "ticket_assertion_errors": [],
+            "baseline_ticket_assertions_passed": true,
+            "baseline_ticket_assertion_errors": [],
+            "existing_rules_count": 0,
+            "candidate_rules_count": 1,
+            "blocked_requests": [
+              "https://googleads.g.doubleclick.net/pagead/html/r20260729/r20190131/zrt_lookup_fy2021.html",
+              "https://googleads.g.doubleclick.net/pagead/ads?client=ca-pub-6430039911615607&output=html&adk=1812271804&adf=3025194257&abgtt=1&lmt=1768485984&plat=3%3A16%2C9%3A32776%2C16%3A8388608%2C17%3A32%2C24%3A32%2C25%3A32%2C30%3A1081344%2C32%3A32%2C41%3A32%2C42%3A32%2C43%3A32%2C44%3A32&format=0x0&url=https%3A%2F%2Fadblock-tester.com%2F&pra=7&aiof=10&asro=0&aimartd=4&aieuf=1&aicrs=1&uach=WyJXaW5kb3dzIiwiMTAuMCIsIng2NCIsIiIsIjEzMy4wLjY5NDMuMTYiLG51bGwsMCxudWxsLCI2NCIsW1siTm90KEE6QnJhbmQiLCI5OS4wLjAuMCJdLFsiR29vZ2xlIENocm9tZSIsIjEzMy4wLjY5NDMuMTYiXSxbIkNocm9taXVtIiwiMTMzLjAuNjk0My4xNiJdXSwwXQ..&dt=1785808221928&bpp=4&bdt=1281&idt=659&shv=r20260729&mjsv=m202607280101&ptt=9&saldr=aa&abxe=1&cookie_enabled=1&eoidce=1&nras=1&correlator=3472475048247&frm=20&pv=2&u_tz=-240&u_his=2&u_h=1080&u_w=1920&u_ah=1080&u_aw=1920&u_cd=24&u_sd=1&dmc=8&adx=-12245933&ady=-12245933&biw=1920&bih=1080&scr_x=0&scr_y=0&eid=95396139%2C95397133%2C42533293&oid=2&pvsid=2000448414132867&tmod=1915453777&uas=0&nvt=1&fsapi=1&fc=896&brdim=0%2C0%2C0%2C0%2C1920%2C0%2C1920%2C1080%2C1920%2C1080&vis=1&rsz=%7C%7Cs%7C&abl=NS&fu=32768&bc=31&plas=596x732_r&bz=1&ifi=2&uci=a!2&fsb=1&dtd=733"
+            ],
+            "candidate_blocked_requests": [
+              "https://googleads.g.doubleclick.net/pagead/html/r20260729/r20190131/zrt_lookup_fy2021.html",
+              "https://googleads.g.doubleclick.net/pagead/ads?client=ca-pub-6430039911615607&output=html&adk=1812271804&adf=3025194257&abgtt=1&lmt=1768485984&plat=3%3A16%2C9%3A32776%2C16%3A8388608%2C17%3A32%2C24%3A32%2C25%3A32%2C30%3A1081344%2C32%3A32%2C41%3A32%2C42%3A32%2C43%3A32%2C44%3A32&format=0x0&url=https%3A%2F%2Fadblock-tester.com%2F&pra=7&aiof=10&asro=0&aimartd=4&aieuf=1&aicrs=1&uach=WyJXaW5kb3dzIiwiMTAuMCIsIng2NCIsIiIsIjEzMy4wLjY5NDMuMTYiLG51bGwsMCxudWxsLCI2NCIsW1siTm90KEE6QnJhbmQiLCI5OS4wLjAuMCJdLFsiR29vZ2xlIENocm9tZSIsIjEzMy4wLjY5NDMuMTYiXSxbIkNocm9taXVtIiwiMTMzLjAuNjk0My4xNiJdXSwwXQ..&dt=1785808221928&bpp=4&bdt=1281&idt=659&shv=r20260729&mjsv=m202607280101&ptt=9&saldr=aa&abxe=1&cookie_enabled=1&eoidce=1&nras=1&correlator=3472475048247&frm=20&pv=2&u_tz=-240&u_his=2&u_h=1080&u_w=1920&u_ah=1080&u_aw=1920&u_cd=24&u_sd=1&dmc=8&adx=-12245933&ady=-12245933&biw=1920&bih=1080&scr_x=0&scr_y=0&eid=95396139%2C95397133%2C42533293&oid=2&pvsid=2000448414132867&tmod=1915453777&uas=0&nvt=1&fsapi=1&fc=896&brdim=0%2C0%2C0%2C0%2C1920%2C0%2C1920%2C1080%2C1920%2C1080&vis=1&rsz=%7C%7Cs%7C&abl=NS&fu=32768&bc=31&plas=596x732_r&bz=1&ifi=2&uci=a!2&fsb=1&dtd=733"
+            ],
+            "missing_ad_selectors": [],
+            "hidden_ad_selectors": [],
+            "broken_selectors": [],
+            "error": "",
+            "unreachable": false,
+            "tested_screenshot_saved": true
+          },
+          "outcomes": [
+            {
+              "rule": "||doubleclick.net^$third-party,domain=adblock-tester.com",
+              "passed": true,
+              "failure_stage": "",
+              "failure_reason": "",
+              "syntax": {
+                "rule": "||doubleclick.net^$third-party,domain=adblock-tester.com",
+                "valid": true,
+                "error": null
+              },
+              "scope": {
+                "rule": "||doubleclick.net^$third-party,domain=adblock-tester.com",
+                "safe": true,
+                "risk": null,
+                "detail": null
+              },
+              "policy": {
+                "rule": "||doubleclick.net^$third-party,domain=adblock-tester.com",
+                "valid": true,
+                "problem_type": "specific_ad_not_blocked",
+                "resolution_strategy": "block_visible_ad",
+                "rule_direction": "network_block",
+                "error": null
+              },
+              "sandbox": {
+                "url": "https://adblock-tester.com",
+                "passed": true,
+                "ads_blocked": true,
+                "page_functional": true,
+                "ticket_assertions_passed": true,
+                "ticket_assertion_errors": [],
+                "baseline_ticket_assertions_passed": true,
+                "baseline_ticket_assertion_errors": [],
+                "existing_rules_count": 0,
+                "candidate_rules_count": 1,
+                "blocked_requests": [
+                  "https://googleads.g.doubleclick.net/pagead/html/r20260729/r20190131/zrt_lookup_fy2021.html",
+                  "https://googleads.g.doubleclick.net/pagead/ads?client=ca-pub-6430039911615607&output=html&adk=1812271804&adf=3025194257&abgtt=1&lmt=1768485984&plat=3%3A16%2C9%3A32776%2C16%3A8388608%2C17%3A32%2C24%3A32%2C25%3A32%2C30%3A1081344%2C32%3A32%2C41%3A32%2C42%3A32%2C43%3A32%2C44%3A32&format=0x0&url=https%3A%2F%2Fadblock-tester.com%2F&pra=7&aiof=10&asro=0&aimartd=4&aieuf=1&aicrs=1&uach=WyJXaW5kb3dzIiwiMTAuMCIsIng2NCIsIiIsIjEzMy4wLjY5NDMuMTYiLG51bGwsMCxudWxsLCI2NCIsW1siTm90KEE6QnJhbmQiLCI5OS4wLjAuMCJdLFsiR29vZ2xlIENocm9tZSIsIjEzMy4wLjY5NDMuMTYiXSxbIkNocm9taXVtIiwiMTMzLjAuNjk0My4xNiJdXSwwXQ..&dt=1785808221928&bpp=4&bdt=1281&idt=659&shv=r20260729&mjsv=m202607280101&ptt=9&saldr=aa&abxe=1&cookie_enabled=1&eoidce=1&nras=1&correlator=3472475048247&frm=20&pv=2&u_tz=-240&u_his=2&u_h=1080&u_w=1920&u_ah=1080&u_aw=1920&u_cd=24&u_sd=1&dmc=8&adx=-12245933&ady=-12245933&biw=1920&bih=1080&scr_x=0&scr_y=0&eid=95396139%2C95397133%2C42533293&oid=2&pvsid=2000448414132867&tmod=1915453777&uas=0&nvt=1&fsapi=1&fc=896&brdim=0%2C0%2C0%2C0%2C1920%2C0%2C1920%2C1080%2C1920%2C1080&vis=1&rsz=%7C%7Cs%7C&abl=NS&fu=32768&bc=31&plas=596x732_r&bz=1&ifi=2&uci=a!2&fsb=1&dtd=733"
+                ],
+                "candidate_blocked_requests": [
+                  "https://googleads.g.doubleclick.net/pagead/html/r20260729/r20190131/zrt_lookup_fy2021.html",
+                  "https://googleads.g.doubleclick.net/pagead/ads?client=ca-pub-6430039911615607&output=html&adk=1812271804&adf=3025194257&abgtt=1&lmt=1768485984&plat=3%3A16%2C9%3A32776%2C16%3A8388608%2C17%3A32%2C24%3A32%2C25%3A32%2C30%3A1081344%2C32%3A32%2C41%3A32%2C42%3A32%2C43%3A32%2C44%3A32&format=0x0&url=https%3A%2F%2Fadblock-tester.com%2F&pra=7&aiof=10&asro=0&aimartd=4&aieuf=1&aicrs=1&uach=WyJXaW5kb3dzIiwiMTAuMCIsIng2NCIsIiIsIjEzMy4wLjY5NDMuMTYiLG51bGwsMCxudWxsLCI2NCIsW1siTm90KEE6QnJhbmQiLCI5OS4wLjAuMCJdLFsiR29vZ2xlIENocm9tZSIsIjEzMy4wLjY5NDMuMTYiXSxbIkNocm9taXVtIiwiMTMzLjAuNjk0My4xNiJdXSwwXQ..&dt=1785808221928&bpp=4&bdt=1281&idt=659&shv=r20260729&mjsv=m202607280101&ptt=9&saldr=aa&abxe=1&cookie_enabled=1&eoidce=1&nras=1&correlator=3472475048247&frm=20&pv=2&u_tz=-240&u_his=2&u_h=1080&u_w=1920&u_ah=1080&u_aw=1920&u_cd=24&u_sd=1&dmc=8&adx=-12245933&ady=-12245933&biw=1920&bih=1080&scr_x=0&scr_y=0&eid=95396139%2C95397133%2C42533293&oid=2&pvsid=2000448414132867&tmod=1915453777&uas=0&nvt=1&fsapi=1&fc=896&brdim=0%2C0%2C0%2C0%2C1920%2C0%2C1920%2C1080%2C1920%2C1080&vis=1&rsz=%7C%7Cs%7C&abl=NS&fu=32768&bc=31&plas=596x732_r&bz=1&ifi=2&uci=a!2&fsb=1&dtd=733"
+                ],
+                "missing_ad_selectors": [],
+                "hidden_ad_selectors": [],
+                "broken_selectors": [],
+                "error": "",
+                "unreachable": false,
+                "tested_screenshot_saved": true
+              }
+            }
+          ],
+          "workflow_elapsed_ms": 24849
+        },
+        "after_screenshot": "data/rule_outputs/screenshots/ticket_16_adblock_tester_google_ads_desktop_with_rules.png",
+        "status": "ok",
+        "error_message": "",
+        "crawl_duration_ms": 41492,
+        "created_at": "2026-08-04T01:50:31.826317+00:00",
+        "updated_at": "2026-08-04T01:50:31.826328+00:00"
+      }
+    },
+    "app/tests/tickets/ticket_17_adblock_tester_banner_images_desktop.json": {
+      "status": "completed",
+      "updated_at": "2026-08-04T01:50:42.757872+00:00",
+      "created_at": "2026-08-04T01:50:31.931545+00:00",
+      "report_id": "ticket_17_adblock_tester_banner_images_desktop",
+      "domain": "adblock-tester.com",
+      "jira_ticket_code": "ticket_17_adblock_tester_banner_images_desktop",
+      "url": "https://adblock-tester.com",
+      "environment": "desktop",
+      "processed_at": "2026-08-04T01:50:42.757872+00:00",
+      "output": {
+        "input_id": null,
+        "report_id": "ticket_17_adblock_tester_banner_images_desktop",
+        "url": "https://adblock-tester.com",
+        "rules": [
+          "||googlesyndication.com^$third-party,domain=adblock-tester.com"
+        ],
+        "input_tokens": 4767,
+        "output_tokens": 79,
+        "validation_result": {
+          "report_id": "ticket_17_adblock_tester_banner_images_desktop",
+          "url": "https://adblock-tester.com",
+          "environment": "desktop",
+          "processing_mode": "ticket_aware",
+          "ticket_context": {
+            "platform": "desktop",
+            "problem_type": "specific_ad_not_blocked",
+            "resolution_strategy": "block_visible_ad",
+            "focus_region": "",
+            "request": "[Desktop][Adblock] - adblock-tester.com: Banner image advertisements remain visible",
+            "description": "Banner image advertising test elements may remain visible. Only banner advertising elements should be blocked. Test labels, score, status rows, explanatory content, and controls must remain visible.",
+            "steps": [
+              "Open https://adblock-tester.com",
+              "Enable Adblock mode",
+              "Scroll to the banner advertising section",
+              "Observe flash, GIF, and static image ad test areas",
+              "Verify that test labels and controls remain visible"
+            ],
+            "actual": "One or more banner image advertising elements remain visible.",
+            "expected": "Banner image advertising elements are hidden while test labels, score, status rows, and controls remain visible.",
+            "target_to_block": [
+              "detected ad containers",
+              "ad iframes",
+              "ad network requests",
+              "sponsored or popup ad elements"
+            ],
+            "target_to_preserve": [
+              "banner ads",
+              "native ads",
+              "bookmaker ads",
+              "sponsor/bookmaker sections",
+              "main content",
+              "navigation",
+              "forms",
+              "media",
+              "user controls"
+            ],
+            "validation_hints": {
+              "must_not_generate_rules": [
+                "*banner*",
+                "*banners*",
+                "*native*",
+                "*bookmaker*",
+                "*sponsor*",
+                "*sponsored*"
+              ]
+            },
+            "current_rules": [],
+            "matched_rules": [],
+            "blocked_resources": [],
+            "evidence_level": "url_only_best_effort",
+            "raw": {}
+          },
+          "problem_type": "specific_ad_not_blocked",
+          "resolution_strategy": "block_visible_ad",
+          "timestamp": "2026-07-31T04:25:19.643972+00:00",
+          "crawl_elapsed_ms": 7724,
+          "generation_elapsed_ms": 1343,
+          "validation_elapsed_ms": 15765,
+          "validated_rule_count": 1,
+          "average_validation_time_per_rule_ms": 15765.0,
+          "total": 1,
+          "passed": 1,
+          "failed": 0,
+          "passing_rules": [
+            "||googlesyndication.com^$third-party,domain=adblock-tester.com"
+          ],
+          "combined_screenshot": "data/rule_outputs/screenshots/ticket_17_adblock_tester_banner_images_desktop_with_rules.png",
+          "combined_sandbox": {
+            "url": "https://adblock-tester.com",
+            "passed": true,
+            "ads_blocked": true,
+            "page_functional": true,
+            "ticket_assertions_passed": true,
+            "ticket_assertion_errors": [],
+            "baseline_ticket_assertions_passed": true,
+            "baseline_ticket_assertion_errors": [],
+            "existing_rules_count": 0,
+            "candidate_rules_count": 1,
+            "blocked_requests": [
+              "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js",
+              "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"
+            ],
+            "candidate_blocked_requests": [
+              "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js",
+              "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"
+            ],
+            "missing_ad_selectors": [],
+            "hidden_ad_selectors": [],
+            "broken_selectors": [],
+            "error": "",
+            "unreachable": false,
+            "tested_screenshot_saved": true
+          },
+          "outcomes": [
+            {
+              "rule": "||googlesyndication.com^$third-party,domain=adblock-tester.com",
+              "passed": true,
+              "failure_stage": "",
+              "failure_reason": "",
+              "syntax": {
+                "rule": "||googlesyndication.com^$third-party,domain=adblock-tester.com",
+                "valid": true,
+                "error": null
+              },
+              "scope": {
+                "rule": "||googlesyndication.com^$third-party,domain=adblock-tester.com",
+                "safe": true,
+                "risk": null,
+                "detail": null
+              },
+              "policy": {
+                "rule": "||googlesyndication.com^$third-party,domain=adblock-tester.com",
+                "valid": true,
+                "problem_type": "specific_ad_not_blocked",
+                "resolution_strategy": "block_visible_ad",
+                "rule_direction": "network_block",
+                "error": null
+              },
+              "sandbox": {
+                "url": "https://adblock-tester.com",
+                "passed": true,
+                "ads_blocked": true,
+                "page_functional": true,
+                "ticket_assertions_passed": true,
+                "ticket_assertion_errors": [],
+                "baseline_ticket_assertions_passed": true,
+                "baseline_ticket_assertion_errors": [],
+                "existing_rules_count": 0,
+                "candidate_rules_count": 1,
+                "blocked_requests": [
+                  "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js",
+                  "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"
+                ],
+                "candidate_blocked_requests": [
+                  "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js",
+                  "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"
+                ],
+                "missing_ad_selectors": [],
+                "hidden_ad_selectors": [],
+                "broken_selectors": [],
+                "error": "",
+                "unreachable": false,
+                "tested_screenshot_saved": true
+              }
+            }
+          ],
+          "workflow_elapsed_ms": 17189
+        },
+        "after_screenshot": "data/rule_outputs/screenshots/ticket_17_adblock_tester_banner_images_desktop_with_rules.png",
+        "status": "no_rules",
+        "error_message": "",
+        "crawl_duration_ms": 10754,
+        "created_at": "2026-08-04T01:50:42.757850+00:00",
+        "updated_at": "2026-08-04T01:50:42.757863+00:00"
+      }
+    },
+    "app/tests/tickets/ticket_18_canyoublockit_web_banners_desktop.json": {
+      "status": "completed",
+      "updated_at": "2026-08-04T01:50:57.235019+00:00",
+      "created_at": "2026-08-04T01:50:42.828321+00:00",
+      "report_id": "ticket_18_canyoublockit_web_banners_desktop",
+      "domain": "canyoublockit.com",
+      "jira_ticket_code": "ticket_18_canyoublockit_web_banners_desktop",
+      "url": "https://canyoublockit.com/advanced-adblocker-test/web-banners/",
+      "environment": "desktop",
+      "processed_at": "2026-08-04T01:50:57.235019+00:00",
+      "output": {
+        "input_id": null,
+        "report_id": "ticket_18_canyoublockit_web_banners_desktop",
+        "url": "https://canyoublockit.com/advanced-adblocker-test/web-banners/",
+        "rules": [
+          "||googlesyndication.com^",
+          "||doubleclick.net^",
+          "canyoublockit.com##ins.adsbygoogle",
+          "canyoublockit.com##ins.adsbygoogle.adsbygoogle-noablate"
+        ],
+        "input_tokens": 4021,
+        "output_tokens": 46,
+        "validation_result": {
+          "report_id": "ticket_18_canyoublockit_web_banners_desktop",
+          "url": "https://canyoublockit.com/advanced-adblocker-test/web-banners/",
+          "environment": "desktop",
+          "processing_mode": "ticket_aware",
+          "ticket_context": {
+            "platform": "desktop",
+            "problem_type": "specific_ad_not_blocked",
+            "resolution_strategy": "block_visible_ad",
+            "focus_region": "",
+            "request": "[Desktop][Adblock] - canyoublockit.com: Web banner advertising elements remain visible",
+            "description": "Advertising banner test elements surrounding the Web Banners test area remain visible. Only advertisement placements should be blocked. The page title, test explanation, navigation menu, Banner Ads heading, and Previous or Next navigation controls must remain available.",
+            "steps": [
+              "Open https://canyoublockit.com/advanced-adblocker-test/web-banners/",
+              "Enable Adblock mode",
+              "Wait for the page to finish loading",
+              "Observe the advertisement placements around the Banner Ads test area",
+              "Verify that the test instructions and navigation remain usable"
+            ],
+            "actual": "One or more web banner advertising test elements remain visible.",
+            "expected": "The web banner advertising elements are blocked while the test title, instructions, navigation, and page controls remain visible.",
+            "target_to_block": [
+              "detected ad containers",
+              "ad iframes",
+              "ad network requests",
+              "sponsored or popup ad elements"
+            ],
+            "target_to_preserve": [
+              "banner ads",
+              "native ads",
+              "bookmaker ads",
+              "sponsor/bookmaker sections",
+              "main content",
+              "navigation",
+              "forms",
+              "media",
+              "user controls"
+            ],
+            "validation_hints": {
+              "must_not_generate_rules": [
+                "*banner*",
+                "*banners*",
+                "*native*",
+                "*bookmaker*",
+                "*sponsor*",
+                "*sponsored*"
+              ]
+            },
+            "current_rules": [],
+            "matched_rules": [],
+            "blocked_resources": [],
+            "evidence_level": "url_only_best_effort",
+            "raw": {}
+          },
+          "problem_type": "specific_ad_not_blocked",
+          "resolution_strategy": "block_visible_ad",
+          "timestamp": "2026-07-31T02:06:26.915102+00:00",
+          "crawl_elapsed_ms": 8755,
+          "generation_elapsed_ms": 1304,
+          "validation_elapsed_ms": 48899,
+          "validated_rule_count": 4,
+          "average_validation_time_per_rule_ms": 12224.75,
+          "total": 4,
+          "passed": 4,
+          "failed": 0,
+          "passing_rules": [
+            "||googlesyndication.com^",
+            "||doubleclick.net^",
+            "canyoublockit.com##ins.adsbygoogle",
+            "canyoublockit.com##ins.adsbygoogle.adsbygoogle-noablate"
+          ],
+          "combined_screenshot": "data/rule_outputs/screenshots/ticket_18_canyoublockit_web_banners_desktop_with_rules.png",
+          "combined_sandbox": {
+            "url": "https://canyoublockit.com/advanced-adblocker-test/web-banners/",
+            "passed": true,
+            "ads_blocked": true,
+            "page_functional": true,
+            "ticket_assertions_passed": true,
+            "ticket_assertion_errors": [],
+            "baseline_ticket_assertions_passed": true,
+            "baseline_ticket_assertion_errors": [],
+            "existing_rules_count": 0,
+            "candidate_rules_count": 4,
+            "blocked_requests": [
+              "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-1525110894603983",
+              "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-1525110894603983",
+              "https://stats.g.doubleclick.net/g/collect?v=2&tid=G-KSLHMTKGH0&cid=769468267.1785463581&gtm=45je67t1v9100054981za200zd9100054981&rcb=15&aip=1&dma=0&gcd=13l3l3l3l1l1&npa=0&frm=0&tag_exp=115938465~115938468~118395334~118897920~118897930~119896803"
+            ],
+            "candidate_blocked_requests": [
+              "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-1525110894603983",
+              "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-1525110894603983",
+              "https://stats.g.doubleclick.net/g/collect?v=2&tid=G-KSLHMTKGH0&cid=769468267.1785463581&gtm=45je67t1v9100054981za200zd9100054981&rcb=15&aip=1&dma=0&gcd=13l3l3l3l1l1&npa=0&frm=0&tag_exp=115938465~115938468~118395334~118897920~118897930~119896803"
+            ],
+            "missing_ad_selectors": [
+              "ins.adsbygoogle.adsbygoogle-noablate"
+            ],
+            "hidden_ad_selectors": [
+              "ins.adsbygoogle"
+            ],
+            "broken_selectors": [],
+            "error": "",
+            "unreachable": false,
+            "tested_screenshot_saved": true
+          },
+          "outcomes": [
+            {
+              "rule": "||googlesyndication.com^",
+              "passed": true,
+              "failure_stage": "",
+              "failure_reason": "",
+              "syntax": {
+                "rule": "||googlesyndication.com^",
+                "valid": true,
+                "error": null
+              },
+              "scope": {
+                "rule": "||googlesyndication.com^",
+                "safe": true,
+                "risk": null,
+                "detail": null
+              },
+              "policy": {
+                "rule": "||googlesyndication.com^",
+                "valid": true,
+                "problem_type": "specific_ad_not_blocked",
+                "resolution_strategy": "block_visible_ad",
+                "rule_direction": "network_block",
+                "error": null
+              },
+              "sandbox": {
+                "url": "https://canyoublockit.com/advanced-adblocker-test/web-banners/",
+                "passed": true,
+                "ads_blocked": true,
+                "page_functional": true,
+                "ticket_assertions_passed": true,
+                "ticket_assertion_errors": [],
+                "baseline_ticket_assertions_passed": true,
+                "baseline_ticket_assertion_errors": [],
+                "existing_rules_count": 0,
+                "candidate_rules_count": 1,
+                "blocked_requests": [
+                  "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-1525110894603983",
+                  "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-1525110894603983"
+                ],
+                "candidate_blocked_requests": [
+                  "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-1525110894603983",
+                  "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-1525110894603983"
+                ],
+                "missing_ad_selectors": [],
+                "hidden_ad_selectors": [],
+                "broken_selectors": [],
+                "error": "",
+                "unreachable": false,
+                "tested_screenshot_saved": true
+              }
+            },
+            {
+              "rule": "||doubleclick.net^",
+              "passed": true,
+              "failure_stage": "",
+              "failure_reason": "",
+              "syntax": {
+                "rule": "||doubleclick.net^",
+                "valid": true,
+                "error": null
+              },
+              "scope": {
+                "rule": "||doubleclick.net^",
+                "safe": true,
+                "risk": null,
+                "detail": null
+              },
+              "policy": {
+                "rule": "||doubleclick.net^",
+                "valid": true,
+                "problem_type": "specific_ad_not_blocked",
+                "resolution_strategy": "block_visible_ad",
+                "rule_direction": "network_block",
+                "error": null
+              },
+              "sandbox": {
+                "url": "https://canyoublockit.com/advanced-adblocker-test/web-banners/",
+                "passed": true,
+                "ads_blocked": true,
+                "page_functional": true,
+                "ticket_assertions_passed": true,
+                "ticket_assertion_errors": [],
+                "baseline_ticket_assertions_passed": true,
+                "baseline_ticket_assertion_errors": [],
+                "existing_rules_count": 0,
+                "candidate_rules_count": 1,
+                "blocked_requests": [
+                  "https://googleads.g.doubleclick.net/pagead/html/r20260729/r20190131/zrt_lookup_fy2021.html",
+                  "https://googleads.g.doubleclick.net/pagead/ads?client=ca-pub-1525110894603983&output=html&adk=1812271804&adf=3025194257&abgtt=6&lmt=1785463556&plat=9%3A32776%2C16%3A8388608%2C17%3A32%2C24%3A32%2C25%3A32%2C30%3A1081344%2C32%3A32%2C41%3A32%2C42%3A32%2C43%3A32%2C44%3A32&format=0x0&url=https%3A%2F%2Fcanyoublockit.com%2Fadvanced-adblocker-test%2Fweb-banners%2F&pra=5&aiof=10&asro=0&aimartd=4&aieuf=1&aicrs=1&uach=WyJXaW5kb3dzIiwiMTAuMCIsIng2NCIsIiIsIjEzMy4wLjY5NDMuMTYiLG51bGwsMCxudWxsLCI2NCIsW1siTm90KEE6QnJhbmQiLCI5OS4wLjAuMCJdLFsiR29vZ2xlIENocm9tZSIsIjEzMy4wLjY5NDMuMTYiXSxbIkNocm9taXVtIiwiMTMzLjAuNjk0My4xNiJdXSwwXQ..&dt=1785463556695&bpp=10&bdt=2683&idt=230&shv=r20260729&mjsv=m202607270101&ptt=9&saldr=aa&abxe=1&cookie_enabled=1&eoidce=1&nras=1&correlator=5678957947197&frm=20&pv=2&u_tz=-240&u_his=2&u_h=1080&u_w=1920&u_ah=1080&u_aw=1920&u_cd=24&u_sd=1&dmc=8&adx=-12245933&ady=-12245933&biw=1920&bih=1080&scr_x=0&scr_y=0&eid=95396138%2C95397129%2C122880016%2C95340252%2C95340254&oid=2&pvsid=6372869479710918&tmod=1020791793&uas=0&nvt=1&fsapi=1&fc=1920&brdim=0%2C0%2C0%2C0%2C1920%2C0%2C1920%2C1080%2C1920%2C1080&vis=1&rsz=%7C%7Cs%7C&abl=NS&fu=32768&bc=31&plas=366x854_l%7C366x854_r&bz=1&pgls=CAEaBTYuNC44~CAEQBRoGMy4xNy4z&ifi=1&uci=a!1&fsb=1&dtd=258",
+                  "https://googleads.g.doubleclick.net/pagead/ads?client=ca-pub-1525110894603983&output=html&h=280&slotname=3670663027&adk=3575331008&adf=2483593117&pi=t.ma~as.3670663027&abgtt=6&w=1074&fwrn=4&fwrnh=100&lmt=1785463556&rafmt=1&format=1074x280&url=https%3A%2F%2Fcanyoublockit.com%2Fadvanced-adblocker-test%2Fweb-banners%2F&fwr=0&fwrattr=true&rpe=1&resp_fmts=3&aiof=10&asro=0&aimartd=4&aieuf=1&aicrs=1&uach=WyJXaW5kb3dzIiwiMTAuMCIsIng2NCIsIiIsIjEzMy4wLjY5NDMuMTYiLG51bGwsMCxudWxsLCI2NCIsW1siTm90KEE6QnJhbmQiLCI5OS4wLjAuMCJdLFsiR29vZ2xlIENocm9tZSIsIjEzMy4wLjY5NDMuMTYiXSxbIkNocm9taXVtIiwiMTMzLjAuNjk0My4xNiJdXSwwXQ..&dt=1785463556705&bpp=2&bdt=2694&idt=256&shv=r20260729&mjsv=m202607270101&ptt=9&saldr=aa&abxe=1&cookie_enabled=1&eoidce=1&prev_fmts=0x0&nras=1&correlator=5678957947197&frm=20&pv=1&u_tz=-240&u_his=2&u_h=1080&u_w=1920&u_ah=1080&u_aw=1920&u_cd=24&u_sd=1&dmc=8&adx=423&ady=409&biw=1920&bih=1080&scr_x=0&scr_y=0&eid=95396138%2C95397129%2C122880016%2C95340252%2C95340254&oid=2&pvsid=6372869479710918&tmod=1020791793&uas=0&nvt=1&fc=1920&brdim=0%2C0%2C0%2C0%2C1920%2C0%2C1920%2C1080%2C1920%2C1080&vis=1&rsz=o%7C%7CeE%7C&abl=CS&pfx=0&fu=128&bc=31&plas=366x854_l%7C366x854_r&bz=1&pgls=CAEaBTYuNC44~CAEQBRoGMy4xNy4z&ifi=2&uci=a!2&fsb=1&dtd=264",
+                  "https://googleads.g.doubleclick.net/pagead/ads?client=ca-pub-1525110894603983&output=html&h=280&slotname=6090363689&adk=1674827855&adf=1671028103&pi=t.ma~as.6090363689&abgtt=6&w=345&fwrn=4&fwrnh=100&lmt=1785463557&rafmt=1&format=345x280&url=https%3A%2F%2Fcanyoublockit.com%2Fadvanced-adblocker-test%2Fweb-banners%2F&fwr=0&fwrattr=true&rpe=1&resp_fmts=3&aiof=10&asro=0&aimartd=4&aieuf=1&aicrs=1&uach=WyJXaW5kb3dzIiwiMTAuMCIsIng2NCIsIiIsIjEzMy4wLjY5NDMuMTYiLG51bGwsMCxudWxsLCI2NCIsW1siTm90KEE6QnJhbmQiLCI5OS4wLjAuMCJdLFsiR29vZ2xlIENocm9tZSIsIjEzMy4wLjY5NDMuMTYiXSxbIkNocm9taXVtIiwiMTMzLjAuNjk0My4xNiJdXSwwXQ..&dt=1785463556707&bpp=1&bdt=2695&idt=320&shv=r20260729&mjsv=m202607270101&ptt=9&saldr=aa&abxe=1&cookie_enabled=1&eoidce=1&prev_fmts=0x0%2C1074x280&nras=1&correlator=5678957947197&frm=20&pv=1&u_tz=-240&u_his=2&u_h=1080&u_w=1920&u_ah=1080&u_aw=1920&u_cd=24&u_sd=1&dmc=8&adx=423&ady=776&biw=1920&bih=1080&scr_x=0&scr_y=0&eid=95396138%2C95397129%2C122880016%2C95340252%2C95340254&oid=2&pvsid=6372869479710918&tmod=1020791793&uas=0&nvt=1&fc=1920&brdim=0%2C0%2C0%2C0%2C1920%2C0%2C1920%2C1080%2C1920%2C1080&vis=1&rsz=o%7C%7CEe%7C&abl=CS&pfx=0&fu=128&bc=31&plas=366x854_l%7C366x854_r&bz=1&pgls=CAEaBTYuNC44~CAEQBRoGMy4xNy4z&ifi=3&uci=a!3&fsb=1&dtd=324",
+                  "https://googleads.g.doubleclick.net/pagead/ads?client=ca-pub-1525110894603983&output=html&h=280&slotname=5722111295&adk=2814279696&adf=2252781953&pi=t.ma~as.5722111295&abgtt=6&w=345&fwrn=4&fwrnh=100&lmt=1785463557&rafmt=1&format=345x280&url=https%3A%2F%2Fcanyoublockit.com%2Fadvanced-adblocker-test%2Fweb-banners%2F&fwr=0&fwrattr=true&rpe=1&resp_fmts=3&aiof=10&asro=0&aimartd=4&aieuf=1&aicrs=1&uach=WyJXaW5kb3dzIiwiMTAuMCIsIng2NCIsIiIsIjEzMy4wLjY5NDMuMTYiLG51bGwsMCxudWxsLCI2NCIsW1siTm90KEE6QnJhbmQiLCI5OS4wLjAuMCJdLFsiR29vZ2xlIENocm9tZSIsIjEzMy4wLjY5NDMuMTYiXSxbIkNocm9taXVtIiwiMTMzLjAuNjk0My4xNiJdXSwwXQ..&dt=1785463556707&bpp=1&bdt=2695&idt=340&shv=r20260729&mjsv=m202607270101&ptt=9&saldr=aa&abxe=1&cookie_enabled=1&eoidce=1&prev_fmts=0x0%2C1074x280%2C345x280&nras=1&correlator=5678957947197&frm=20&pv=1&u_tz=-240&u_his=2&u_h=1080&u_w=1920&u_ah=1080&u_aw=1920&u_cd=24&u_sd=1&dmc=8&adx=788&ady=1044&biw=1920&bih=1080&scr_x=0&scr_y=0&eid=95396138%2C95397129%2C122880016%2C95340252%2C95340254&oid=2&pvsid=6372869479710918&tmod=1020791793&uas=0&nvt=1&fc=1920&brdim=0%2C0%2C0%2C0%2C1920%2C0%2C1920%2C1080%2C1920%2C1080&vis=1&rsz=o%7C%7CEe%7C&abl=CS&pfx=0&fu=128&bc=31&plas=366x854_l%7C366x854_r&bz=1&pgls=CAEaBTYuNC44~CAEQBRoGMy4xNy4z&ifi=4&uci=a!4&fsb=1&dtd=345",
+                  "https://googleads.g.doubleclick.net/pagead/ads?client=ca-pub-1525110894603983&output=html&h=280&slotname=2151118674&adk=2560626815&adf=2477204216&pi=t.ma~as.2151118674&abgtt=6&w=345&fwrn=4&fwrnh=100&lmt=1785463557&rafmt=1&format=345x280&url=https%3A%2F%2Fcanyoublockit.com%2Fadvanced-adblocker-test%2Fweb-banners%2F&fwr=0&fwrattr=true&rpe=1&resp_fmts=3&aiof=10&asro=0&aimartd=4&aieuf=1&aicrs=1&uach=WyJXaW5kb3dzIiwiMTAuMCIsIng2NCIsIiIsIjEzMy4wLjY5NDMuMTYiLG51bGwsMCxudWxsLCI2NCIsW1siTm90KEE6QnJhbmQiLCI5OS4wLjAuMCJdLFsiR29vZ2xlIENocm9tZSIsIjEzMy4wLjY5NDMuMTYiXSxbIkNocm9taXVtIiwiMTMzLjAuNjk0My4xNiJdXSwwXQ..&dt=1785463556708&bpp=1&bdt=2697&idt=394&shv=r20260729&mjsv=m202607270101&ptt=9&saldr=aa&abxe=1&cookie_enabled=1&eoidce=1&prev_fmts=0x0%2C1074x280%2C345x280%2C345x280&nras=1&correlator=5678957947197&frm=20&pv=1&u_tz=-240&u_his=2&u_h=1080&u_w=1920&u_ah=1080&u_aw=1920&u_cd=24&u_sd=1&dmc=8&adx=1152&ady=776&biw=1920&bih=1080&scr_x=0&scr_y=0&eid=95396138%2C95397129%2C122880016%2C95340252%2C95340254&oid=2&pvsid=6372869479710918&tmod=1020791793&uas=0&nvt=1&fc=1920&brdim=0%2C0%2C0%2C0%2C1920%2C0%2C1920%2C1080%2C1920%2C1080&vis=1&rsz=o%7C%7CEe%7C&abl=CS&pfx=0&fu=128&bc=31&plas=366x854_l%7C366x854_r&bz=1&pgls=CAEaBTYuNC44~CAEQBRoGMy4xNy4z&ifi=5&uci=a!5&fsb=1&dtd=398",
+                  "https://googleads.g.doubleclick.net/pagead/ads?client=ca-pub-1525110894603983&output=html&h=280&slotname=5898791991&adk=995648273&adf=1674544588&pi=t.ma~as.5898791991&abgtt=6&w=1074&fwrn=4&fwrnh=100&lmt=1785463557&rafmt=1&format=1074x280&url=https%3A%2F%2Fcanyoublockit.com%2Fadvanced-adblocker-test%2Fweb-banners%2F&fwr=0&fwrattr=true&rpe=1&resp_fmts=3&aiof=10&asro=0&aimartd=4&aieuf=1&aicrs=1&uach=WyJXaW5kb3dzIiwiMTAuMCIsIng2NCIsIiIsIjEzMy4wLjY5NDMuMTYiLG51bGwsMCxudWxsLCI2NCIsW1siTm90KEE6QnJhbmQiLCI5OS4wLjAuMCJdLFsiR29vZ2xlIENocm9tZSIsIjEzMy4wLjY5NDMuMTYiXSxbIkNocm9taXVtIiwiMTMzLjAuNjk0My4xNiJdXSwwXQ..&dt=1785463556708&bpp=1&bdt=2697&idt=421&shv=r20260729&mjsv=m202607270101&ptt=9&saldr=aa&abxe=1&cookie_enabled=1&eoidce=1&prev_fmts=0x0%2C1074x280%2C345x280%2C345x280%2C345x280&nras=1&correlator=5678957947197&frm=20&pv=1&u_tz=-240&u_his=2&u_h=1080&u_w=1920&u_ah=1080&u_aw=1920&u_cd=24&u_sd=1&dmc=8&adx=423&ady=1412&biw=1920&bih=1080&scr_x=0&scr_y=0&eid=95396138%2C95397129%2C122880016%2C95340252%2C95340254&oid=2&pvsid=6372869479710918&tmod=1020791793&uas=0&nvt=1&fc=1920&brdim=0%2C0%2C0%2C0%2C1920%2C0%2C1920%2C1080%2C1920%2C1080&vis=1&rsz=o%7C%7CeEbr%7C&abl=CS&pfx=0&fu=128&bc=31&plas=366x854_l%7C366x854_r&bz=1&pgls=CAEaBTYuNC44~CAEQBRoGMy4xNy4z&ifi=6&uci=a!6&btvi=1&fsb=1&dtd=424",
+                  "https://stats.g.doubleclick.net/g/collect?v=2&tid=G-KSLHMTKGH0&cid=426319957.1785463558&gtm=45je67u0h2v9100054981za200zd9100054981&rcb=17&aip=1&dma=0&gcd=13l3l3l3l1l1&npa=0&frm=0&tag_exp=115938465~115938468~118897920~118897930~119527019~119896803"
+                ],
+                "candidate_blocked_requests": [
+                  "https://googleads.g.doubleclick.net/pagead/html/r20260729/r20190131/zrt_lookup_fy2021.html",
+                  "https://googleads.g.doubleclick.net/pagead/ads?client=ca-pub-1525110894603983&output=html&adk=1812271804&adf=3025194257&abgtt=6&lmt=1785463556&plat=9%3A32776%2C16%3A8388608%2C17%3A32%2C24%3A32%2C25%3A32%2C30%3A1081344%2C32%3A32%2C41%3A32%2C42%3A32%2C43%3A32%2C44%3A32&format=0x0&url=https%3A%2F%2Fcanyoublockit.com%2Fadvanced-adblocker-test%2Fweb-banners%2F&pra=5&aiof=10&asro=0&aimartd=4&aieuf=1&aicrs=1&uach=WyJXaW5kb3dzIiwiMTAuMCIsIng2NCIsIiIsIjEzMy4wLjY5NDMuMTYiLG51bGwsMCxudWxsLCI2NCIsW1siTm90KEE6QnJhbmQiLCI5OS4wLjAuMCJdLFsiR29vZ2xlIENocm9tZSIsIjEzMy4wLjY5NDMuMTYiXSxbIkNocm9taXVtIiwiMTMzLjAuNjk0My4xNiJdXSwwXQ..&dt=1785463556695&bpp=10&bdt=2683&idt=230&shv=r20260729&mjsv=m202607270101&ptt=9&saldr=aa&abxe=1&cookie_enabled=1&eoidce=1&nras=1&correlator=5678957947197&frm=20&pv=2&u_tz=-240&u_his=2&u_h=1080&u_w=1920&u_ah=1080&u_aw=1920&u_cd=24&u_sd=1&dmc=8&adx=-12245933&ady=-12245933&biw=1920&bih=1080&scr_x=0&scr_y=0&eid=95396138%2C95397129%2C122880016%2C95340252%2C95340254&oid=2&pvsid=6372869479710918&tmod=1020791793&uas=0&nvt=1&fsapi=1&fc=1920&brdim=0%2C0%2C0%2C0%2C1920%2C0%2C1920%2C1080%2C1920%2C1080&vis=1&rsz=%7C%7Cs%7C&abl=NS&fu=32768&bc=31&plas=366x854_l%7C366x854_r&bz=1&pgls=CAEaBTYuNC44~CAEQBRoGMy4xNy4z&ifi=1&uci=a!1&fsb=1&dtd=258",
+                  "https://googleads.g.doubleclick.net/pagead/ads?client=ca-pub-1525110894603983&output=html&h=280&slotname=3670663027&adk=3575331008&adf=2483593117&pi=t.ma~as.3670663027&abgtt=6&w=1074&fwrn=4&fwrnh=100&lmt=1785463556&rafmt=1&format=1074x280&url=https%3A%2F%2Fcanyoublockit.com%2Fadvanced-adblocker-test%2Fweb-banners%2F&fwr=0&fwrattr=true&rpe=1&resp_fmts=3&aiof=10&asro=0&aimartd=4&aieuf=1&aicrs=1&uach=WyJXaW5kb3dzIiwiMTAuMCIsIng2NCIsIiIsIjEzMy4wLjY5NDMuMTYiLG51bGwsMCxudWxsLCI2NCIsW1siTm90KEE6QnJhbmQiLCI5OS4wLjAuMCJdLFsiR29vZ2xlIENocm9tZSIsIjEzMy4wLjY5NDMuMTYiXSxbIkNocm9taXVtIiwiMTMzLjAuNjk0My4xNiJdXSwwXQ..&dt=1785463556705&bpp=2&bdt=2694&idt=256&shv=r20260729&mjsv=m202607270101&ptt=9&saldr=aa&abxe=1&cookie_enabled=1&eoidce=1&prev_fmts=0x0&nras=1&correlator=5678957947197&frm=20&pv=1&u_tz=-240&u_his=2&u_h=1080&u_w=1920&u_ah=1080&u_aw=1920&u_cd=24&u_sd=1&dmc=8&adx=423&ady=409&biw=1920&bih=1080&scr_x=0&scr_y=0&eid=95396138%2C95397129%2C122880016%2C95340252%2C95340254&oid=2&pvsid=6372869479710918&tmod=1020791793&uas=0&nvt=1&fc=1920&brdim=0%2C0%2C0%2C0%2C1920%2C0%2C1920%2C1080%2C1920%2C1080&vis=1&rsz=o%7C%7CeE%7C&abl=CS&pfx=0&fu=128&bc=31&plas=366x854_l%7C366x854_r&bz=1&pgls=CAEaBTYuNC44~CAEQBRoGMy4xNy4z&ifi=2&uci=a!2&fsb=1&dtd=264",
+                  "https://googleads.g.doubleclick.net/pagead/ads?client=ca-pub-1525110894603983&output=html&h=280&slotname=6090363689&adk=1674827855&adf=1671028103&pi=t.ma~as.6090363689&abgtt=6&w=345&fwrn=4&fwrnh=100&lmt=1785463557&rafmt=1&format=345x280&url=https%3A%2F%2Fcanyoublockit.com%2Fadvanced-adblocker-test%2Fweb-banners%2F&fwr=0&fwrattr=true&rpe=1&resp_fmts=3&aiof=10&asro=0&aimartd=4&aieuf=1&aicrs=1&uach=WyJXaW5kb3dzIiwiMTAuMCIsIng2NCIsIiIsIjEzMy4wLjY5NDMuMTYiLG51bGwsMCxudWxsLCI2NCIsW1siTm90KEE6QnJhbmQiLCI5OS4wLjAuMCJdLFsiR29vZ2xlIENocm9tZSIsIjEzMy4wLjY5NDMuMTYiXSxbIkNocm9taXVtIiwiMTMzLjAuNjk0My4xNiJdXSwwXQ..&dt=1785463556707&bpp=1&bdt=2695&idt=320&shv=r20260729&mjsv=m202607270101&ptt=9&saldr=aa&abxe=1&cookie_enabled=1&eoidce=1&prev_fmts=0x0%2C1074x280&nras=1&correlator=5678957947197&frm=20&pv=1&u_tz=-240&u_his=2&u_h=1080&u_w=1920&u_ah=1080&u_aw=1920&u_cd=24&u_sd=1&dmc=8&adx=423&ady=776&biw=1920&bih=1080&scr_x=0&scr_y=0&eid=95396138%2C95397129%2C122880016%2C95340252%2C95340254&oid=2&pvsid=6372869479710918&tmod=1020791793&uas=0&nvt=1&fc=1920&brdim=0%2C0%2C0%2C0%2C1920%2C0%2C1920%2C1080%2C1920%2C1080&vis=1&rsz=o%7C%7CEe%7C&abl=CS&pfx=0&fu=128&bc=31&plas=366x854_l%7C366x854_r&bz=1&pgls=CAEaBTYuNC44~CAEQBRoGMy4xNy4z&ifi=3&uci=a!3&fsb=1&dtd=324",
+                  "https://googleads.g.doubleclick.net/pagead/ads?client=ca-pub-1525110894603983&output=html&h=280&slotname=5722111295&adk=2814279696&adf=2252781953&pi=t.ma~as.5722111295&abgtt=6&w=345&fwrn=4&fwrnh=100&lmt=1785463557&rafmt=1&format=345x280&url=https%3A%2F%2Fcanyoublockit.com%2Fadvanced-adblocker-test%2Fweb-banners%2F&fwr=0&fwrattr=true&rpe=1&resp_fmts=3&aiof=10&asro=0&aimartd=4&aieuf=1&aicrs=1&uach=WyJXaW5kb3dzIiwiMTAuMCIsIng2NCIsIiIsIjEzMy4wLjY5NDMuMTYiLG51bGwsMCxudWxsLCI2NCIsW1siTm90KEE6QnJhbmQiLCI5OS4wLjAuMCJdLFsiR29vZ2xlIENocm9tZSIsIjEzMy4wLjY5NDMuMTYiXSxbIkNocm9taXVtIiwiMTMzLjAuNjk0My4xNiJdXSwwXQ..&dt=1785463556707&bpp=1&bdt=2695&idt=340&shv=r20260729&mjsv=m202607270101&ptt=9&saldr=aa&abxe=1&cookie_enabled=1&eoidce=1&prev_fmts=0x0%2C1074x280%2C345x280&nras=1&correlator=5678957947197&frm=20&pv=1&u_tz=-240&u_his=2&u_h=1080&u_w=1920&u_ah=1080&u_aw=1920&u_cd=24&u_sd=1&dmc=8&adx=788&ady=1044&biw=1920&bih=1080&scr_x=0&scr_y=0&eid=95396138%2C95397129%2C122880016%2C95340252%2C95340254&oid=2&pvsid=6372869479710918&tmod=1020791793&uas=0&nvt=1&fc=1920&brdim=0%2C0%2C0%2C0%2C1920%2C0%2C1920%2C1080%2C1920%2C1080&vis=1&rsz=o%7C%7CEe%7C&abl=CS&pfx=0&fu=128&bc=31&plas=366x854_l%7C366x854_r&bz=1&pgls=CAEaBTYuNC44~CAEQBRoGMy4xNy4z&ifi=4&uci=a!4&fsb=1&dtd=345",
+                  "https://googleads.g.doubleclick.net/pagead/ads?client=ca-pub-1525110894603983&output=html&h=280&slotname=2151118674&adk=2560626815&adf=2477204216&pi=t.ma~as.2151118674&abgtt=6&w=345&fwrn=4&fwrnh=100&lmt=1785463557&rafmt=1&format=345x280&url=https%3A%2F%2Fcanyoublockit.com%2Fadvanced-adblocker-test%2Fweb-banners%2F&fwr=0&fwrattr=true&rpe=1&resp_fmts=3&aiof=10&asro=0&aimartd=4&aieuf=1&aicrs=1&uach=WyJXaW5kb3dzIiwiMTAuMCIsIng2NCIsIiIsIjEzMy4wLjY5NDMuMTYiLG51bGwsMCxudWxsLCI2NCIsW1siTm90KEE6QnJhbmQiLCI5OS4wLjAuMCJdLFsiR29vZ2xlIENocm9tZSIsIjEzMy4wLjY5NDMuMTYiXSxbIkNocm9taXVtIiwiMTMzLjAuNjk0My4xNiJdXSwwXQ..&dt=1785463556708&bpp=1&bdt=2697&idt=394&shv=r20260729&mjsv=m202607270101&ptt=9&saldr=aa&abxe=1&cookie_enabled=1&eoidce=1&prev_fmts=0x0%2C1074x280%2C345x280%2C345x280&nras=1&correlator=5678957947197&frm=20&pv=1&u_tz=-240&u_his=2&u_h=1080&u_w=1920&u_ah=1080&u_aw=1920&u_cd=24&u_sd=1&dmc=8&adx=1152&ady=776&biw=1920&bih=1080&scr_x=0&scr_y=0&eid=95396138%2C95397129%2C122880016%2C95340252%2C95340254&oid=2&pvsid=6372869479710918&tmod=1020791793&uas=0&nvt=1&fc=1920&brdim=0%2C0%2C0%2C0%2C1920%2C0%2C1920%2C1080%2C1920%2C1080&vis=1&rsz=o%7C%7CEe%7C&abl=CS&pfx=0&fu=128&bc=31&plas=366x854_l%7C366x854_r&bz=1&pgls=CAEaBTYuNC44~CAEQBRoGMy4xNy4z&ifi=5&uci=a!5&fsb=1&dtd=398",
+                  "https://googleads.g.doubleclick.net/pagead/ads?client=ca-pub-1525110894603983&output=html&h=280&slotname=5898791991&adk=995648273&adf=1674544588&pi=t.ma~as.5898791991&abgtt=6&w=1074&fwrn=4&fwrnh=100&lmt=1785463557&rafmt=1&format=1074x280&url=https%3A%2F%2Fcanyoublockit.com%2Fadvanced-adblocker-test%2Fweb-banners%2F&fwr=0&fwrattr=true&rpe=1&resp_fmts=3&aiof=10&asro=0&aimartd=4&aieuf=1&aicrs=1&uach=WyJXaW5kb3dzIiwiMTAuMCIsIng2NCIsIiIsIjEzMy4wLjY5NDMuMTYiLG51bGwsMCxudWxsLCI2NCIsW1siTm90KEE6QnJhbmQiLCI5OS4wLjAuMCJdLFsiR29vZ2xlIENocm9tZSIsIjEzMy4wLjY5NDMuMTYiXSxbIkNocm9taXVtIiwiMTMzLjAuNjk0My4xNiJdXSwwXQ..&dt=1785463556708&bpp=1&bdt=2697&idt=421&shv=r20260729&mjsv=m202607270101&ptt=9&saldr=aa&abxe=1&cookie_enabled=1&eoidce=1&prev_fmts=0x0%2C1074x280%2C345x280%2C345x280%2C345x280&nras=1&correlator=5678957947197&frm=20&pv=1&u_tz=-240&u_his=2&u_h=1080&u_w=1920&u_ah=1080&u_aw=1920&u_cd=24&u_sd=1&dmc=8&adx=423&ady=1412&biw=1920&bih=1080&scr_x=0&scr_y=0&eid=95396138%2C95397129%2C122880016%2C95340252%2C95340254&oid=2&pvsid=6372869479710918&tmod=1020791793&uas=0&nvt=1&fc=1920&brdim=0%2C0%2C0%2C0%2C1920%2C0%2C1920%2C1080%2C1920%2C1080&vis=1&rsz=o%7C%7CeEbr%7C&abl=CS&pfx=0&fu=128&bc=31&plas=366x854_l%7C366x854_r&bz=1&pgls=CAEaBTYuNC44~CAEQBRoGMy4xNy4z&ifi=6&uci=a!6&btvi=1&fsb=1&dtd=424",
+                  "https://stats.g.doubleclick.net/g/collect?v=2&tid=G-KSLHMTKGH0&cid=426319957.1785463558&gtm=45je67u0h2v9100054981za200zd9100054981&rcb=17&aip=1&dma=0&gcd=13l3l3l3l1l1&npa=0&frm=0&tag_exp=115938465~115938468~118897920~118897930~119527019~119896803"
+                ],
+                "missing_ad_selectors": [],
+                "hidden_ad_selectors": [],
+                "broken_selectors": [],
+                "error": "",
+                "unreachable": false,
+                "tested_screenshot_saved": true
+              }
+            },
+            {
+              "rule": "canyoublockit.com##ins.adsbygoogle",
+              "passed": true,
+              "failure_stage": "",
+              "failure_reason": "",
+              "syntax": {
+                "rule": "canyoublockit.com##ins.adsbygoogle",
+                "valid": true,
+                "error": null
+              },
+              "scope": {
+                "rule": "canyoublockit.com##ins.adsbygoogle",
+                "safe": true,
+                "risk": null,
+                "detail": null
+              },
+              "policy": {
+                "rule": "canyoublockit.com##ins.adsbygoogle",
+                "valid": true,
+                "problem_type": "specific_ad_not_blocked",
+                "resolution_strategy": "block_visible_ad",
+                "rule_direction": "cosmetic_hide",
+                "error": null
+              },
+              "sandbox": {
+                "url": "https://canyoublockit.com/advanced-adblocker-test/web-banners/",
+                "passed": true,
+                "ads_blocked": true,
+                "page_functional": true,
+                "ticket_assertions_passed": true,
+                "ticket_assertion_errors": [],
+                "baseline_ticket_assertions_passed": true,
+                "baseline_ticket_assertion_errors": [],
+                "existing_rules_count": 0,
+                "candidate_rules_count": 1,
+                "blocked_requests": [],
+                "candidate_blocked_requests": [],
+                "missing_ad_selectors": [],
+                "hidden_ad_selectors": [
+                  "ins.adsbygoogle"
+                ],
+                "broken_selectors": [],
+                "error": "",
+                "unreachable": false,
+                "tested_screenshot_saved": true
+              }
+            },
+            {
+              "rule": "canyoublockit.com##ins.adsbygoogle.adsbygoogle-noablate",
+              "passed": true,
+              "failure_stage": "",
+              "failure_reason": "",
+              "syntax": {
+                "rule": "canyoublockit.com##ins.adsbygoogle.adsbygoogle-noablate",
+                "valid": true,
+                "error": null
+              },
+              "scope": {
+                "rule": "canyoublockit.com##ins.adsbygoogle.adsbygoogle-noablate",
+                "safe": true,
+                "risk": null,
+                "detail": null
+              },
+              "policy": {
+                "rule": "canyoublockit.com##ins.adsbygoogle.adsbygoogle-noablate",
+                "valid": true,
+                "problem_type": "specific_ad_not_blocked",
+                "resolution_strategy": "block_visible_ad",
+                "rule_direction": "cosmetic_hide",
+                "error": null
+              },
+              "sandbox": {
+                "url": "https://canyoublockit.com/advanced-adblocker-test/web-banners/",
+                "passed": true,
+                "ads_blocked": true,
+                "page_functional": true,
+                "ticket_assertions_passed": true,
+                "ticket_assertion_errors": [],
+                "baseline_ticket_assertions_passed": true,
+                "baseline_ticket_assertion_errors": [],
+                "existing_rules_count": 0,
+                "candidate_rules_count": 1,
+                "blocked_requests": [],
+                "candidate_blocked_requests": [],
+                "missing_ad_selectors": [],
+                "hidden_ad_selectors": [
+                  "ins.adsbygoogle.adsbygoogle-noablate"
+                ],
+                "broken_selectors": [],
+                "error": "",
+                "unreachable": false,
+                "tested_screenshot_saved": true
+              }
+            }
+          ],
+          "workflow_elapsed_ms": 50318
+        },
+        "after_screenshot": "data/rule_outputs/screenshots/ticket_18_canyoublockit_web_banners_desktop_with_rules.png",
+        "status": "no_rules",
+        "error_message": "",
+        "crawl_duration_ms": 14290,
+        "created_at": "2026-08-04T01:50:57.234972+00:00",
+        "updated_at": "2026-08-04T01:50:57.234996+00:00"
+      }
+    },
+    "app/tests/tickets/ticket_19_turtlecute_visible_banner_desktop.json": {
+      "status": "completed",
+      "updated_at": "2026-08-04T01:51:34.625481+00:00",
+      "created_at": "2026-08-04T01:50:57.363970+00:00",
+      "report_id": "ticket_19_turtlecute_visible_banner_desktop",
+      "domain": "adblock.turtlecute.org",
+      "jira_ticket_code": "ticket_19_turtlecute_visible_banner_desktop",
+      "url": "https://adblock.turtlecute.org",
+      "environment": "desktop",
+      "processed_at": "2026-08-04T01:51:34.625481+00:00",
+      "output": {
+        "input_id": null,
+        "report_id": "ticket_19_turtlecute_visible_banner_desktop",
+        "url": "https://adblock.turtlecute.org",
+        "rules": [
+          "||doubleclick.net^$third-party,domain=adblock.turtlecute.org"
+        ],
+        "input_tokens": 4395,
+        "output_tokens": 73,
+        "validation_result": {
+          "report_id": "ticket_19_turtlecute_visible_banner_desktop",
+          "url": "https://adblock.turtlecute.org",
+          "environment": "desktop",
+          "processing_mode": "ticket_aware",
+          "ticket_context": {
+            "platform": "desktop",
+            "problem_type": "specific_ad_not_blocked",
+            "resolution_strategy": "block_visible_ad",
+            "focus_region": "",
+            "request": "[Desktop][Adblock] - adblock.turtlecute.org: Banner advertisement remains visible below the test result",
+            "description": "A horizontal banner advertisement remains visible below the ad-block test result. Only the advertisement should be blocked. The score chart, result counters, Re-test button, compatibility message, FAQ section, and normal page content must remain visible and usable.",
+            "steps": [
+              "Open https://adblock.turtlecute.org",
+              "Enable Adblock mode",
+              "Wait for the ad-block test to complete",
+              "Observe the horizontal advertisement below the result controls",
+              "Verify that the score chart and Re-test button remain visible"
+            ],
+            "actual": "A horizontal banner advertisement remains visible below the test result.",
+            "expected": "The banner advertisement is hidden while the score chart, result counters, Re-test button, compatibility message, FAQ section, and normal page content remain visible.",
+            "target_to_block": [
+              "detected ad containers",
+              "ad iframes",
+              "ad network requests",
+              "sponsored or popup ad elements"
+            ],
+            "target_to_preserve": [
+              "banner ads",
+              "native ads",
+              "bookmaker ads",
+              "sponsor/bookmaker sections",
+              "main content",
+              "navigation",
+              "forms",
+              "media",
+              "user controls"
+            ],
+            "validation_hints": {
+              "must_not_generate_rules": [
+                "*banner*",
+                "*banners*",
+                "*native*",
+                "*bookmaker*",
+                "*sponsor*",
+                "*sponsored*"
+              ]
+            },
+            "current_rules": [],
+            "matched_rules": [],
+            "blocked_resources": [],
+            "evidence_level": "url_only_best_effort",
+            "raw": {}
+          },
+          "problem_type": "specific_ad_not_blocked",
+          "resolution_strategy": "block_visible_ad",
+          "timestamp": "2026-08-04T01:51:33.540599+00:00",
+          "crawl_elapsed_ms": 14115,
+          "generation_elapsed_ms": 1483,
+          "validation_elapsed_ms": 19154,
+          "validated_rule_count": 1,
+          "average_validation_time_per_rule_ms": 19154.0,
+          "total": 1,
+          "passed": 1,
+          "failed": 0,
+          "passing_rules": [
+            "||doubleclick.net^$third-party,domain=adblock.turtlecute.org"
+          ],
+          "combined_screenshot": "data/rule_outputs/screenshots/ticket_19_turtlecute_visible_banner_desktop_with_rules.png",
+          "combined_sandbox": {
+            "url": "https://adblock.turtlecute.org",
+            "passed": true,
+            "ads_blocked": true,
+            "page_functional": true,
+            "ticket_assertions_passed": true,
+            "ticket_assertion_errors": [],
+            "baseline_ticket_assertions_passed": true,
+            "baseline_ticket_assertion_errors": [],
+            "existing_rules_count": 0,
+            "candidate_rules_count": 1,
+            "blocked_requests": [
+              "https://stats.g.doubleclick.net/fakepage.html",
+              "https://ad.doubleclick.net/fakepage.html",
+              "https://static.doubleclick.net/fakepage.html",
+              "https://m.doubleclick.net/fakepage.html",
+              "https://mediavisor.doubleclick.net/fakepage.html"
+            ],
+            "candidate_blocked_requests": [
+              "https://stats.g.doubleclick.net/fakepage.html",
+              "https://ad.doubleclick.net/fakepage.html",
+              "https://static.doubleclick.net/fakepage.html",
+              "https://m.doubleclick.net/fakepage.html",
+              "https://mediavisor.doubleclick.net/fakepage.html"
+            ],
+            "missing_ad_selectors": [],
+            "hidden_ad_selectors": [],
+            "broken_selectors": [],
+            "error": "",
+            "unreachable": false,
+            "tested_screenshot_saved": true
+          },
+          "outcomes": [
+            {
+              "rule": "||doubleclick.net^$third-party,domain=adblock.turtlecute.org",
+              "passed": true,
+              "failure_stage": "",
+              "failure_reason": "",
+              "syntax": {
+                "rule": "||doubleclick.net^$third-party,domain=adblock.turtlecute.org",
+                "valid": true,
+                "error": null
+              },
+              "scope": {
+                "rule": "||doubleclick.net^$third-party,domain=adblock.turtlecute.org",
+                "safe": true,
+                "risk": null,
+                "detail": null
+              },
+              "policy": {
+                "rule": "||doubleclick.net^$third-party,domain=adblock.turtlecute.org",
+                "valid": true,
+                "problem_type": "specific_ad_not_blocked",
+                "resolution_strategy": "block_visible_ad",
+                "rule_direction": "network_block",
+                "error": null
+              },
+              "sandbox": {
+                "url": "https://adblock.turtlecute.org",
+                "passed": true,
+                "ads_blocked": true,
+                "page_functional": true,
+                "ticket_assertions_passed": true,
+                "ticket_assertion_errors": [],
+                "baseline_ticket_assertions_passed": true,
+                "baseline_ticket_assertion_errors": [],
+                "existing_rules_count": 0,
+                "candidate_rules_count": 1,
+                "blocked_requests": [
+                  "https://stats.g.doubleclick.net/fakepage.html",
+                  "https://ad.doubleclick.net/fakepage.html",
+                  "https://static.doubleclick.net/fakepage.html",
+                  "https://m.doubleclick.net/fakepage.html",
+                  "https://mediavisor.doubleclick.net/fakepage.html"
+                ],
+                "candidate_blocked_requests": [
+                  "https://stats.g.doubleclick.net/fakepage.html",
+                  "https://ad.doubleclick.net/fakepage.html",
+                  "https://static.doubleclick.net/fakepage.html",
+                  "https://m.doubleclick.net/fakepage.html",
+                  "https://mediavisor.doubleclick.net/fakepage.html"
+                ],
+                "missing_ad_selectors": [],
+                "hidden_ad_selectors": [],
+                "broken_selectors": [],
+                "error": "",
+                "unreachable": false,
+                "tested_screenshot_saved": true
+              }
+            }
+          ],
+          "workflow_elapsed_ms": 21284
+        },
+        "after_screenshot": "data/rule_outputs/screenshots/ticket_19_turtlecute_visible_banner_desktop_with_rules.png",
+        "status": "ok",
+        "error_message": "",
+        "crawl_duration_ms": 36866,
+        "created_at": "2026-08-04T01:51:34.625431+00:00",
+        "updated_at": "2026-08-04T01:51:34.625458+00:00"
+      }
+    },
+    "app/tests/tickets/ticket_20_clean_site_crawler_control_desktop.json": {
+      "status": "completed",
+      "updated_at": "2026-08-04T01:51:40.562267+00:00",
+      "created_at": "2026-08-04T01:51:34.782011+00:00",
+      "report_id": "ticket_20_clean_site_crawler_control_desktop",
+      "domain": "example.com",
+      "jira_ticket_code": "ticket_20_clean_site_crawler_control_desktop",
+      "url": "https://example.com",
+      "environment": "desktop",
+      "processed_at": "2026-08-04T01:51:40.562267+00:00",
+      "output": {
+        "input_id": null,
+        "report_id": "ticket_20_clean_site_crawler_control_desktop",
+        "url": "https://example.com",
+        "rules": [],
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "validation_result": {
+          "report_id": "ticket_20_clean_site_crawler_control_desktop",
+          "url": "https://example.com",
+          "environment": "desktop",
+          "problem_type": "specific_ad_not_blocked",
+          "resolution_strategy": "block_visible_ad",
+          "processing_mode": "ticket_aware",
+          "crawl_elapsed_ms": 3885,
+          "generation_elapsed_ms": null,
+          "validation_elapsed_ms": null,
+          "workflow_elapsed_ms": 1564,
+          "rules_generated": 0,
+          "rules_passed": 0,
+          "rules_failed": 0,
+          "passing_rules": [],
+          "status": "no_rules"
+        },
+        "after_screenshot": "",
+        "status": "no_rules",
+        "error_message": "",
+        "crawl_duration_ms": 5702,
+        "created_at": "2026-08-04T01:51:40.562228+00:00",
+        "updated_at": "2026-08-04T01:51:40.562256+00:00"
+      }
     }
   }
 }

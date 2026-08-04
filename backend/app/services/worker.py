@@ -222,47 +222,59 @@ class FileJobSource:
         tmp_file.replace(self.ledger_file)
 
 
+def _dict_to_ns(d: dict) -> Any:
+    """Convert a dict row to a SimpleNamespace so getattr() works."""
+    from types import SimpleNamespace
+    return SimpleNamespace(**d)
+
+
 class DatabaseJobSource:
     name = "db"
 
     def __init__(self) -> None:
-        from app.database import SessionLocal
-        from app.models import CrawlInput, RuleOutput
+        from app.database import get_connection, MYSQL_USER, MYSQL_DATABASE
 
-        if SessionLocal is None:
-            raise RuntimeError("DATABASE_URL is not configured.")
-
-        self.SessionLocal = SessionLocal
-        self.CrawlInput = CrawlInput
-        self.RuleOutput = RuleOutput
+        if not MYSQL_USER or not MYSQL_DATABASE:
+            raise RuntimeError(
+                "MySQL is not configured. Set MYSQL_USER, MYSQL_PASSWORD, and MYSQL_DATABASE."
+            )
+        # Verify connectivity at init
+        conn = get_connection()
+        conn.close()
 
     def claim_next(self) -> Optional[WorkerJob]:
-        from sqlalchemy import select
+        from app.database import get_connection
 
-        with self.SessionLocal() as session:
-            try:
-                row = session.execute(
-                    select(self.CrawlInput)
-                    .where(self.CrawlInput.status == "new")
-                    .order_by(self.CrawlInput.created_at.asc(), self.CrawlInput.id.asc())
-                    .with_for_update(skip_locked=True)
-                    .limit(1)
-                ).scalar_one_or_none()
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                conn.begin()
+                cur.execute(
+                    "SELECT * FROM crawl_inputs "
+                    "WHERE status = 'new' "
+                    "ORDER BY created_at ASC, id ASC "
+                    "LIMIT 1 "
+                    "FOR UPDATE SKIP LOCKED"
+                )
+                row = cur.fetchone()
 
                 if row is None:
-                    session.commit()
+                    conn.commit()
                     return None
 
-                row.status = "processing"
-                row.error_message = ""
-                row.updated_at = utc_now_naive()
-                session.commit()
-                session.refresh(row)
+                cur.execute(
+                    "UPDATE crawl_inputs SET status='processing', error_message='', "
+                    "updated_at=NOW() WHERE id=%s",
+                    (row["id"],),
+                )
+                conn.commit()
 
-                return build_job_from_crawl_input(row)
-            except Exception:
-                session.rollback()
-                raise
+                return build_job_from_crawl_input(_dict_to_ns(row))
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def mark_completed(self, job: WorkerJob, output: Mapping[str, Any]) -> None:
         self._save_result(job, input_status="completed", error_message="", output=output)
@@ -290,40 +302,47 @@ class DatabaseJobSource:
         if job.input_id is None:
             raise RuntimeError("Database jobs must have input_id.")
 
-        with self.SessionLocal() as session:
-            try:
-                crawl_input = session.get(self.CrawlInput, job.input_id)
+        from app.database import get_connection
 
-                if crawl_input is not None:
-                    crawl_input.status = input_status
-                    crawl_input.error_message = error_message
-                    crawl_input.crawl_duration_ms = int(
-                        output.get("crawl_duration_ms") or 0
-                    )
-                    crawl_input.updated_at = utc_now_naive()
-
-                session.add(
-                    self.RuleOutput(
-                        input_id=job.input_id,
-                        rules=json.dumps(
-                            output.get("rules", []),
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                conn.begin()
+                cur.execute(
+                    "UPDATE crawl_inputs SET status=%s, error_message=%s, "
+                    "crawl_duration_ms=%s, updated_at=NOW() WHERE id=%s",
+                    (
+                        input_status,
+                        error_message,
+                        int(output.get("crawl_duration_ms") or 0),
+                        job.input_id,
+                    ),
+                )
+                cur.execute(
+                    "INSERT INTO rule_outputs "
+                    "(input_id, rules, input_tokens, output_tokens, "
+                    "validation_result, after_screenshot, status, error_message) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                    (
+                        job.input_id,
+                        json.dumps(output.get("rules", []), ensure_ascii=False),
+                        int(output.get("input_tokens") or 0),
+                        int(output.get("output_tokens") or 0),
+                        json.dumps(
+                            make_json_safe(output.get("validation_result", {})),
                             ensure_ascii=False,
                         ),
-                        input_tokens=int(output.get("input_tokens") or 0),
-                        output_tokens=int(output.get("output_tokens") or 0),
-                        validation_result=make_json_safe(
-                            output.get("validation_result", {})
-                        ),
-                        after_screenshot=str(output.get("after_screenshot") or ""),
-                        status=str(output.get("status") or input_status),
-                        error_message=error_message
-                        or str(output.get("error_message") or ""),
-                    )
+                        str(output.get("after_screenshot") or ""),
+                        str(output.get("status") or input_status),
+                        error_message or str(output.get("error_message") or ""),
+                    ),
                 )
-                session.commit()
-            except Exception:
-                session.rollback()
-                raise
+                conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
 
 def run_worker(
@@ -746,22 +765,22 @@ class StopFlag:
 
 
 def database_tables_exist() -> bool:
-    if not os.getenv("DATABASE_URL", "").strip():
+    from app.database import MYSQL_USER, MYSQL_DATABASE
+
+    if not MYSQL_USER or not MYSQL_DATABASE:
         return False
 
     try:
-        from sqlalchemy import inspect
+        from app.database import get_connection
 
-        from app.database import engine
-
-        if engine is None:
-            return False
-
-        inspector = inspect(engine)
-        return (
-            inspector.has_table("crawl_inputs")
-            and inspector.has_table("rule_outputs")
-        )
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SHOW TABLES")
+                tables = {list(row.values())[0] for row in cur.fetchall()}
+                return "crawl_inputs" in tables and "rule_outputs" in tables
+        finally:
+            conn.close()
     except Exception as exc:
         logger.info("Database mode unavailable, falling back to files: %s", exc)
         return False
@@ -778,7 +797,7 @@ def build_source(args: argparse.Namespace) -> JobSource:
         return DatabaseJobSource()
 
     if database_tables_exist():
-        logger.info("DATABASE_URL and worker tables detected; using database mode.")
+        logger.info("MySQL config and worker tables detected; using database mode.")
         return DatabaseJobSource()
 
     logger.info("Using file mode.")
@@ -796,7 +815,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         "--source",
         choices=["auto", "files", "db"],
         default=os.getenv("WORKER_SOURCE", "auto"),
-        help="Job source. auto uses DB when DATABASE_URL and tables exist; otherwise files.",
+        help="Job source. auto uses DB when MySQL is configured and tables exist; otherwise files.",
     )
     parser.add_argument(
         "--tickets-dir",

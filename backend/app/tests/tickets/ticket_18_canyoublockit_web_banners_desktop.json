@@ -1,4 +1,4 @@
-﻿{
+{
     "description":  "Advertising banner test elements surrounding the Web Banners test area remain visible. Only advertisement placements should be blocked. The page title, test explanation, navigation menu, Banner Ads heading, and Previous or Next navigation controls must remain available.",
     "request":  "[Desktop][Adblock] - canyoublockit.com: Web banner advertising elements remain visible",
     "steps":  [

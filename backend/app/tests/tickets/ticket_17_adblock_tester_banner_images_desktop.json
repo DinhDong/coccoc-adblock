@@ -1,4 +1,4 @@
-﻿{
+{
     "description":  "Banner image advertising test elements may remain visible. Only banner advertising elements should be blocked. Test labels, score, status rows, explanatory content, and controls must remain visible.",
     "request":  "[Desktop][Adblock] - adblock-tester.com: Banner image advertisements remain visible",
     "steps":  [

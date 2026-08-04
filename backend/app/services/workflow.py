@@ -34,7 +34,29 @@ The workflow also records evaluation timing:
 Output:
     data/rule_outputs/results/<report_id>_rules.json
     data/rule_outputs/validation/<report_id>_validation.json
+    data/rule_outputs/screenshots/<report_id>_before.png
+    data/rule_outputs/screenshots/<report_id>_before_boxed.png
     data/rule_outputs/screenshots/<report_id>_with_rules.png
+
+The screenshots are a set for moderator review:
+
+- <report_id>_before.png:
+    The clean reference page with no rules applied, captured in the sandbox
+    session that also measured each rule's bounding boxes. The CMS renders the
+    per-rule overlays on top of this image, so it must never be swapped for the
+    Stage 0 crawl screenshot — the coordinates would not line up.
+
+- <report_id>_before_boxed.png:
+    The same image with the measured boxes drawn on and a colour legend, for
+    reviewing a run without a CMS. Convenience only — the clean version above
+    stays authoritative. Re-render any report with:
+        python -m app.validator.preview_render <report_id>
+
+- <report_id>_with_rules.png:
+    The same page with every passing rule applied.
+
+Preview fields are only written when the sandbox ran; readers must treat
+preview_capture and per-outcome preview as optional.
 """
 
 from __future__ import annotations
@@ -457,6 +479,33 @@ def run_rule_validation(
             report_id,
         )
 
+    before_screenshot_path = _save_reference_screenshot(
+        combined_sandbox,
+        report.outcomes,
+        report_id,
+    )
+
+    rule_previews = _collect_rule_previews(
+        combined_sandbox,
+        report.outcomes,
+    )
+
+    preview_capture = _build_preview_capture(
+        combined_sandbox,
+        report.outcomes,
+        before_screenshot_path,
+    )
+
+    boxed_screenshot_path = _save_boxed_reference_screenshot(
+        before_screenshot_path,
+        rule_previews,
+        preview_capture,
+        report_id,
+    )
+
+    if preview_capture:
+        preview_capture["boxed_screenshot"] = boxed_screenshot_path
+
     validation_data = {
         "report_id": report_id,
         "url": url,
@@ -490,10 +539,14 @@ def run_rule_validation(
             combined_sandbox
         ),
         "outcomes": [
-            _serialize_outcome(outcome)
+            _serialize_outcome(outcome, rule_previews)
             for outcome in report.outcomes
         ],
     }
+
+    # Omitted entirely when the sandbox did not run, so readers must use .get().
+    if preview_capture:
+        validation_data["preview_capture"] = preview_capture
 
     with open(
         validation_path,
@@ -525,7 +578,8 @@ def run_rule_validation(
         "Stage 2: %d/%d rules passed validation → %s | "
         "problem_type=%s | strategy=%s | processing_mode=%s | "
         "validation_elapsed_ms=%d | average_per_rule_ms=%.2f | "
-        "combined_screenshot=%s",
+        "combined_screenshot=%s | before_screenshot=%s | "
+        "rule_previews=%d",
         report.passed_count,
         report.total,
         validation_path,
@@ -535,6 +589,8 @@ def run_rule_validation(
         validation_elapsed_ms,
         average_validation_time_per_rule_ms,
         combined_screenshot_path or "n/a",
+        before_screenshot_path or "n/a",
+        len(rule_previews),
     )
 
     return {
@@ -554,6 +610,9 @@ def run_rule_validation(
             average_validation_time_per_rule_ms
         ),
         "combined_screenshot": combined_screenshot_path,
+        "before_screenshot": before_screenshot_path,
+        "boxed_screenshot": boxed_screenshot_path,
+        "preview_capture": preview_capture,
         "combined_sandbox_passed": (
             bool(getattr(combined_sandbox, "passed", False))
             if combined_sandbox
@@ -1120,6 +1179,34 @@ def run_pipeline(
                 f"{combined_screenshot}"
             )
 
+        before_screenshot = validation.get(
+            "before_screenshot",
+            "",
+        )
+
+        if before_screenshot:
+            preview_capture = validation.get(
+                "preview_capture",
+            ) or {}
+
+            print(
+                f"  Before screenshot: "
+                f"{before_screenshot} "
+                f"({preview_capture.get('page_width', 0)}"
+                f"x{preview_capture.get('page_height', 0)} CSS px)"
+            )
+
+        boxed_screenshot = validation.get(
+            "boxed_screenshot",
+            "",
+        )
+
+        if boxed_screenshot:
+            print(
+                f"  Boxed preview:     "
+                f"{boxed_screenshot}"
+            )
+
         if validation["passed"] == 0:
             print("\n  No rules passed validation.")
         else:
@@ -1173,6 +1260,13 @@ def run_pipeline(
         "combined_screenshot": validation.get(
             "combined_screenshot",
             "",
+        ),
+        "before_screenshot": validation.get(
+            "before_screenshot",
+            "",
+        ),
+        "preview_capture": validation.get(
+            "preview_capture",
         ),
         "combined_sandbox_passed": validation.get(
             "combined_sandbox_passed",
@@ -1336,9 +1430,12 @@ def _optional_int(value: Any) -> Optional[int]:
 
 def _serialize_outcome(
     outcome: Any,
+    rule_previews: Optional[Mapping[str, Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    return {
-        "rule": getattr(outcome, "rule", ""),
+    rule = getattr(outcome, "rule", "")
+
+    data = {
+        "rule": rule,
         "passed": bool(
             getattr(outcome, "passed", False)
         ),
@@ -1365,6 +1462,15 @@ def _serialize_outcome(
             getattr(outcome, "sandbox", None)
         ),
     }
+
+    # Rules rejected before the sandbox were never measured, so they carry no
+    # preview block at all rather than a misleading empty one.
+    preview = (rule_previews or {}).get(rule)
+
+    if preview is not None:
+        data["preview"] = preview
+
+    return data
 
 
 def _serialize_syntax_result(
@@ -1544,7 +1650,151 @@ def _serialize_sandbox_result(
         "tested_screenshot_saved": bool(
             tested_screenshot
         ),
+        "reference_screenshot_saved": bool(
+            getattr(
+                result,
+                "reference_screenshot",
+                b"",
+            )
+        ),
     }
+
+
+def _collect_rule_previews(
+    combined_sandbox: Any,
+    outcomes: List[Any],
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Map rule string → visual preview metadata.
+
+    Every sandbox run in a validation shares one reference page, and the session
+    measures each rule only once, so the per-rule (Stage 4) and combined
+    (Stage 5) results carry identical boxes for the same rule. Merging them
+    simply widens coverage to rules that failed the sandbox and therefore never
+    reached the combined patch.
+    """
+    previews: Dict[str, Dict[str, Any]] = {}
+
+    for outcome in outcomes:
+        previews.update(
+            _sandbox_rule_previews(
+                getattr(outcome, "sandbox", None)
+            )
+        )
+
+    previews.update(
+        _sandbox_rule_previews(combined_sandbox)
+    )
+
+    return previews
+
+
+def _sandbox_rule_previews(
+    result: Any,
+) -> Dict[str, Dict[str, Any]]:
+    previews = getattr(result, "rule_previews", None)
+
+    if not isinstance(previews, Mapping):
+        return {}
+
+    return {
+        str(rule): _serialize_preview(data)
+        for rule, data in previews.items()
+        if isinstance(data, Mapping)
+    }
+
+
+def _serialize_preview(
+    preview: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """
+    Normalize one rule's preview to the shape the CMS overlays consume.
+
+    Boxes stay in document-relative CSS pixels; the client scales them by
+    displayed image width / preview_capture.page_width.
+    """
+    boxes = []
+
+    for box in preview.get("boxes", []) or []:
+        if not isinstance(box, Mapping):
+            continue
+
+        boxes.append(
+            {
+                "top": _int_or_zero(box.get("top")),
+                "left": _int_or_zero(box.get("left")),
+                "width": _int_or_zero(box.get("width")),
+                "height": _int_or_zero(box.get("height")),
+            }
+        )
+
+    return {
+        "boxes": boxes,
+        "evidence_urls": [
+            str(url)
+            for url in (preview.get("evidence_urls") or [])
+        ],
+        "truncated": bool(
+            preview.get("truncated", False)
+        ),
+    }
+
+
+def _build_preview_capture(
+    combined_sandbox: Any,
+    outcomes: List[Any],
+    before_screenshot_path: str,
+) -> Dict[str, Any]:
+    """
+    Describe the page state every preview box was measured against.
+
+    Returns an empty mapping when the sandbox did not run, in which case the
+    caller omits the block from the validation JSON.
+    """
+    capture = _sandbox_preview_capture(combined_sandbox)
+
+    if not capture:
+        for outcome in outcomes:
+            capture = _sandbox_preview_capture(
+                getattr(outcome, "sandbox", None)
+            )
+
+            if capture:
+                break
+
+    if not capture:
+        return {}
+
+    return {
+        "page_width": _int_or_zero(
+            capture.get("page_width")
+        ),
+        "page_height": _int_or_zero(
+            capture.get("page_height")
+        ),
+        "environment": str(
+            capture.get("environment", "") or ""
+        ),
+        "before_screenshot": before_screenshot_path,
+    }
+
+
+def _sandbox_preview_capture(
+    result: Any,
+) -> Dict[str, Any]:
+    capture = getattr(result, "preview_capture", None)
+
+    if not isinstance(capture, Mapping) or not capture:
+        return {}
+
+    return dict(capture)
+
+
+def _int_or_zero(value: Any) -> int:
+    try:
+        return int(round(float(value)))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _save_combined_sandbox_screenshot(
@@ -1582,6 +1832,122 @@ def _save_combined_sandbox_screenshot(
 
     logger.info(
         "Stage 2: combined sandbox screenshot → %s",
+        screenshot_path,
+    )
+
+    return str(screenshot_path)
+
+
+def _save_reference_screenshot(
+    combined_sandbox: Any,
+    outcomes: List[Any],
+    report_id: str,
+) -> str:
+    """
+    Save the clean no-rules "before" screenshot the preview overlays sit on.
+
+    All sandbox runs in one validation share a single reference page, so any
+    result carrying the bytes carries the same image — the combined run is
+    preferred only for consistency with the "after" screenshot.
+    """
+    candidates = [combined_sandbox] + [
+        getattr(outcome, "sandbox", None)
+        for outcome in outcomes
+    ]
+
+    reference_screenshot = next(
+        (
+            screenshot
+            for screenshot in (
+                getattr(
+                    candidate,
+                    "reference_screenshot",
+                    None,
+                )
+                for candidate in candidates
+                if candidate is not None
+            )
+            if screenshot
+        ),
+        None,
+    )
+
+    if not reference_screenshot:
+        return ""
+
+    OUT_SCREENSHOTS.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    screenshot_path = (
+        OUT_SCREENSHOTS
+        / f"{report_id}_before.png"
+    )
+
+    screenshot_path.write_bytes(
+        reference_screenshot
+    )
+
+    logger.info(
+        "Stage 2: reference (before) screenshot → %s",
+        screenshot_path,
+    )
+
+    return str(screenshot_path)
+
+
+def _save_boxed_reference_screenshot(
+    before_screenshot_path: str,
+    rule_previews: Mapping[str, Dict[str, Any]],
+    preview_capture: Mapping[str, Any],
+    report_id: str,
+) -> str:
+    """
+    Save a readable copy of the reference screenshot with the boxes drawn on.
+
+    A convenience artifact only: <report_id>_before.png stays clean so a CMS can
+    still draw its own interactive overlays from the JSON coordinates. Failures
+    are logged and ignored — the validation output does not depend on it.
+    """
+    if not before_screenshot_path or not rule_previews or not preview_capture:
+        return ""
+
+    from app.validator.preview_render import render_preview_overlay
+
+    try:
+        before_png = Path(before_screenshot_path).read_bytes()
+
+        boxed_png = render_preview_overlay(
+            before_png=before_png,
+            rule_previews=rule_previews,
+            preview_capture=preview_capture,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Could not render boxed preview screenshot for %s: %s",
+            report_id,
+            exc,
+        )
+        return ""
+
+    if not boxed_png:
+        return ""
+
+    OUT_SCREENSHOTS.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    screenshot_path = (
+        OUT_SCREENSHOTS
+        / f"{report_id}_before_boxed.png"
+    )
+
+    screenshot_path.write_bytes(boxed_png)
+
+    logger.info(
+        "Stage 2: boxed preview screenshot → %s",
         screenshot_path,
     )
 

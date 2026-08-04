@@ -1,4 +1,4 @@
-﻿{
+{
     "description":  "Search and menu controls should remain visible when Adblock mode is enabled. This ticket checks mobile UI preservation during rule generation and validation.",
     "request":  "[Android][Adblock] - motchilltv.tf: Search and menu controls should remain visible",
     "steps":  [

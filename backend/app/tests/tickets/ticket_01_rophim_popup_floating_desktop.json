@@ -1,4 +1,4 @@
-﻿{
+{
     "description":  "Popup, modal, fullscreen overlay, and floating ads appear on the page. Only popup and floating ads should be blocked. Movie cards, navigation, search, category cards, bookmaker sections, banner sections, and normal page content must remain visible.",
     "request":  "[Desktop][Adblock] - rophim10.live/phimhay: Block popup and floating ads only",
     "steps":  [

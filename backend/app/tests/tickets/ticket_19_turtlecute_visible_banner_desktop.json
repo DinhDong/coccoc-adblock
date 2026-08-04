@@ -1,4 +1,4 @@
-﻿{
+{
     "description":  "A horizontal banner advertisement remains visible below the ad-block test result. Only the advertisement should be blocked. The score chart, result counters, Re-test button, compatibility message, FAQ section, and normal page content must remain visible and usable.",
     "request":  "[Desktop][Adblock] - adblock.turtlecute.org: Banner advertisement remains visible below the test result",
     "steps":  [

@@ -1,4 +1,4 @@
-﻿{
+{
     "description":  "Popup, modal, overlay, or floating ads may appear on the iOS page. Only popup and floating ads should be blocked. Movie cards, navigation, search, category cards, bookmaker sections, and normal page content must remain visible.",
     "request":  "[iOS][Adblock] - rophim10.live/phimhay: Block popup and floating ads only",
     "steps":  [

@@ -37,6 +37,14 @@
 #     Example:
 #         "Nhà Tài Trợ"
 #     should be hidden outside the "Nhà cái uy tín" allowed region.
+#
+# Per-rule visual preview metadata:
+# - While the reference (no-rules) page is open, each candidate rule's matched
+#   elements are measured into document-relative CSS-pixel boxes, and one clean
+#   full-page reference screenshot is kept. Moderators can then render per-rule
+#   highlight overlays client-side over that single "before" image.
+# - Measurement is read-only and reuses the already-open reference page, so it
+#   adds no page loads, browser contexts or DOM injection.
 
 import logging
 import re
@@ -53,6 +61,21 @@ PAGE_SETTLE_DELAY_SECONDS = 2.0
 # Cosmetic CSS injection applies synchronously; a short reflow settle is enough.
 COSMETIC_SETTLE_DELAY_SECONDS = 1.0
 VISIBLE_ELEMENT_DROP_FAIL_RATIO = 0.35
+
+# ---------------------------------------------------------------------------
+# Per-rule visual preview limits.
+# ---------------------------------------------------------------------------
+# A rule matching hundreds of elements would bloat the validation JSON and is
+# unreadable as an overlay, so boxes are capped and the cap is reported.
+MAX_PREVIEW_BOXES_PER_RULE = 50
+MAX_PREVIEW_EVIDENCE_URLS = 20
+# Upper bound on visible <img>/<iframe> elements pulled back for network-rule
+# matching. Real pages stay far below this.
+MAX_PREVIEW_CANDIDATE_ELEMENTS = 500
+MAX_CAPTURED_REFERENCE_REQUESTS = 5_000
+# Fixed/sticky elements only report usable document coordinates while the page
+# is scrolled to the top; give the reflow a moment before measuring.
+PREVIEW_SCROLL_SETTLE_DELAY_SECONDS = 0.4
 
 CRITICAL_SELECTORS = [
     "nav",
@@ -450,6 +473,93 @@ TICKET_ASSERTION_SCRIPT = """
 """
 
 
+PREVIEW_PAGE_METRICS_SCRIPT = """
+() => {
+    const doc = document.documentElement;
+    return {
+        page_width: Math.round(doc.scrollWidth || 0),
+        page_height: Math.round(doc.scrollHeight || 0),
+    };
+}
+"""
+
+# Measure-only: no overlays are injected, so the reference page stays clean for
+# the "before" screenshot and for every later rule set tested in this session.
+PREVIEW_COSMETIC_SCRIPT = """
+(payload) => {
+    const boxes = [];
+    const invalid = [];
+    let truncated = false;
+
+    for (const selector of payload.selectors || []) {
+        let matches;
+
+        try {
+            matches = Array.from(document.querySelectorAll(selector));
+        } catch (err) {
+            invalid.push(selector);
+            continue;
+        }
+
+        for (const el of matches) {
+            const rect = el.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) continue;
+
+            if (boxes.length >= payload.limit) {
+                truncated = true;
+                break;
+            }
+
+            boxes.push({
+                top:    Math.round(rect.top  + window.pageYOffset),
+                left:   Math.round(rect.left + window.pageXOffset),
+                width:  Math.round(rect.width),
+                height: Math.round(rect.height),
+            });
+        }
+
+        if (truncated) break;
+    }
+
+    return { boxes, invalid, truncated };
+}
+"""
+
+# Returns every visible element that loaded a resource; the caller decides which
+# ones a network rule actually matches, using the same matcher that blocks them.
+PREVIEW_NETWORK_ELEMENTS_SCRIPT = """
+(payload) => {
+    const items = [];
+
+    const collect = (selector, resourceType) => {
+        for (const el of document.querySelectorAll(selector)) {
+            if (items.length >= payload.limit) return;
+
+            const src = el.src || '';
+            if (!src) continue;
+
+            const rect = el.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) continue;
+
+            items.push({
+                src: src,
+                resource_type: resourceType,
+                top:    Math.round(rect.top  + window.pageYOffset),
+                left:   Math.round(rect.left + window.pageXOffset),
+                width:  Math.round(rect.width),
+                height: Math.round(rect.height),
+            });
+        }
+    };
+
+    collect('img[src]', 'image');
+    collect('iframe[src]', 'document');
+
+    return items;
+}
+"""
+
+
 @dataclass
 class _RuleOptions:
     resource_types: set[str] = field(default_factory=set)
@@ -603,6 +713,20 @@ class SandboxResult:
     hidden_ad_selectors: List[str] = field(default_factory=list)
     broken_selectors: List[str] = field(default_factory=list)
     tested_screenshot: bytes = field(default_factory=bytes)
+
+    # Clean full-page screenshot of the reference (no-rules) page, taken in the
+    # same session that measured rule_previews — the two must always be paired.
+    reference_screenshot: bytes = field(default_factory=bytes)
+
+    # rule string -> {"boxes": [{top,left,width,height}], "evidence_urls": [...],
+    #                 "truncated": bool}
+    # Boxes are document-relative CSS pixels, not scaled by device_scale_factor.
+    rule_previews: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+
+    # {"page_width": int, "page_height": int, "environment": str} — the document
+    # size the boxes are expressed in, for client-side overlay scaling.
+    preview_capture: Dict[str, Any] = field(default_factory=dict)
+
     error: str = ""
     unreachable: bool = False
 
@@ -687,6 +811,13 @@ class SandboxSession:
         self._reference_page: Any = None
         self._reference_ticket_state: Optional[Dict[str, Any]] = None
         self._baseline_ticket_state: Optional[Dict[str, Any]] = None
+
+        # Visual preview state, all derived from the single reference page.
+        self._reference_requests: List[tuple[str, str]] = []
+        self._reference_screenshot: bytes = b""
+        self._preview_capture: Dict[str, Any] = {}
+        self._preview_baseline_ready = False
+        self._rule_preview_cache: Dict[str, Dict[str, Any]] = {}
 
         self._fatal_error = ""
         self._fatal_unreachable = False
@@ -795,6 +926,10 @@ class SandboxSession:
         Test one candidate rule set against the live page.
 
         Costs a single page load once the session reference is warm.
+
+        capture_screenshot gates the tested ("after") screenshot only. The
+        reference ("before") screenshot backs the per-rule preview overlays and
+        is taken once per session regardless.
         """
         result = SandboxResult(url=self.url, passed=False)
 
@@ -844,6 +979,10 @@ class SandboxSession:
             self._reference_page,
             candidate_cosmetic_selectors,
         )
+
+        # Visual preview metadata for the moderator CMS. Read-only, on the page
+        # that is already open, so it costs no extra load.
+        self._attach_rule_previews(result, candidate_rules)
 
         baseline_ticket_state = self._baseline_state(bool(existing_rules), result)
         if baseline_ticket_state is None:
@@ -931,6 +1070,11 @@ class SandboxSession:
             self._reference_context = self._browser.new_context(**self._context_kwargs)
             self._reference_page = self._reference_context.new_page()
             self._apply_stealth(self._reference_page, user_agent=self._ua)
+
+            # Requests are recorded so network-rule previews can cite the URLs a
+            # rule would block even when the resource has no visual footprint.
+            self._reference_page.on("request", self._record_reference_request)
+
             _load_page(self._reference_page, self.url, self._timeout_error_cls)
             return True
         except Exception as exc:
@@ -1007,6 +1151,230 @@ class SandboxSession:
                 pass
 
         return self._baseline_ticket_state
+
+    def _record_reference_request(self, request: Any) -> None:
+        """
+        Remember a request issued by the reference page.
+
+        Capped: a long-lived page on an ad-heavy site can otherwise accumulate
+        an unbounded number of URLs for the lifetime of the session.
+        """
+        if len(self._reference_requests) >= MAX_CAPTURED_REFERENCE_REQUESTS:
+            return
+
+        try:
+            self._reference_requests.append(
+                (
+                    str(request.url),
+                    str(getattr(request, "resource_type", "other") or "other"),
+                )
+            )
+        except Exception:
+            pass
+
+    def _attach_rule_previews(
+        self,
+        result: SandboxResult,
+        rules: List[str],
+    ) -> None:
+        """
+        Measure each candidate rule's target regions on the reference page and
+        attach them, together with the shared reference screenshot, to result.
+
+        Preview data is advisory: any failure is logged and swallowed so it can
+        never turn an otherwise passing rule into a failing one.
+        """
+        try:
+            result.rule_previews = self._measure_rule_previews(rules)
+            result.preview_capture = dict(self._preview_capture)
+            result.reference_screenshot = self._reference_screenshot
+        except Exception as exc:
+            logger.warning(
+                "Rule preview measurement failed for %s: %s",
+                self.url,
+                exc,
+            )
+
+    def _measure_rule_previews(
+        self,
+        rules: List[str],
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Return preview metadata for each rule, measured once per session.
+
+        Stage 4 measures a rule when it is tested alone and stage 5 reuses that
+        measurement for the combined patch, so every rule's boxes and the saved
+        "before" screenshot come from the same reference page state.
+        """
+        if self._reference_page is None:
+            return {}
+
+        pending = [
+            rule
+            for rule in rules
+            if rule not in self._rule_preview_cache
+        ]
+
+        if pending or not self._preview_baseline_ready:
+            self._prepare_preview_baseline()
+
+        for rule in pending:
+            try:
+                self._rule_preview_cache[rule] = self._measure_rule_preview(rule)
+            except Exception as exc:
+                logger.warning("Preview measurement failed for rule %r: %s", rule, exc)
+                self._rule_preview_cache[rule] = {
+                    "boxes": [],
+                    "evidence_urls": [],
+                    "truncated": False,
+                }
+
+        return {
+            rule: self._rule_preview_cache[rule]
+            for rule in rules
+            if rule in self._rule_preview_cache
+        }
+
+    def _prepare_preview_baseline(self) -> None:
+        """
+        Put the reference page into a measurable state and capture the shared
+        page metrics plus the clean "before" screenshot exactly once.
+        """
+        page = self._reference_page
+
+        if page is None:
+            return
+
+        self._scroll_reference_to_top()
+
+        if self._preview_baseline_ready:
+            return
+
+        self._preview_baseline_ready = True
+
+        try:
+            metrics = page.evaluate(PREVIEW_PAGE_METRICS_SCRIPT) or {}
+        except Exception as exc:
+            logger.warning("Preview page metrics failed for %s: %s", self.url, exc)
+            metrics = {}
+
+        self._preview_capture = {
+            "page_width": int(metrics.get("page_width", 0) or 0),
+            "page_height": int(metrics.get("page_height", 0) or 0),
+            "environment": self.environment,
+        }
+
+        try:
+            self._reference_screenshot = page.screenshot(
+                full_page=True,
+                timeout=DEFAULT_TIMEOUT_MS,
+            )
+        except Exception as exc:
+            logger.warning("Reference screenshot failed for %s: %s", self.url, exc)
+            self._reference_screenshot = b""
+
+        # A full-page screenshot can leave the page scrolled away from the top.
+        self._scroll_reference_to_top()
+
+    def _scroll_reference_to_top(self) -> None:
+        try:
+            self._reference_page.evaluate("() => window.scrollTo(0, 0)")
+            time.sleep(PREVIEW_SCROLL_SETTLE_DELAY_SECONDS)
+        except Exception as exc:
+            logger.warning("Preview scroll reset failed for %s: %s", self.url, exc)
+
+    def _measure_rule_preview(self, rule: str) -> Dict[str, Any]:
+        """
+        Measure one rule's visible footprint on the reference page.
+
+        Cosmetic rules are measured by selector. Network rules are measured by
+        matching the rule against the src of every visible image/frame, and
+        additionally cite the requests they would block as URL evidence — a
+        blocked script or XHR is invisible but still worth reviewing.
+        """
+        page = self._reference_page
+
+        boxes: List[Dict[str, int]] = []
+        evidence_urls: List[str] = []
+        truncated = False
+
+        selectors = _preview_cosmetic_selectors(rule, self.url)
+
+        if selectors:
+            measured = page.evaluate(
+                PREVIEW_COSMETIC_SCRIPT,
+                {
+                    "selectors": selectors,
+                    "limit": MAX_PREVIEW_BOXES_PER_RULE,
+                },
+            ) or {}
+
+            for selector in measured.get("invalid", []) or []:
+                logger.warning(
+                    "Skipping preview for invalid selector %r in rule %r",
+                    selector,
+                    rule,
+                )
+
+            boxes = [
+                _preview_box(item)
+                for item in measured.get("boxes", []) or []
+            ]
+            truncated = bool(measured.get("truncated", False))
+        else:
+            parsed = _parse_network_rule(rule)
+
+            if parsed is not None:
+                elements = page.evaluate(
+                    PREVIEW_NETWORK_ELEMENTS_SCRIPT,
+                    {"limit": MAX_PREVIEW_CANDIDATE_ELEMENTS},
+                ) or []
+
+                for element in elements:
+                    src = str(element.get("src", "") or "")
+                    resource_type = str(element.get("resource_type", "other") or "other")
+
+                    if not src or not parsed.matches(src, resource_type, self.url):
+                        continue
+
+                    if len(boxes) >= MAX_PREVIEW_BOXES_PER_RULE:
+                        truncated = True
+                        break
+
+                    boxes.append(_preview_box(element))
+
+                evidence_urls = self._matched_reference_requests(parsed)
+
+        return {
+            "boxes": boxes,
+            "evidence_urls": evidence_urls,
+            "truncated": truncated,
+        }
+
+    def _matched_reference_requests(self, rule: _NetworkRule) -> List[str]:
+        """
+        Return distinct reference-session request URLs the rule would act on.
+        """
+        matched: List[str] = []
+        seen: set[str] = set()
+
+        for request_url, resource_type in self._reference_requests:
+            if request_url in seen:
+                continue
+
+            try:
+                if not rule.matches(request_url, resource_type, self.url):
+                    continue
+            except Exception:
+                continue
+
+            seen.add(request_url)
+            matched.append(request_url)
+
+            if len(matched) >= MAX_PREVIEW_EVIDENCE_URLS:
+                break
+
+        return matched
 
     def _record_error(self, result: SandboxResult, exc: Exception) -> None:
         error_str = str(exc)
@@ -1996,6 +2364,32 @@ def _cosmetic_targets_blocked(
         "blocked": bool(missing or hidden),
         "missing": missing,
         "hidden": hidden,
+    }
+
+
+def _preview_cosmetic_selectors(rule: str, document_url: str) -> List[str]:
+    """
+    Return the cosmetic selectors a single rule targets on this page.
+
+    Reuses the sandbox's own cosmetic parsing so a preview and the applied rule
+    agree on domain scoping. Exception rules are included as well: a reviewer
+    still needs to see which region a #@# rule keeps visible.
+    """
+    hide_selectors, exception_selectors = _extract_cosmetic_hide_and_exception_selectors(
+        [rule],
+        document_url,
+    )
+
+    return hide_selectors + exception_selectors
+
+
+def _preview_box(value: Mapping[str, Any]) -> Dict[str, int]:
+    """Normalize a measured rect to rounded, document-relative CSS pixels."""
+    return {
+        "top": int(value.get("top", 0) or 0),
+        "left": int(value.get("left", 0) or 0),
+        "width": int(value.get("width", 0) or 0),
+        "height": int(value.get("height", 0) or 0),
     }
 
 

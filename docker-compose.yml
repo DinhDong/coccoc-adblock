@@ -5,8 +5,6 @@ services:
     image: mysql:8.0
     restart: unless-stopped
     env_file: .env.local
-    environment:
-      MYSQL_TCP_PORT: 6446
     ports:
       - "6446:3306"
     volumes:

@@ -66,4 +66,4 @@ export const USERS = [
 export const CURRENT_USER = USERS[0]; // stub for the signed-in admin
 export const userOf = (k) => USERS.find((u) => u.k === k);
 
-export const VIEW_TITLES = { reports: "Reports", dashboard: "Dashboard", trend: "Trend", performance: "Performance" };
+export const VIEW_TITLES = { reports: "Reports", dashboard: "Dashboard", trend: "Trend", performance: "Performance", library: "Rule library", tokens: "Token usage" };

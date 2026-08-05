@@ -17,11 +17,18 @@ services:
       timeout: 5s
       retries: 5
 
-  # ---- Python backend (Playwright + AI pipeline) ----
+  # ---- Python backend (Flask API + Playwright pipeline) ----
   backend:
     build: ./backend
     env_file: .env.local
-    command: ["app.services.worker"]
+    command: ["flask", "run", "--host=0.0.0.0", "--port=5000"]
+    environment:
+      FLASK_APP: app
+    ports:
+      - "5000:5000"
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
     volumes:
       - ./backend/data:/app/data

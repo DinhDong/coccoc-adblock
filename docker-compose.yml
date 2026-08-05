@@ -8,11 +8,11 @@ services:
     environment:
       MYSQL_TCP_PORT: 6446
     ports:
-      - "6446:6446"
+      - "6446:3306"
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-P", "6446"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-P", "3306"]
       interval: 10s
       timeout: 5s
       retries: 5

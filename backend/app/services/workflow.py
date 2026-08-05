@@ -75,15 +75,18 @@ try:
     backend_root = Path(__file__).resolve().parents[2]
     project_root = Path(__file__).resolve().parents[3]
 
-    load_dotenv(backend_root / ".env.local")
-    load_dotenv(backend_root / ".env")
-    load_dotenv(project_root / ".env.local")
-    load_dotenv(project_root / ".env")
+    # See app/database.py: override=True so an edited value actually replaces
+    # a stale one, with least-specific loaded first since the last load wins.
+    load_dotenv(backend_root / ".env", override=True)
+    load_dotenv(backend_root / ".env.local", override=True)
+    load_dotenv(project_root / ".env", override=True)
+    load_dotenv(project_root / ".env.local", override=True)
 except ImportError:
     pass
 
 from app.database import (
     save_crawl_input,
+    save_report_images,
     save_rule_output,
     save_rule_validation,
     rule_output_exists,
@@ -570,6 +573,21 @@ def run_rule_validation(
     except Exception as exc:
         logger.warning(
             "Stage 2: failed saving validation result to DB: %s",
+            exc,
+            exc_info=True,
+        )
+
+    # All three screenshots exist by this point, so publish them together.
+    # Never fatal: a report without pictures is still a valid report.
+    try:
+        from app.storage.report_images import upload_report_images
+
+        images = upload_report_images(report_id)
+        if images:
+            save_report_images(report_id, images)
+    except Exception as exc:
+        logger.warning(
+            "Stage 2: failed uploading report images: %s",
             exc,
             exc_info=True,
         )

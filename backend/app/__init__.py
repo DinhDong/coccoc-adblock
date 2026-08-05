@@ -11,6 +11,8 @@ try:
         count_undecided_rules,
         delete_rules_bulk,
         merge_two_rules,
+        fetch_report_images,
+        test_rules_adhoc,
         update_ticket_status,
         update_ticket_details,
         get_ticket_status,
@@ -31,6 +33,8 @@ except ImportError:  # pragma: no cover
         count_undecided_rules,
         delete_rules_bulk,
         merge_two_rules,
+        fetch_report_images,
+        test_rules_adhoc,
         update_ticket_status,
         update_ticket_details,
         get_ticket_status,
@@ -100,6 +104,12 @@ def create_app():
         matches = find_duplicate_targets(url, request.args.get("exclude", ""))
         return {"duplicates": matches}, 200
 
+    @app.get("/api/tickets/<report_id>/images")
+    def report_images(report_id):
+        if get_ticket_status(report_id) is None:
+            return {"error": "ticket not found"}, 404
+        return {"images": fetch_report_images(report_id)}, 200
+
     @app.post("/api/rules/merge")
     def merge_rules():
         from flask import request
@@ -121,6 +131,24 @@ def create_app():
             return {"error": str(exc)}, 404
 
         return {"ok": True, **result}, 200
+
+    @app.post("/api/rules/test")
+    def test_rules():
+        from flask import request
+
+        payload = request.get_json(force=True, silent=True) or {}
+        items = payload.get("rules")
+        if not isinstance(items, list) or not items:
+            return {"error": "rules must be a non-empty list"}, 400
+
+        try:
+            return {"ok": True, "result": test_rules_adhoc(items)}, 200
+        except ValueError as exc:
+            return {"error": str(exc)}, 400
+        except LookupError as exc:
+            return {"error": str(exc)}, 404
+        except Exception as exc:
+            return {"error": "sandbox run failed: %s" % exc}, 500
 
     @app.post("/api/rules/bulk-delete")
     def bulk_delete_rules():

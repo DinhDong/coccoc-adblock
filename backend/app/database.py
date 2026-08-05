@@ -8,10 +8,17 @@ try:
     from pathlib import Path
 
     repo_root = Path(__file__).resolve().parents[2]
-    load_dotenv(repo_root / ".env.local")
-    load_dotenv(repo_root / ".env")
-    load_dotenv(repo_root / "backend" / ".env.local")
-    load_dotenv(repo_root / "backend" / ".env")
+    # override=True makes the file authoritative over whatever is already in
+    # the process environment. Without it, editing a key that had already been
+    # loaded silently had no effect — a stale MYSQL_USER would survive while a
+    # newly added MYSQL_HOST loaded, producing a host/credential mismatch.
+    # Order is least-specific first, because with override the last load wins.
+    # In Docker this is a no-op: .env.local is in .dockerignore, so no file is
+    # present and the values come from compose's env_file instead.
+    load_dotenv(repo_root / "backend" / ".env", override=True)
+    load_dotenv(repo_root / "backend" / ".env.local", override=True)
+    load_dotenv(repo_root / ".env", override=True)
+    load_dotenv(repo_root / ".env.local", override=True)
 except ImportError:
     pass
 
@@ -107,6 +114,12 @@ CREATE TABLE IF NOT EXISTS rule_outputs (
             if not _column_exists(cur, "rule_outputs", "decisions"):
                 cur.execute(
                     "ALTER TABLE rule_outputs ADD COLUMN decisions JSON AFTER validation_result"
+                )
+
+            # {kind: s3_uri} for the three screenshots that document a report.
+            if not _column_exists(cur, "rule_outputs", "images"):
+                cur.execute(
+                    "ALTER TABLE rule_outputs ADD COLUMN images JSON AFTER after_screenshot"
                 )
 
             if not _column_exists(cur, "crawl_inputs", "report_id"):
@@ -508,6 +521,28 @@ def save_rules_blob(report_id: str, rules: Any, decisions: Any = None) -> None:
                 cur.execute(
                     "INSERT INTO rule_outputs (input_id, rules, decisions) VALUES (%s,%s,%s)",
                     (input_id, _json_value(rules), _json_value(decisions)),
+                )
+
+
+def save_report_images(report_id: str, images: Dict[str, str]) -> None:
+    """Record the Ceph URIs of a report's screenshots."""
+    _ensure_schema()
+    input_id = _get_crawl_input_id(report_id)
+    if input_id is None or not images:
+        return
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM rule_outputs WHERE input_id=%s", (input_id,))
+            if cur.fetchone():
+                cur.execute(
+                    "UPDATE rule_outputs SET images=%s, updated_at=NOW() WHERE input_id=%s",
+                    (_json_value(images), input_id),
+                )
+            else:
+                cur.execute(
+                    "INSERT INTO rule_outputs (input_id, images) VALUES (%s,%s)",
+                    (input_id, _json_value(images)),
                 )
 
 

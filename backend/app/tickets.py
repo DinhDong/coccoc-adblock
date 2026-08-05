@@ -532,6 +532,50 @@ ORDER BY ci.created_at DESC
     return matches
 
 
+IMAGE_LABELS = {
+    "crawl": "Crawl result",
+    "before_boxed": "Before rules (ad boxes)",
+    "after_rules": "After rules applied",
+}
+
+
+def fetch_report_images(report_id: str) -> list:
+    """
+    The three screenshots for a report as temporary viewable URLs.
+
+    Always returns all three kinds so the UI can show a placeholder for one
+    that was never produced, rather than silently rendering two.
+    """
+    from .storage.report_images import presign_report_images
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+SELECT ro.images
+FROM crawl_inputs ci
+JOIN rule_outputs ro ON ro.input_id = ci.id
+WHERE ci.report_id=%s
+""",
+                (report_id,),
+            )
+            row = cur.fetchone()
+
+    stored = _parse_json_blob(row.get("images")) if row else None
+    stored = stored if isinstance(stored, dict) else {}
+    urls = presign_report_images(stored)
+
+    return [
+        {
+            "kind": kind,
+            "label": label,
+            "uri": stored.get(kind),
+            "url": urls.get(kind),
+        }
+        for kind, label in IMAGE_LABELS.items()
+    ]
+
+
 def count_undecided_rules(report_id: str) -> int:
     """
     Rules still awaiting a moderator call on this report.
@@ -595,6 +639,82 @@ def merge_two_rules(
             pass
 
     return {"merged": merged, "keptOn": first_id, "removedFrom": second_id}
+
+
+def test_rules_adhoc(items: list) -> Dict[str, Any]:
+    """
+    Run the sandbox validator over a hand-picked set of rules.
+
+    Only rules from one site can be tested together — the sandbox loads a
+    single page, so mixing domains would test each rule against a page it was
+    never meant for. Nothing is written to the reports: this is a scratch run
+    to see whether rules hold up, not a re-validation of a report.
+    """
+    from .services.rule_registry import get_domain
+    from .services.workflow import run_rule_validation
+
+    if not items:
+        raise ValueError("select at least one rule to test")
+
+    urls: Dict[str, str] = {}
+    rules: list = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        report_id, rule = item.get("reportId"), item.get("rule")
+        if not report_id or not rule:
+            raise ValueError("every entry needs a reportId and rule")
+        rules.append(rule)
+
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT url FROM crawl_inputs WHERE report_id=%s",
+                    (report_id,),
+                )
+                row = cur.fetchone()
+        if not row or not row.get("url"):
+            raise LookupError(f"no URL on record for {report_id}")
+        urls[get_domain(row["url"])] = row["url"]
+
+    if len(urls) > 1:
+        raise ValueError(
+            "these rules come from %d different sites (%s) — the sandbox loads "
+            "one page, so only rules from the same site can be tested together"
+            % (len(urls), ", ".join(sorted(urls)))
+        )
+
+    domain, url = next(iter(urls.items()))
+
+    # A synthetic id keeps the run out of every report's stored validation.
+    # run_rule_validation's DB write is best-effort and simply logs when the
+    # report does not exist, which is what we want here.
+    scratch_id = f"adhoc-{uuid.uuid4().hex[:12]}"
+    result = run_rule_validation(
+        rules=rules,
+        url=url,
+        report_id=scratch_id,
+        environment="desktop",
+        ticket_context={},
+    )
+
+    return {
+        "url": url,
+        "domain": domain,
+        "total": result.get("total", 0),
+        "passed": result.get("passed", 0),
+        "failed": result.get("failed", 0),
+        "passingRules": result.get("passing_rules", []),
+        "validationMs": result.get("validation_elapsed_ms"),
+        "outcomes": [
+            {
+                "rule": o.get("rule"),
+                "passed": bool(o.get("passed")),
+                "reason": o.get("failure_reason") or o.get("failure_stage") or "",
+            }
+            for o in (result.get("outcomes") or [])
+        ],
+    }
 
 
 def delete_rules_bulk(items: list) -> Dict[str, Any]:

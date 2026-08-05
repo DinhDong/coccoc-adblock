@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { STATE_ORDER, STAGES, CURRENT_USER } from "./constants.js";
 import { nowISO, todayISO, makeRules } from "./utils.js";
 import Layout from "./components/Layout.jsx";
-import ReportDetail from "./components/ReportDetail.jsx";
+import ReportDetail, { clearReportImageCache } from "./components/ReportDetail.jsx";
 import NewReportModal from "./components/NewReportModal.jsx";
 import DuplicateTargetModal from "./components/DuplicateTargetModal.jsx";
 import Reports from "./pages/Reports.jsx";
@@ -169,6 +169,9 @@ export default function App() {
       console.error(`Failed to run pipeline for ticket ${id}`, error);
     }
 
+    // A re-run replaces the screenshots, so drop any cached presigned URLs
+    // for this report before the modal is opened again.
+    clearReportImageCache(id);
     await refreshBoard();
     setTab("review");
   };
@@ -328,6 +331,27 @@ export default function App() {
     } catch (error) {
       console.error("Merge failed", error);
       window.alert(`These rules cannot be merged:\n\n${error.message}`);
+      return null;
+    }
+  };
+
+  // Sandbox runs take tens of seconds (real page load per rule), so this has
+  // no timeout of its own — the library shows a "Testing…" state meanwhile.
+  const testRules = async (items) => {
+    try {
+      const response = await fetch(`${backendUrl}/api/rules/test`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rules: items }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || `test failed ${response.status}`);
+      return body.result;
+    } catch (error) {
+      console.error("Rule test failed", error);
+      window.alert(`Could not test these rules:
+
+${error.message}`);
       return null;
     }
   };
@@ -499,6 +523,7 @@ export default function App() {
           onBulkDelete={bulkRemoveRules}
           onMergePreview={(items) => mergeRulePair(items, true)}
           onMergeRules={(items) => mergeRulePair(items, false)}
+          onTestRules={testRules}
         />
       )}
       {view === "tokens" && (
@@ -546,6 +571,8 @@ export default function App() {
               onAddRule={(rule) => addRule(openTicket.id, rule)}
               onEditRule={(rule, newRule) => editRule(openTicket.id, rule, newRule)}
               onDeleteRule={(rule) => removeRule(openTicket.id, rule)}
+              onMergePreview={(items) => mergeRulePair(items, true)}
+              onMergeRules={(items) => mergeRulePair(items, false)}
             />
           )}
         </div>

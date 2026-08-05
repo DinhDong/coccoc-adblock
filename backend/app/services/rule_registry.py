@@ -13,7 +13,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
@@ -57,6 +57,113 @@ def normalize_rule(rule_text: str) -> str:
     return pattern.lower()
 
 
+def _dedupe(values: List[str]) -> List[str]:
+    """Order-preserving de-duplication."""
+    seen, out = set(), []
+    for v in values:
+        if v and v not in seen:
+            seen.add(v)
+            out.append(v)
+    return out
+
+
+def _split_options(options: str) -> Tuple[List[str], List[str]]:
+    """Split a network rule's $options into ($domain= entries, other options)."""
+    domains: List[str] = []
+    others: List[str] = []
+    for opt in options.split(","):
+        opt = opt.strip()
+        if not opt:
+            continue
+        if opt.lower().startswith("domain="):
+            domains.extend(d.strip() for d in opt[len("domain="):].split("|") if d.strip())
+        else:
+            others.append(opt)
+    return domains, others
+
+
+def merge_rule_texts(first: str, second: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Combine two ABP rules into one, or explain why they cannot combine.
+
+    Returns (merged_text, None) on success, (None, reason) otherwise. Only
+    shapes where the union is exactly equivalent to the two originals are
+    merged — anything else would silently change what gets blocked:
+
+      same domain, different selectors   a.com##div.x + a.com##div.y
+                                         -> a.com##div.x, div.y
+      same selector, different domains   a.com##div.x + b.com##div.x
+                                         -> a.com,b.com##div.x
+      same network pattern, diff options ||x.com^$image + ||x.com^$script
+                                         -> ||x.com^$image,script
+      same network pattern, diff domains ||x.com^$domain=a.com + $domain=b.com
+                                         -> ||x.com^$domain=a.com|b.com
+    """
+    a, b = (first or "").strip(), (second or "").strip()
+    if not a or not b:
+        return None, "both rules must be non-empty"
+    if a == b:
+        return a, None
+
+    cos_a, cos_b = _COSMETIC_SPLIT_RE.match(a), _COSMETIC_SPLIT_RE.match(b)
+
+    if bool(cos_a) != bool(cos_b):
+        return None, "cannot merge a cosmetic rule with a network rule"
+
+    if cos_a and cos_b:
+        dom_a, sep_a, sel_a = cos_a.groups()
+        dom_b, sep_b, sel_b = cos_b.groups()
+
+        if sep_a != sep_b:
+            return None, "cannot merge a hiding rule with an exception rule"
+
+        if dom_a.lower() == dom_b.lower():
+            selectors = _dedupe(
+                [s.strip() for s in sel_a.split(",")] + [s.strip() for s in sel_b.split(",")]
+            )
+            return f"{dom_a}{sep_a}{', '.join(selectors)}", None
+
+        if sel_a.strip() == sel_b.strip():
+            domains = _dedupe(
+                [d.strip() for d in dom_a.split(",")] + [d.strip() for d in dom_b.split(",")]
+            )
+            return f"{','.join(domains)}{sep_a}{sel_a.strip()}", None
+
+        return None, (
+            "cosmetic rules can only merge when they share the domain "
+            "(joining selectors) or share the selector (joining domains)"
+        )
+
+    pattern_a, _, options_a = a.partition("$")
+    pattern_b, _, options_b = b.partition("$")
+
+    if pattern_a.lower() != pattern_b.lower():
+        return None, (
+            "network rules can only merge when the pattern before '$' is "
+            "identical; these block different addresses"
+        )
+
+    domains_a, others_a = _split_options(options_a)
+    domains_b, others_b = _split_options(options_b)
+
+    # An unrestricted rule already covers every domain, so folding a
+    # domain-limited one into it would widen nothing but reads as if it did.
+    if bool(domains_a) != bool(domains_b):
+        return None, (
+            "one rule is limited with $domain= and the other is not — merging "
+            "would change which sites it applies to"
+        )
+
+    merged_options = _dedupe(others_a + others_b)
+    merged_domains = _dedupe(domains_a + domains_b)
+    if merged_domains:
+        merged_options.append("domain=" + "|".join(merged_domains))
+
+    if not merged_options:
+        return pattern_a, None
+    return f"{pattern_a}${','.join(merged_options)}", None
+
+
 def _load_registry() -> Dict[str, List[str]]:
     if not REGISTRY_PATH.exists():
         return {}
@@ -88,6 +195,63 @@ def register_rules(domain: str, normalized_rules: List[str]) -> None:
     existing.update(normalized_rules)
     registry[domain] = sorted(existing)
     _save_registry(registry)
+
+
+def unregister_rule(domain: str, rule_text: str) -> bool:
+    """
+    Drop a single rule from a domain's registry entry.
+
+    Called when a moderator deletes or rewrites a rule: without this the
+    registry would keep treating it as already-known and dedupe it out of
+    every future run, so the rule could never be proposed again.
+    """
+    registry = _load_registry()
+    existing = registry.get(domain)
+    if not existing:
+        return False
+
+    key = normalize_rule(rule_text)
+    remaining = [r for r in existing if r != key]
+    if len(remaining) == len(existing):
+        return False
+
+    if remaining:
+        registry[domain] = remaining
+    else:
+        registry.pop(domain, None)
+
+    _save_registry(registry)
+    logger.info("Unregistered rule for %s: %s", domain, key)
+    return True
+
+
+def unregister_rule_anywhere(rule_text: str) -> List[str]:
+    """
+    Remove a rule from every domain that lists it, returning those domains.
+
+    Needed because a rule is registered under the domain of the report's URL
+    at generation time — if that URL is later edited to a different site, the
+    entry is stranded under the old domain and a domain-scoped removal misses
+    it, leaving the rule permanently deduped out of future runs.
+    """
+    registry = _load_registry()
+    key = normalize_rule(rule_text)
+
+    touched: List[str] = []
+    for domain, rules in list(registry.items()):
+        if key not in rules:
+            continue
+        remaining = [r for r in rules if r != key]
+        if remaining:
+            registry[domain] = remaining
+        else:
+            registry.pop(domain, None)
+        touched.append(domain)
+
+    if touched:
+        _save_registry(registry)
+        logger.info("Unregistered rule %s from %s", key, ", ".join(touched))
+    return touched
 
 
 def clear_rules(domain: str) -> int:

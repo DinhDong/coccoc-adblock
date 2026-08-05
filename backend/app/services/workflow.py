@@ -715,6 +715,7 @@ def run_pipeline(
     environment: str = "desktop",
     ticket_context: Optional[Mapping[str, Any]] = None,
     focus_region: Optional[str] = None,
+    duplicate_choice: Optional[str] = None,
     **render_kwargs: Any,
 ) -> Dict[str, Any]:
     """
@@ -893,9 +894,15 @@ def run_pipeline(
 
     domain = get_domain(page_url)
     existing = get_existing_rules(domain)
-    discard_existing = False
 
-    if existing and verbose:
+    # An API caller (the web UI) decides up front and passes the answer in;
+    # only the CLI falls through to the interactive prompt below.
+    if duplicate_choice is not None:
+        discard_existing = duplicate_choice == "discard"
+    else:
+        discard_existing = False
+
+    if existing and duplicate_choice is None and verbose:
         print(
             f"  Domain '{domain}' already has "
             f"{len(existing)} rule(s) in the registry."

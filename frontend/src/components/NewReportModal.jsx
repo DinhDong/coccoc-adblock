@@ -2,13 +2,15 @@ import { useState } from "react";
 import { X } from "lucide-react";
 import { ENVS, CURRENT_USER } from "../constants.js";
 
-export default function NewReportModal({ nextName, onCreate, onClose }) {
-  const [name, setName] = useState(nextName);
-  const [url, setUrl] = useState("");
-  const [env, setEnv] = useState("desktop");
-  const [focus, setFocus] = useState("");
-  const [targets, setTargets] = useState("");
-  const [notes, setNotes] = useState("");
+// Doubles as the edit form: pass `ticket` to prefill and switch to save mode.
+export default function NewReportModal({ nextName, ticket, onCreate, onSave, onClose }) {
+  const editing = Boolean(ticket);
+  const [name, setName] = useState(ticket?.name ?? nextName);
+  const [url, setUrl] = useState(ticket?.url ?? "");
+  const [env, setEnv] = useState(ticket?.env ?? "desktop");
+  const [focus, setFocus] = useState(ticket?.focus ?? "");
+  const [targets, setTargets] = useState((ticket?.targets ?? []).join(", "));
+  const [notes, setNotes] = useState(ticket?.notes ?? "");
   const [runNow, setRunNow] = useState(true);
   const [err, setErr] = useState("");
 
@@ -18,25 +20,28 @@ export default function NewReportModal({ nextName, onCreate, onClose }) {
       setErr("Enter the reported page URL, e.g. https://example.vn/article");
       return;
     }
-    onCreate(
-      {
-        name: name.trim(),
-        url: url.trim(),
-        env,
-        focus: focus.trim(),
-        targets: targets.split(",").map((s) => s.trim()).filter(Boolean),
-        notes: notes.trim(),
-      },
-      runNow
-    );
+    const data = {
+      name: name.trim(),
+      url: url.trim(),
+      env,
+      focus: focus.trim(),
+      targets: targets.split(",").map((s) => s.trim()).filter(Boolean),
+      notes: notes.trim(),
+    };
+    if (editing) onSave(data);
+    else onCreate(data, runNow);
   };
 
   return (
-    <div className="ad-modal" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="New report">
+    <div className="ad-modal" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={editing ? "Edit report" : "New report"}>
       <div className="ad-mhead">
         <div>
-          <h2>New report</h2>
-          <div className="ad-msub">Will be created by {CURRENT_USER.name} · runs crawl → rule generation → sandbox</div>
+          <h2>{editing ? `Edit ${ticket.id}` : "New report"}</h2>
+          <div className="ad-msub">
+            {editing
+              ? "Changes apply to the next run — rules already generated are left as they are."
+              : `Will be created by ${CURRENT_USER.name} · runs crawl → rule generation → sandbox`}
+          </div>
         </div>
         <button className="ad-close" onClick={onClose} aria-label="Close"><X size={18} /></button>
       </div>
@@ -44,7 +49,16 @@ export default function NewReportModal({ nextName, onCreate, onClose }) {
       <div className="ad-mbody">
         <div className="ad-field">
           <label htmlFor="nr-name">Report name</label>
-          <input id="nr-name" className="ad-input" value={name} onChange={(e) => setName(e.target.value)} />
+          <input
+            id="nr-name" className="ad-input" value={name}
+            onChange={(e) => setName(e.target.value)}
+            disabled={editing}
+          />
+          {editing && (
+            <div className="ad-hint">
+              The name is the report id — rules, crawl files and decisions are filed under it, so it cannot change.
+            </div>
+          )}
         </div>
 
         <div className="ad-field">
@@ -85,15 +99,19 @@ export default function NewReportModal({ nextName, onCreate, onClose }) {
           <textarea id="nr-notes" className="ad-textarea" placeholder="Anything the reporter mentioned…" value={notes} onChange={(e) => setNotes(e.target.value)} />
         </div>
 
-        <div className="ad-checkrow">
-          <input id="nr-run" type="checkbox" checked={runNow} onChange={(e) => setRunNow(e.target.checked)} />
-          <label htmlFor="nr-run" style={{ cursor: "pointer" }}>Send to pipeline right away</label>
-        </div>
+        {!editing && (
+          <div className="ad-checkrow">
+            <input id="nr-run" type="checkbox" checked={runNow} onChange={(e) => setRunNow(e.target.checked)} />
+            <label htmlFor="nr-run" style={{ cursor: "pointer" }}>Send to pipeline right away</label>
+          </div>
+        )}
       </div>
 
       <div className="ad-mfoot">
         <button className="ad-btn ad-btn-ghost" onClick={onClose}>Cancel</button>
-        <button className="ad-btn ad-btn-primary" onClick={submit}>{runNow ? "Create & run" : "Create draft"}</button>
+        <button className="ad-btn ad-btn-primary" onClick={submit}>
+          {editing ? "Save changes" : runNow ? "Create & run" : "Create draft"}
+        </button>
       </div>
     </div>
   );

@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 try:
@@ -100,6 +101,13 @@ CREATE TABLE IF NOT EXISTS rule_outputs (
         ON DELETE CASCADE
 )"""
             )
+
+            # Per-rule approve/reject decisions, keyed by rule text:
+            # {"<rule>": {"decision": "approve"|"reject", "by": str, "at": iso}}
+            if not _column_exists(cur, "rule_outputs", "decisions"):
+                cur.execute(
+                    "ALTER TABLE rule_outputs ADD COLUMN decisions JSON AFTER validation_result"
+                )
 
             if not _column_exists(cur, "crawl_inputs", "report_id"):
                 cur.execute(
@@ -401,6 +409,182 @@ INSERT INTO rule_outputs (
                 ),
             )
             return cur.lastrowid
+
+
+def update_crawl_input_fields(
+    report_id: str,
+    url: str,
+    domain: str,
+    ticket_context: Optional[Dict[str, Any]] = None,
+) -> int:
+    """
+    Edit the user-supplied parts of a ticket in place.
+
+    Deliberately narrower than save_crawl_input(), which rewrites every column
+    and would blank out crawl results (screenshot, duration) that an edit must
+    not touch.
+    """
+    _ensure_schema()
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+UPDATE crawl_inputs
+SET url=%s,
+    domain=%s,
+    ticket_context=%s,
+    updated_at=NOW()
+WHERE report_id=%s
+""",
+                (url, domain, _json_value(ticket_context), report_id),
+            )
+            return cur.rowcount
+
+
+def get_rules_blob(report_id: str) -> Any:
+    """Raw `rules` column for a report, JSON-decoded (None when absent)."""
+    _ensure_schema()
+    input_id = _get_crawl_input_id(report_id)
+    if input_id is None:
+        return None
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT rules FROM rule_outputs WHERE input_id=%s",
+                (input_id,),
+            )
+            row = cur.fetchone()
+
+    if not row or row.get("rules") is None:
+        return None
+
+    stored = row["rules"]
+    if isinstance(stored, (dict, list)):
+        return stored
+    try:
+        return json.loads(stored)
+    except Exception:
+        return None
+
+
+def save_rules_blob(report_id: str, rules: Any, decisions: Any = None) -> None:
+    """
+    Replace the stored rules (and optionally decisions) without disturbing
+    token counts, validation output, or status.
+    """
+    _ensure_schema()
+    input_id = _get_crawl_input_id(report_id)
+    if input_id is None:
+        raise RuntimeError(f"No crawl_inputs row found for report_id={report_id}")
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM rule_outputs WHERE input_id=%s",
+                (input_id,),
+            )
+            exists = cur.fetchone()
+
+            if decisions is None:
+                if exists:
+                    cur.execute(
+                        "UPDATE rule_outputs SET rules=%s, updated_at=NOW() WHERE input_id=%s",
+                        (_json_value(rules), input_id),
+                    )
+                else:
+                    cur.execute(
+                        "INSERT INTO rule_outputs (input_id, rules) VALUES (%s,%s)",
+                        (input_id, _json_value(rules)),
+                    )
+                return
+
+            if exists:
+                cur.execute(
+                    "UPDATE rule_outputs SET rules=%s, decisions=%s, updated_at=NOW() WHERE input_id=%s",
+                    (_json_value(rules), _json_value(decisions), input_id),
+                )
+            else:
+                cur.execute(
+                    "INSERT INTO rule_outputs (input_id, rules, decisions) VALUES (%s,%s,%s)",
+                    (input_id, _json_value(rules), _json_value(decisions)),
+                )
+
+
+def get_rule_decisions(report_id: str) -> Dict[str, Any]:
+    """Stored approve/reject decisions for a report, keyed by rule text."""
+    _ensure_schema()
+    input_id = _get_crawl_input_id(report_id)
+    if input_id is None:
+        return {}
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT decisions FROM rule_outputs WHERE input_id=%s",
+                (input_id,),
+            )
+            row = cur.fetchone()
+
+    if not row or not row.get("decisions"):
+        return {}
+
+    stored = row["decisions"]
+    if isinstance(stored, dict):
+        return stored
+    try:
+        parsed = json.loads(stored)
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def save_rule_decision(
+    report_id: str,
+    rule: str,
+    decision: Optional[str],
+    decided_by: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Record (or clear, when decision is None) one reviewer decision.
+
+    Merges into the existing map so concurrent decisions on different rules
+    of the same report do not clobber each other.
+    """
+    _ensure_schema()
+    input_id = _get_crawl_input_id(report_id)
+    if input_id is None:
+        raise RuntimeError(f"No crawl_inputs row found for report_id={report_id}")
+
+    decisions = get_rule_decisions(report_id)
+
+    if decision is None:
+        decisions.pop(rule, None)
+    else:
+        decisions[rule] = {
+            "decision": decision,
+            "by": decided_by,
+            "at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM rule_outputs WHERE input_id=%s",
+                (input_id,),
+            )
+            if cur.fetchone():
+                cur.execute(
+                    "UPDATE rule_outputs SET decisions=%s, updated_at=NOW() WHERE input_id=%s",
+                    (_json_value(decisions), input_id),
+                )
+            else:
+                cur.execute(
+                    "INSERT INTO rule_outputs (input_id, decisions) VALUES (%s,%s)",
+                    (input_id, _json_value(decisions)),
+                )
+
+    return decisions
 
 
 def save_rule_validation(

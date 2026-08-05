@@ -177,6 +177,11 @@ class RuleGenerationResult:
 
     token_usage:
         LLM token usage metadata used in generated *_rules.json output.
+
+    error:
+        Set when generation aborted on an exception. Distinguishes a hard
+        failure (missing API key, network error, bad response) from a
+        legitimate empty result — both of which produce rules == [].
     """
 
     rules: List[ParsedRule]
@@ -184,6 +189,7 @@ class RuleGenerationResult:
     model: str = ""
     fallback_used: bool = False
     prompt_preview: str = ""
+    error: str = ""
 
     def rule_strings(self) -> List[str]:
         return [rule.rule for rule in self.rules]
@@ -302,7 +308,10 @@ def generate_rules_with_metadata(
             str(exc),
             exc_info=True,
         )
-        return RuleGenerationResult(rules=[])
+        return RuleGenerationResult(
+            rules=[],
+            error=f"{type(exc).__name__}: {exc}",
+        )
 
 
 def _merge_high_confidence_detector_rules(

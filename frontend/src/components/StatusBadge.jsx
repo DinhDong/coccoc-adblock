@@ -1,8 +1,16 @@
-import { Loader2 } from "lucide-react";
+import { Loader2, AlertTriangle } from "lucide-react";
 import { STAGES } from "../constants.js";
 
 export default function StatusBadge({ t }) {
   if (t.state === "draft") return <span className="ad-badge b-draft">Draft</span>;
+  if (t.state === "failed") {
+    return (
+      <span className="ad-badge b-failed">
+        <AlertTriangle aria-hidden="true" />
+        Run failed
+      </span>
+    );
+  }
   if (t.state === "inprocess") {
     const stage = STAGES.find((s) => s.k === t.stage);
     return (

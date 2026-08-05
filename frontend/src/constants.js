@@ -3,8 +3,8 @@
 /*  Lifecycle: Draft → In-process (ghost rows in Review) → Review → Done */
 /* ------------------------------------------------------------------ */
 
-export const STATE_ORDER = ["draft", "inprocess", "review", "done"];
-export const TABS = ["review", "draft", "done", "all"]; // in-process rows surface inside Review, dimmed
+export const STATE_ORDER = ["draft", "inprocess", "review", "failed", "done"];
+export const TABS = ["review", "draft", "done", "all"]; // in-process and failed rows surface inside Review
 
 export const STATES = {
   all: {
@@ -30,6 +30,12 @@ export const STATES = {
     card: "Awaiting review",
     sub: "Waiting on a moderator decision",
     empty: "No reports are waiting for review.",
+  },
+  failed: {
+    label: "Failed",
+    card: "Failed runs",
+    sub: "The pipeline stopped before producing rules",
+    empty: "No failed runs.",
   },
   done: {
     label: "Done",
@@ -60,4 +66,4 @@ export const USERS = [
 export const CURRENT_USER = USERS[0]; // stub for the signed-in admin
 export const userOf = (k) => USERS.find((u) => u.k === k);
 
-export const VIEW_TITLES = { reports: "Reports", dashboard: "Dashboard", trend: "Trend", performance: "Performance" };
+export const VIEW_TITLES = { reports: "Reports", dashboard: "Dashboard", trend: "Trend", performance: "Performance", library: "Rule library", tokens: "Token usage" };

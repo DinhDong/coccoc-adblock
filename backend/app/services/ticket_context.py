@@ -909,6 +909,7 @@ def _copy_passthrough_fields(
     region_focus without implementing that feature here.
     """
     for key in (
+        "name",
         "ticket_id",
         "issue_id",
         "report_id",

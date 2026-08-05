@@ -34,7 +34,8 @@ export const hostname = (url) => {
 
 export const fmtDate = (iso) => {
   if (!iso) return "—";
-  const d = new Date(iso + "T00:00:00");
+  // Handle both date-only strings (YYYY-MM-DD) and full ISO datetimes.
+  const d = iso.includes("T") ? new Date(iso) : new Date(iso + "T00:00:00");
   return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
 };
 

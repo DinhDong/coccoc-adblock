@@ -1440,6 +1440,26 @@ def _finalize_sandbox_result(
         cosmetic_targets_present and cosmetic_targets_blocked
     )
 
+    # Diagnostic logging: when ads are not detected as blocked, log helpful
+    # context so failures such as 'ads_not_blocked' can be investigated.
+    if not result.ads_blocked:
+        try:
+            net_rule_texts = [getattr(r, "original", str(r)) for r in candidate_network_block_rules]
+        except Exception:
+            net_rule_texts = [str(r) for r in candidate_network_block_rules]
+
+        logger.warning(
+            "Sandbox diagnostic for %s: cosmetic_selectors=%s network_rules=%s reference_ad_dom_counts=%s tested_ad_dom_counts=%s tested_ad_visible_counts=%s blocked_requests=%s candidate_blocked_requests=%s",
+            url,
+            candidate_cosmetic_selectors,
+            net_rule_texts,
+            reference_state.get("ad_dom_counts", {}),
+            tested_state.get("ad_dom_counts", {}),
+            tested_state.get("ad_visible_counts", {}),
+            result.blocked_requests,
+            result.candidate_blocked_requests,
+        )
+
     # ------------------------------------------------------------------
     # Evaluate generic page functionality against reference/no-rule page.
     # ------------------------------------------------------------------

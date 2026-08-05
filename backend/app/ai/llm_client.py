@@ -141,14 +141,43 @@ def call_llm(
                 model,
             )
 
+            # Some models (e.g. certain fallback models) only accept the
+            # default temperature. If we're calling a model that doesn't
+            # support a lower temperature, force it to 1.0 to avoid a
+            # 400 Bad Request from the API.
+            actual_temperature = temperature
+            if model == FALLBACK_MODEL:
+                actual_temperature = 1.0
+
             response = client.chat.completions.create(
                 model=model,
                 messages=messages,
                 max_completion_tokens=max_tokens,
-                temperature=temperature,
+                temperature=actual_temperature,
             )
 
-            text = (response.choices[0].message.content or "").strip()
+            # Responses may provide `message.content` as a string or as a
+            # list of content objects (newer gpt-5 style). Handle both.
+            raw_content = response.choices[0].message.content
+            text = ""
+            try:
+                if isinstance(raw_content, str):
+                    text = raw_content.strip()
+                elif isinstance(raw_content, (list, tuple)):
+                    parts = []
+                    for part in raw_content:
+                        if isinstance(part, str):
+                            parts.append(part)
+                        elif isinstance(part, dict):
+                            # common shapes: {'type':'text','text': '...'} or {'type':'output_text','content':'...'}
+                            parts.append(part.get("text") or part.get("content") or "")
+                        else:
+                            parts.append(str(part))
+                    text = "".join(parts).strip()
+                else:
+                    text = str(raw_content or "").strip()
+            except Exception:
+                text = str(raw_content or "").strip()
             usage = None
             if response.usage:
                 usage = TokenUsage(
@@ -165,7 +194,41 @@ def call_llm(
                     usage.total_tokens,
                 )
 
-            logger.debug("LLM response received: %s chars", len(text))
+            if not text:
+                try:
+                    preview = str(raw_content)[:1000]
+                except Exception:
+                    preview = "<unserializable>"
+                logger.warning(
+                    "LLM response parsed to empty string. raw_type=%s preview=%s",
+                    type(raw_content).__name__,
+                    preview,
+                )
+                try:
+                    full_preview = str(response)[:2000]
+                except Exception:
+                    full_preview = "<unserializable-response>"
+                logger.warning("LLM full response preview: %s", full_preview)
+
+                # As a fallback, try the Responses API which exposes
+                # `output_text` — some model/configurations populate that
+                # instead of `chat.completions[*].message.content`.
+                try:
+                    alt = client.responses.create(
+                        model=model,
+                        input=prompt,
+                        max_output_tokens=max_tokens,
+                    )
+                    # `output_text` is a convenience that joins all output parts.
+                    alt_text = getattr(alt, "output_text", None) or str(alt) or ""
+                    alt_text = alt_text.strip()
+                    if alt_text:
+                        logger.info("Recovered text from Responses API (%s chars)", len(alt_text))
+                        text = alt_text
+                except Exception as exc:
+                    logger.debug("Responses API fallback failed: %s", exc)
+            else:
+                logger.debug("LLM response received: %s chars", len(text))
 
             return LLMResponse(
                 text=text,

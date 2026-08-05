@@ -4,7 +4,16 @@ services:
   db:
     image: mysql:8.0
     restart: unless-stopped
-    env_file: .env.local
+    # Deliberately NOT env_file: .env.local. That file carries the shared
+    # server's MYSQL_HOST/USER/PASSWORD, which this container would take as
+    # its own identity — and its mysql client would then try to reach the
+    # remote host instead of itself. These are throwaway local-dev values,
+    # the same ones documented in .env.example.
+    environment:
+      MYSQL_ROOT_PASSWORD: adblock_root
+      MYSQL_DATABASE: adblock
+      MYSQL_USER: adblock
+      MYSQL_PASSWORD: adblock_pass
     ports:
       - "6446:3306"
     volumes:
@@ -22,6 +31,15 @@ services:
     command: ["flask", "run", "--host=0.0.0.0", "--port=5000"]
     environment:
       FLASK_APP: app
+      # These override the MySQL settings coming from .env.local. Inside the
+      # compose network the database is the `db` service; the shared server's
+      # address in .env.local is a corporate-LAN host that Docker's network
+      # cannot route to, so leaving it in place makes every request time out.
+      MYSQL_HOST: db
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: adblock
+      MYSQL_USER: adblock
+      MYSQL_PASSWORD: adblock_pass
     ports:
       - "5000:5000"
     depends_on:

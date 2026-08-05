@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { X, ExternalLink, CheckCircle2, XCircle, AlertTriangle, Pencil, Trash2, Plus, Check } from "lucide-react";
+import { useState, useEffect } from "react";
+import { X, ExternalLink, CheckCircle2, XCircle, AlertTriangle, Pencil, Trash2, Plus, Check, Combine } from "lucide-react";
 import { STAGES, ENVS, CURRENT_USER, userOf } from "../constants.js";
 import { fmtDate, fmtDur } from "../utils.js";
 import { Person } from "./Avatar.jsx";
@@ -60,6 +60,97 @@ function TokenUsage({ metrics }) {
         </div>
       </div>
     </div>
+  );
+}
+
+// Presigned URLs survive reopening a report, so they are cached per report
+// instead of refetched every time the modal mounts. The TTL sits well under
+// the backend's PRESIGNED_URL_EXPIRES_SECONDS (900s) so a cached URL can
+// never be handed out after it has expired.
+const IMAGE_CACHE_MS = 10 * 60 * 1000;
+const imageCache = new Map();
+
+export function clearReportImageCache(reportId) {
+  if (reportId) imageCache.delete(reportId);
+  else imageCache.clear();
+}
+
+function Lightbox({ image, onClose }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div className="ad-lightbox" onClick={onClose} role="dialog" aria-modal="true" aria-label={image.label}>
+      <button className="ad-lightclose" onClick={onClose} aria-label="Close image">
+        <X size={20} />
+      </button>
+      <figure onClick={(e) => e.stopPropagation()}>
+        <img src={image.url} alt={image.label} />
+        <figcaption>{image.label}</figcaption>
+      </figure>
+    </div>
+  );
+}
+
+function ReportImages({ reportId }) {
+  const cached = imageCache.get(reportId);
+  const fresh = cached && Date.now() - cached.at < IMAGE_CACHE_MS;
+  const [images, setImages] = useState(fresh ? cached.images : null);
+  const [error, setError] = useState("");
+  const [zoomed, setZoomed] = useState(null);
+
+  useEffect(() => {
+    const hit = imageCache.get(reportId);
+    if (hit && Date.now() - hit.at < IMAGE_CACHE_MS) {
+      setImages(hit.images);
+      return;
+    }
+
+    let cancelled = false;
+    fetch(`http://127.0.0.1:5000/api/tickets/${encodeURIComponent(reportId)}/images`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((d) => {
+        const list = d.images || [];
+        imageCache.set(reportId, { at: Date.now(), images: list });
+        if (!cancelled) setImages(list);
+      })
+      .catch((e) => { if (!cancelled) setError(e.message); });
+    return () => { cancelled = true; };
+  }, [reportId]);
+
+  if (error) {
+    return <div className="ad-panelabel">Could not load screenshots — {error}</div>;
+  }
+  if (!images) return <div className="ad-panelabel">Loading screenshots…</div>;
+
+  return (
+    <>
+      <div className="ad-shots">
+        {images.map((img) => (
+          <figure className="ad-shot" key={img.kind}>
+            {img.url ? (
+              <button
+                type="button"
+                className="ad-shotbtn"
+                onClick={() => setZoomed(img)}
+                title="Click to enlarge"
+              >
+                {/* decoding=async keeps a large PNG off the main thread; the
+                    browser caches the bytes so reopening is instant. */}
+                <img src={img.url} alt={img.label} loading="lazy" decoding="async" />
+              </button>
+            ) : (
+              <div className="ad-shotmissing">Not produced for this run</div>
+            )}
+            <figcaption>{img.label}</figcaption>
+          </figure>
+        ))}
+      </div>
+      {zoomed && <Lightbox image={zoomed} onClose={() => setZoomed(null)} />}
+    </>
   );
 }
 
@@ -198,7 +289,7 @@ export function RuleEditor({ value, original, onChange, onSave, onCancel }) {
   );
 }
 
-function RuleRow({ r, index, state, onDecide, onEditRule, onDeleteRule }) {
+function RuleRow({ r, index, state, selected, onToggle, onDecide, onEditRule, onDeleteRule }) {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(r.text);
 
@@ -206,7 +297,16 @@ function RuleRow({ r, index, state, onDecide, onEditRule, onDeleteRule }) {
   const startEditing = (next) => { setText(r.text); setEditing(next); };
 
   return (
-    <tr className={r.status === "failed" ? "rulefail" : ""}>
+    <tr className={(r.status === "failed" ? "rulefail" : "") + (selected ? " ad-rowsel" : "")}>
+      <td>
+        <input
+          type="checkbox"
+          className="ad-check"
+          checked={selected}
+          onChange={onToggle}
+          aria-label={`Select rule ${r.text}`}
+        />
+      </td>
       <td>
         {editing ? (
           <RuleEditor
@@ -304,8 +404,36 @@ function MiniSandbox() {
 
 export default function ReportDetail({
   t, onClose, onRun, onCancelRun, onDelete, onDecide, onFinish,
-  onEdit, onAddRule, onEditRule, onDeleteRule,
+  onEdit, onAddRule, onEditRule, onDeleteRule, onMergeRules, onMergePreview,
 }) {
+  const [selected, setSelected] = useState(() => new Set());
+
+  const toggleRule = (text) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(text)) next.delete(text);
+      else next.add(text);
+      return next;
+    });
+
+  // Same contract as the library: exactly two rules, previewed before commit
+  // so the moderator confirms the real merged text.
+  const mergeSelected = async () => {
+    const picked = [...selected];
+    if (picked.length !== 2) return;
+    const items = picked.map((rule) => ({ reportId: t.id, rule }));
+    const preview = await onMergePreview(items);
+    if (!preview) return;
+    if (
+      !window.confirm(
+        `Merge these two rules into one?\n\n  ${picked[0]}\n  ${picked[1]}\n\nResult:\n  ${preview.merged}`
+      )
+    ) {
+      return;
+    }
+    await onMergeRules(items);
+    setSelected(new Set());
+  };
   // Anything the sandbox did not auto-reject is the moderator's to rule on,
   // including hand-written rules that were never validated.
   const decidable = (t.rules || []).filter((r) => r.status !== "failed");
@@ -402,16 +530,31 @@ export default function ReportDetail({
         {(t.state === "review" || t.state === "done") && (
           <>
             <div className="ad-msection">
-              <h3>Sandbox result (mock)</h3>
-              <MiniSandbox />
+              <h3>Screenshots</h3>
+              <ReportImages reportId={t.id} />
             </div>
 
             <div className="ad-msection">
               <h3>{t.state === "review" ? "Candidate rules — decide each one" : "Rules"}</h3>
               <DuplicateWarning dupes={t.duplicates} ruleCount={(t.rules || []).length} />
+              {selected.size > 0 && (
+                <div className="ad-bulkbar" style={{ margin: "8px 0" }}>
+                  <b>{selected.size} selected</b>
+                  <button
+                    className="ad-btn ad-btn-ghost"
+                    onClick={mergeSelected}
+                    disabled={selected.size !== 2}
+                    title={selected.size === 2 ? "Combine into one rule" : "Select exactly two rules to merge"}
+                  >
+                    <Combine /> Merge
+                  </button>
+                  <button className="ad-btn ad-btn-ghost" onClick={() => setSelected(new Set())}>Clear</button>
+                </div>
+              )}
               <table className="ad-ruletable">
                 <thead>
                   <tr>
+                    <th style={{ width: 24 }} aria-label="Select" />
                     <th>Rule</th>
                     <th>Pre-test</th>
                     <th>Conf.</th>
@@ -426,6 +569,8 @@ export default function ReportDetail({
                       r={r}
                       index={i}
                       state={t.state}
+                      selected={selected.has(r.text)}
+                      onToggle={() => toggleRule(r.text)}
                       onDecide={onDecide}
                       onEditRule={onEditRule}
                       onDeleteRule={onDeleteRule}
@@ -466,8 +611,10 @@ export default function ReportDetail({
             <span className="ad-tally">
               {approved} approved · {rejected} rejected · {undecided} pending — reviewer: {CURRENT_USER.name}
             </span>
+            {/* No "Edit report" here on purpose: once the pipeline has run,
+                changing the URL or targets would leave the rules below
+                describing a page the ticket no longer points at. */}
             <button className="ad-btn ad-btn-danger" onClick={onDelete}>Delete report</button>
-            <EditTicketButton onEdit={onEdit} />
             <button className="ad-btn ad-btn-primary" disabled={undecided > 0} onClick={onFinish}>
               {undecided > 0
                 ? "Decide all rules to finish"

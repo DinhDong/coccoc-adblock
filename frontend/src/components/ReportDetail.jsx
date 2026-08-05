@@ -594,7 +594,7 @@ export default function ReportDetail({
         )}
         {t.state === "inprocess" && (
           <>
-            <span className="ad-tally">The pipeline is processing this report. Refresh to see updates.</span>
+            <span className="ad-tally">The pipeline is processing this report. Status updates automatically.</span>
             <EditTicketButton onEdit={onEdit} />
             <button className="ad-btn ad-btn-ghost" onClick={onCancelRun}>Cancel run</button>
           </>

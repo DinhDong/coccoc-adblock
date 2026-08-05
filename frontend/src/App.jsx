@@ -1,7 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from "react";
-import { STATE_ORDER, STAGES, CURRENT_USER } from "./constants.js";
-import { nowISO, todayISO, makeRules } from "./utils.js";
-import { SEED } from "./data/seed.js";
+import { STATE_ORDER, CURRENT_USER } from "./constants.js";
+import { nowISO, todayISO } from "./utils.js";
 import Layout from "./components/Layout.jsx";
 import ReportDetail, { clearReportImageCache } from "./components/ReportDetail.jsx";
 import NewReportModal from "./components/NewReportModal.jsx";
@@ -14,7 +13,7 @@ import RuleLibrary from "./pages/RuleLibrary.jsx";
 import TokenUsage from "./pages/TokenUsage.jsx";
 
 export default function App() {
-  const [tickets, setTickets] = useState(SEED);
+  const [tickets, setTickets] = useState([]);
   const [modal, setModal] = useState(null); // {kind:'ticket',id} | {kind:'new'}
   const [query, setQuery] = useState("");
   const [view, setView] = useState("reports"); // "reports" | "dashboard" | "trend" | "performance"
@@ -26,10 +25,12 @@ export default function App() {
   const [usage, setUsage] = useState(null);
   const [usageLoading, setUsageLoading] = useState(false);
   const [lastSync, setLastSync] = useState(() => new Date());
+  const backendUrl = (
+    import.meta.env.VITE_BACKEND_URL ||
+    `${window.location.protocol}//${window.location.hostname}:5000`
+  ).replace(/\/$/, "");
   const [, setNowTick] = useState(0);
-  const timers = useRef({});
   const nextRpt = useRef(148);
-  const syncedTeammate = useRef(false);
 
   const makeTicketId = () =>
     window.crypto?.randomUUID?.() ?? `u${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -38,9 +39,6 @@ export default function App() {
     setTickets((ts) =>
       ts.map((t) => (t.id === id ? { ...t, ...(typeof patch === "function" ? patch(t) : patch) } : t))
     );
-
-  const pushTimer = (id, tid) => { (timers.current[id] = timers.current[id] || []).push(tid); };
-  const clearFor = (id) => { (timers.current[id] || []).forEach(clearTimeout); timers.current[id] = []; };
 
   const loadRules = async () => {
     setRulesLoading(true);
@@ -76,45 +74,41 @@ export default function App() {
       const data = await response.json();
       setTickets(data.tickets || []);
       setLastSync(new Date());
+      return data.tickets || [];
     } catch (error) {
       console.error("Failed to load tickets from backend", error);
+      return null;
     }
   };
 
   const updateTicketStatusInBackend = async (id, status) => {
     try {
-      await fetch(`${backendUrl}/api/tickets/${encodeURIComponent(id)}`, {
+      const response = await fetch(`${backendUrl}/api/tickets/${encodeURIComponent(id)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status }),
       });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error || `status update failed ${response.status}`);
+      }
+      return true;
     } catch (error) {
       console.error(`Failed to update ticket ${id} status`, error);
+      return false;
     }
-  };
-
-  const advance = (id, stageIdx) => {
-    if (stageIdx >= STAGES.length) {
-      setT(id, (t) => ({ state: "review", stage: null, rules: makeRules(t), reviewReadyAt: nowISO() }));
-      return;
-    }
-    setT(id, { state: "inprocess", stage: STAGES[stageIdx].k });
-    pushTimer(id, setTimeout(() => advance(id, stageIdx + 1), 2700 + stageIdx * 500));
   };
 
   // Ask the backend whether this link has been run before, so the choice can
   // be put to the user before anything is crawled or any tokens are spent.
   const findDuplicates = async (id, url) => {
-    try {
-      const query = new URLSearchParams({ url, exclude: id });
-      const response = await fetch(`${backendUrl}/api/tickets/duplicates?${query}`);
-      if (!response.ok) return [];
-      const data = await response.json();
-      return data.duplicates || [];
-    } catch (error) {
-      console.error("Duplicate check failed", error);
-      return [];
+    const query = new URLSearchParams({ url, exclude: id });
+    const response = await fetch(`${backendUrl}/api/tickets/duplicates?${query}`);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || `duplicate check failed ${response.status}`);
     }
+    return data.duplicates || [];
   };
 
   const startRun = async (id, ticketOverride) => {
@@ -124,7 +118,14 @@ export default function App() {
       return;
     }
 
-    const duplicates = await findDuplicates(id, ticket.url);
+    let duplicates;
+    try {
+      duplicates = await findDuplicates(id, ticket.url);
+    } catch (error) {
+      console.error("Duplicate check failed", error);
+      window.alert(`Could not start ${id}: ${error.message}`);
+      return;
+    }
     if (duplicates.length > 0) {
       setModal({ kind: "duplicate", id, ticket, duplicates });
       return;
@@ -137,8 +138,8 @@ export default function App() {
   // re-render, so the `tickets` captured by this closure is still the
   // pre-create list and the lookup below would miss.
   const runPipeline = async (id, ticketOverride, duplicateChoice) => {
-    clearFor(id);
     setT(id, { runStartedAt: nowISO(), state: "inprocess", stage: "crawl" });
+    setTab("review");
 
     const ticket = ticketOverride || tickets.find((t) => t.id === id);
     if (!ticket) {
@@ -148,7 +149,7 @@ export default function App() {
     }
 
     try {
-      await fetch(`${backendUrl}/api/tickets/${encodeURIComponent(id)}/run`, {
+      const response = await fetch(`${backendUrl}/api/tickets/${encodeURIComponent(id)}/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -165,27 +166,43 @@ export default function App() {
           duplicate_choice: duplicateChoice,
         }),
       });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || body.ok === false) {
+        throw new Error(body.error || `pipeline request failed ${response.status}`);
+      }
     } catch (error) {
       console.error(`Failed to run pipeline for ticket ${id}`, error);
+      const latest = await loadTickets();
+      if (!latest) {
+        setT(id, { state: "draft", stage: null, runStartedAt: null });
+      }
+      setTab("review");
+      window.alert(`Pipeline failed for ${id}: ${error.message}`);
+      return;
     }
 
     // A re-run replaces the screenshots, so drop any cached presigned URLs
     // for this report before the modal is opened again.
     clearReportImageCache(id);
-    await refreshBoard();
+    await loadTickets();
     setTab("review");
   };
-  const cancelRun = async (id) => { clearFor(id); setT(id, { state: "draft", stage: null, runStartedAt: null }); await updateTicketStatusInBackend(id, "draft"); setTab("draft"); };
+  const cancelRun = async (id) => {
+    const updated = await updateTicketStatusInBackend(id, "draft");
+    if (!updated) {
+      window.alert(`Could not reset ${id} to draft. The pipeline status was not changed.`);
+      await loadTickets();
+      return;
+    }
+    setT(id, { state: "draft", stage: null, runStartedAt: null });
+    setTab("draft");
+  };
 
-  // resume seeded in-process reports; clear all timers on unmount
+  // Load database truth on startup and keep long-running pipeline stages fresh.
   useEffect(() => {
-    tickets.forEach((t) => {
-      if (t.state === "inprocess") {
-        const idx = Math.max(0, STAGES.findIndex((s) => s.k === t.stage));
-        pushTimer(t.id, setTimeout(() => advance(t.id, idx + 1), 3200));
-      }
-    });
-    return () => Object.values(timers.current).flat().forEach(clearTimeout);
+    loadTickets();
+    const poller = window.setInterval(loadTickets, 3000);
+    return () => window.clearInterval(poller);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -377,32 +394,11 @@ ${error.message}`);
   const refreshBoard = async () => {
     if (refreshing) return;
     setRefreshing(true);
-    // stub: in the real CMS this re-fetches the report list from the API
-    setTimeout(() => {
-      if (!syncedTeammate.current) {
-        // simulate a report another moderator created since our last sync
-        syncedTeammate.current = true;
-        const id = "u" + uid.current++;
-        setTickets((ts) => [
-          {
-            id, name: "RPT-2026-0143", url: "https://baomoi.com", env: "android",
-            state: "review", created: todayISO(), createdBy: "hien.khuong",
-            runStartedAt: new Date(Date.now() - 22 * 60000).toISOString(),
-            reviewReadyAt: new Date(Date.now() - 20 * 60000).toISOString(),
-            focus: "", targets: [], notes: "Synced from another moderator's session.",
-            rules: [
-              { text: "baomoi.com##.bm-ads", status: "passed", conf: 0.9 },
-              { text: "||media1.admicro.vn^$third-party", status: "passed", conf: 0.93 },
-              { text: "baomoi.com##div[data-zone]", status: "passed", conf: 0.8 },
-              { text: "baomoi.com##.story__meta", status: "failed", conf: 0.36, reason: "Hid article bylines." },
-            ],
-          },
-          ...ts,
-        ]);
-      }
-      setLastSync(new Date());
+    try {
+      await loadTickets();
+    } finally {
       setRefreshing(false);
-    }, 850);
+    }
   };
 
   const deleteTicket = async (id) => {
@@ -417,7 +413,6 @@ ${error.message}`);
         : "";
     if (!window.confirm(`Delete report ${id}?${warning}\n\nThis cannot be undone.`)) return;
 
-    clearFor(id);
     try {
       const response = await fetch(`${backendUrl}/api/tickets/${encodeURIComponent(id)}`, {
         method: "DELETE",
@@ -442,19 +437,33 @@ ${error.message}`);
     // being later replaced by a UUID identifier.
     const id = (data && data.name && data.name.trim()) ? data.name.trim() : makeTicketId();
     nextRpt.current++;
-    setTickets((ts) => [{ id, state: "draft", created: todayISO(), createdBy: CURRENT_USER.k, ...data }, ...ts]);
-    setModal(null);
-    setTab("draft");
+    const ticketPayload = {
+      id,
+      state: "draft",
+      created: todayISO(),
+      createdBy: CURRENT_USER.k,
+      ...data,
+    };
 
     try {
-      await fetch("http://127.0.0.1:5000/api/tickets", {
+      const response = await fetch(`${backendUrl}/api/tickets`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(ticketPayload),
       });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(body.error || `ticket save failed ${response.status}`);
+      }
     } catch (error) {
       console.error("Failed to save ticket to backend", error);
+      window.alert(`Could not create ${id}: ${error.message}`);
+      return;
     }
+
+    setTickets((ts) => [ticketPayload, ...ts.filter((t) => t.id !== id)]);
+    setModal(null);
+    setTab("draft");
 
     if (runNow) {
       // Hand the payload straight to runPipeline — it cannot look the ticket

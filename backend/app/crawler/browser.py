@@ -17,6 +17,7 @@
 """Browser automation helpers using Playwright."""
 
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -724,6 +725,65 @@ def _region_overlap_ratio(element: Dict, box: Dict[str, float]) -> float:
     return intersection / element_area
 
 
+def _proxy_from_env() -> Optional[Dict[str, str]]:
+    """
+    Playwright proxy settings from CRAWL_PROXY_SERVER, or None when unset.
+
+    Scoped to the browser on purpose: the backend still reaches MySQL and Ceph
+    directly. Those are on the internal network and would not be reachable
+    through an external proxy.
+
+    CRAWL_PROXY_BYPASS is a comma-separated host list that skips the proxy,
+    e.g. "localhost,127.0.0.1,*.internal".
+    """
+    server = os.getenv("CRAWL_PROXY_SERVER", "").strip()
+    if not server:
+        return None
+
+    proxy: Dict[str, str] = {"server": server}
+
+    username = os.getenv("CRAWL_PROXY_USERNAME", "").strip()
+    password = os.getenv("CRAWL_PROXY_PASSWORD", "").strip()
+    if username:
+        proxy["username"] = username
+        proxy["password"] = password
+
+    bypass = os.getenv("CRAWL_PROXY_BYPASS", "").strip()
+    if bypass:
+        proxy["bypass"] = bypass
+
+    return proxy
+
+
+# Playwright reports a reset TLS handshake as a generic SSL error, which reads
+# like a certificate problem the crawler could fix. When the network resets the
+# connection the moment the hostname is revealed — the signature of upstream
+# domain blocking — say so, otherwise the next person debugs the wrong layer.
+_BLOCK_SIGNATURES = (
+    "ssl connect error",
+    "err_connection_reset",
+    "err_connection_closed",
+    "connection was reset",
+    "err_empty_response",
+    "socket hang up",
+)
+
+
+def _network_block_hint(message: str) -> str:
+    lowered = (message or "").lower()
+    if not any(sig in lowered for sig in _BLOCK_SIGNATURES):
+        return ""
+    return (
+        "This looks like the network refusing the connection rather than a "
+        "problem with the page or the browser. The handshake is reset once the "
+        "hostname is sent, which is what upstream domain blocking looks like. "
+        "Check from the same machine with:\n"
+        "    curl -sS -m 10 -o /dev/null -w '%{http_code}\\n' <url>\n"
+        "If curl is also reset, the crawler cannot reach the site and no code "
+        "change will help — try another network, or confirm the site is still up."
+    )
+
+
 def render_url(
     url: str,
     screenshot_path: Optional[str] = None,
@@ -762,6 +822,13 @@ def render_url(
     try:
         with sync_playwright() as playwright:
             launch_kwargs: Dict[str, Any] = {"headless": headless}
+
+            proxy_config = _proxy_from_env()
+            if proxy_config:
+                launch_kwargs["proxy"] = proxy_config
+                logger.info(
+                    "Routing %s through proxy %s", url, proxy_config["server"]
+                )
 
             if stealth and effective_browser_type == "chromium":
                 launch_kwargs["args"] = _STEALTH_LAUNCH_ARGS
@@ -911,6 +978,9 @@ def render_url(
         result.error = error_message
     except PlaywrightError as exc:
         error_message = f"Playwright error while rendering {url}: {exc}"
+        hint = _network_block_hint(str(exc))
+        if hint:
+            error_message = f"{error_message}\n\n{hint}"
         logger.exception(error_message)
         # If rendering failed while running with a visible browser, try
         # one headless retry. Some sites or environments cause the browser

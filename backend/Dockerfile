@@ -15,5 +15,9 @@ COPY . .
 
 ENV PYTHONPATH=/app
 
-ENTRYPOINT ["python", "-m"]
-CMD ["app.services.workflow", "--help"]
+# Default: run the Flask dev server with debug mode.
+# Override via docker-compose `command:` for other entry points
+# (uvicorn, workflow, pytest, etc.)
+ENV FLASK_APP=app
+EXPOSE 5000
+CMD ["python", "-m", "flask", "--debug", "run", "--host=0.0.0.0", "--port=5000"]

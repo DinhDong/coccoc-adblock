@@ -16,6 +16,7 @@ services:
       MYSQL_PASSWORD: adblock_pass
     ports:
       - "6446:3306"
+    
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:
@@ -24,17 +25,18 @@ services:
       timeout: 5s
       retries: 5
 
-  # ---- Python backend (Flask API + Playwright pipeline) ----
+  # ---- Python backend (Flask API — debug mode) ----
   backend:
     build: ./backend
     env_file: .env.local
-    command: ["flask", "run", "--host=0.0.0.0", "--port=5000"]
+    # Matches:  python -m flask --debug run --host 0.0.0.0 --port 5000
+    # The Dockerfile's CMD already does this, but we keep it explicit here
+    # so it's easy to see / override.
+    command: ["python", "-m", "flask", "--debug", "run", "--host=0.0.0.0", "--port=5000"]
     environment:
       FLASK_APP: app
-      # These override the MySQL settings coming from .env.local. Inside the
-      # compose network the database is the `db` service; the shared server's
-      # address in .env.local is a corporate-LAN host that Docker's network
-      # cannot route to, so leaving it in place makes every request time out.
+      # Override MySQL settings from .env.local to point at the compose
+      # network's `db` service instead of the corporate-LAN host.
       MYSQL_HOST: db
       MYSQL_PORT: 3306
       MYSQL_DATABASE: adblock
@@ -47,6 +49,8 @@ services:
         condition: service_healthy
     restart: unless-stopped
     volumes:
+      - ./backend:/app            # live-reload: edits on host → reflected in container
+      - /app/.venv                # prevent host .venv from shadowing the container's packages
       - ./backend/data:/app/data
       - ./backend/app/tests/tickets:/app/app/tests/tickets:ro
     deploy:
@@ -54,6 +58,7 @@ services:
         limits:
           memory: 4G
 
+  # ---- FastAPI upload / presigned-URL API ----
   api:
     build: ./backend
     env_file: .env.local
@@ -72,6 +77,49 @@ services:
       resources:
         limits:
           memory: 1G
+
+  # ---- React + Vite frontend (dev server with HMR) ----
+  frontend:
+    build:
+      context: ./frontend
+      target: dev                   # uses the "dev" stage in the multi-stage Dockerfile
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app            # live-reload: edits on host → reflected in container
+      - /app/node_modules          # prevent host node_modules from shadowing the container's
+    restart: unless-stopped
+    depends_on:
+      - backend
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  # ---- Background worker (poll for "new" tickets every 5 min) ----
+  worker:
+    build: ./backend
+    env_file: .env.local
+    command: ["python", "-m", "app.services.worker", "--source=db", "--sleep=300"]
+    environment:
+      MYSQL_HOST: db
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: adblock
+      MYSQL_USER: adblock
+      MYSQL_PASSWORD: adblock_pass
+      WORKER_LOG_LEVEL: INFO
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    volumes:
+      - ./backend:/app
+      - /app/.venv
+      - ./backend/data:/app/data
+    deploy:
+      resources:
+        limits:
+          memory: 4G
 
 volumes:
   mysql_data:

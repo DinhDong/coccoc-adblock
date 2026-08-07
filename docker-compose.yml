@@ -54,5 +54,24 @@ services:
         limits:
           memory: 4G
 
+  api:
+    build: ./backend
+    env_file: .env.local
+    entrypoint: ["uvicorn"]
+    command: ["app.api:app", "--host=0.0.0.0", "--port=8000"]
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
 volumes:
   mysql_data:

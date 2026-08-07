@@ -95,7 +95,7 @@ function Lightbox({ image, onClose }) {
   );
 }
 
-function ReportImages({ reportId }) {
+function ReportImages({ reportId, backendUrl }) {
   const cached = imageCache.get(reportId);
   const fresh = cached && Date.now() - cached.at < IMAGE_CACHE_MS;
   const [images, setImages] = useState(fresh ? cached.images : null);
@@ -110,7 +110,7 @@ function ReportImages({ reportId }) {
     }
 
     let cancelled = false;
-    fetch(`http://127.0.0.1:5000/api/tickets/${encodeURIComponent(reportId)}/images`)
+    fetch(`${backendUrl}/api/tickets/${encodeURIComponent(reportId)}/images`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((d) => {
         const list = d.images || [];
@@ -119,7 +119,7 @@ function ReportImages({ reportId }) {
       })
       .catch((e) => { if (!cancelled) setError(e.message); });
     return () => { cancelled = true; };
-  }, [reportId]);
+  }, [reportId, backendUrl]);
 
   if (error) {
     return <div className="ad-panelabel">Could not load screenshots — {error}</div>;
@@ -405,6 +405,7 @@ function MiniSandbox() {
 export default function ReportDetail({
   t, onClose, onRun, onCancelRun, onDelete, onDecide, onFinish,
   onEdit, onAddRule, onEditRule, onDeleteRule, onMergeRules, onMergePreview,
+  backendUrl,
 }) {
   const [selected, setSelected] = useState(() => new Set());
 
@@ -531,7 +532,7 @@ export default function ReportDetail({
           <>
             <div className="ad-msection">
               <h3>Screenshots</h3>
-              <ReportImages reportId={t.id} />
+              <ReportImages reportId={t.id} backendUrl={backendUrl} />
             </div>
 
             <div className="ad-msection">

@@ -582,6 +582,7 @@ ${error.message}`);
           {openTicket && (
             <ReportDetail
               t={openTicket}
+              backendUrl={backendUrl}
               onClose={() => setModal(null)}
               onRun={() => startRun(openTicket.id)}
               onCancelRun={() => cancelRun(openTicket.id)}

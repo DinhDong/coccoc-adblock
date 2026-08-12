@@ -35,18 +35,8 @@ services:
     command: ["python", "-m", "flask", "--debug", "run", "--host=0.0.0.0", "--port=5000"]
     environment:
       FLASK_APP: app
-      # Override MySQL settings from .env.local to point at the compose
-      # network's `db` service instead of the corporate-LAN host.
-      MYSQL_HOST: db
-      MYSQL_PORT: 3306
-      MYSQL_DATABASE: adblock
-      MYSQL_USER: adblock
-      MYSQL_PASSWORD: adblock_pass
     ports:
       - "5000:5000"
-    depends_on:
-      db:
-        condition: service_healthy
     restart: unless-stopped
     volumes:
       - ./backend:/app            # live-reload: edits on host → reflected in container
@@ -102,15 +92,7 @@ services:
     env_file: .env.local
     command: ["python", "-m", "app.services.worker", "--source=db", "--sleep=300"]
     environment:
-      MYSQL_HOST: db
-      MYSQL_PORT: 3306
-      MYSQL_DATABASE: adblock
-      MYSQL_USER: adblock
-      MYSQL_PASSWORD: adblock_pass
       WORKER_LOG_LEVEL: INFO
-    depends_on:
-      db:
-        condition: service_healthy
     restart: unless-stopped
     volumes:
       - ./backend:/app

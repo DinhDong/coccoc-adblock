@@ -696,6 +696,7 @@ def test_rules_adhoc(items: list) -> Dict[str, Any]:
         report_id=scratch_id,
         environment="desktop",
         ticket_context={},
+        publish_images=False,
     )
 
     return {
@@ -1078,6 +1079,14 @@ def delete_ticket(report_id: str) -> int:
         text = entry.get("rule") if isinstance(entry, dict) else entry
         if text:
             _unregister_rule_for_report(report_id, text)
+
+    # Ceph outlives the database row, so its objects have to go too.
+    try:
+        from .storage.report_images import delete_report_images
+
+        delete_report_images(report_id)
+    except Exception:
+        pass
 
     with get_connection() as conn:
         with conn.cursor() as cur:

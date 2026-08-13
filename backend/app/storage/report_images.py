@@ -97,6 +97,36 @@ def upload_report_images(report_id: str) -> Dict[str, str]:
     return uploaded
 
 
+def delete_report_images(report_id: str) -> int:
+    """
+    Remove a report's images from Ceph, returning how many were deleted.
+
+    Called when a report is deleted: the bucket outlives the database row, so
+    without this every deleted report leaves its screenshots behind with
+    nothing left to reference them.
+    """
+    from .s3_storage import create_s3_storage_from_env
+
+    try:
+        storage = create_s3_storage_from_env()
+    except Exception:
+        logger.exception("Report images: could not initialise Ceph storage for delete")
+        return 0
+
+    if storage is None:
+        return 0
+
+    removed = 0
+    for _, (_, key_template) in IMAGE_KINDS.items():
+        try:
+            storage.delete_object(object_key=key_template.format(report_id=report_id))
+            removed += 1
+        except Exception:
+            logger.exception("Report images: failed deleting %s image", report_id)
+
+    return removed
+
+
 def object_key_from_uri(uri: str) -> Optional[str]:
     """Strip the s3://bucket/ prefix so the key can be presigned."""
     if not uri or not uri.startswith("s3://"):

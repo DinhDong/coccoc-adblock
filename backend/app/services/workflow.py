@@ -407,6 +407,7 @@ def run_rule_validation(
     run_sandbox_checks: bool = True,
     crawl_elapsed_ms: Optional[int] = None,
     generation_elapsed_ms: Optional[int] = None,
+    publish_images: bool = True,
 ) -> Dict[str, Any]:
     """
     Stage 2 — run syntax, scope, policy, per-rule sandbox, and combined sandbox.
@@ -579,18 +580,23 @@ def run_rule_validation(
 
     # All three screenshots exist by this point, so publish them together.
     # Never fatal: a report without pictures is still a valid report.
-    try:
-        from app.storage.report_images import upload_report_images
+    # Scratch runs (ad-hoc rule tests) have no report to attach images to, and
+    # uploading theirs would litter the bucket with orphans.
+    if not publish_images:
+        logger.info("Stage 2: scratch run, skipping image upload for %s", report_id)
+    else:
+        try:
+            from app.storage.report_images import upload_report_images
 
-        images = upload_report_images(report_id)
-        if images:
-            save_report_images(report_id, images)
-    except Exception as exc:
-        logger.warning(
-            "Stage 2: failed uploading report images: %s",
-            exc,
-            exc_info=True,
-        )
+            images = upload_report_images(report_id)
+            if images:
+                save_report_images(report_id, images)
+        except Exception as exc:
+            logger.warning(
+                "Stage 2: failed uploading report images: %s",
+                exc,
+                exc_info=True,
+            )
 
     logger.info(
         "Stage 2: %d/%d rules passed validation → %s | "

@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { X, ExternalLink, CheckCircle2, XCircle, AlertTriangle, Pencil, Trash2, Plus, Check, Combine } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { X, ExternalLink, CheckCircle2, XCircle, AlertTriangle, Pencil, Trash2, Plus, Check, Combine, ZoomIn, ZoomOut, RotateCcw } from "lucide-react";
 import { STAGES, ENVS, CURRENT_USER, userOf } from "../constants.js";
 import { fmtDate, fmtDur } from "../utils.js";
 import { Person } from "./Avatar.jsx";
@@ -75,22 +75,124 @@ export function clearReportImageCache(reportId) {
   else imageCache.clear();
 }
 
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 8;
+const ZOOM_STEP = 0.25;
+
 function Lightbox({ image, onClose }) {
+  const [zoom, setZoom] = useState(1);
+  // Pan offset in screen pixels, so a zoomed-in crawl can be read top to bottom.
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  // Size the image fills at 100%, measured once it has loaded. Zoom multiplies
+  // this into a real width/height rather than a CSS transform: transform
+  // scales the already-rasterised element, so a 4000px screenshot laid out at
+  // ~900px would be magnified from that 900px bitmap and look mushy. Changing
+  // the layout size makes the browser resample from the full-resolution source.
+  const [fit, setFit] = useState(null);
+  const drag = useRef(null);
+  const stage = useRef(null);
+
+  const onImageLoad = (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    if (r.width && r.height) setFit({ w: r.width, h: r.height });
+  };
+
+  const clamp = (z) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+  const reset = () => { setZoom(1); setOffset({ x: 0, y: 0 }); };
+
+  const zoomBy = (delta) =>
+    setZoom((z) => {
+      const next = clamp(z + delta);
+      if (next === 1) setOffset({ x: 0, y: 0 });
+      return next;
+    });
+
   useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    const onKey = (e) => {
+      if (e.key === "Escape") return onClose();
+      if (e.key === "+" || e.key === "=") zoomBy(ZOOM_STEP);
+      if (e.key === "-" || e.key === "_") zoomBy(-ZOOM_STEP);
+      if (e.key === "0") reset();
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  // React registers onWheel passively, so preventDefault there is ignored and
+  // the page scrolls behind the overlay. Bind natively with passive:false.
+  useEffect(() => {
+    const node = stage.current;
+    if (!node) return;
+    const onWheel = (e) => {
+      e.preventDefault();
+      zoomBy(e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP);
+    };
+    node.addEventListener("wheel", onWheel, { passive: false });
+    return () => node.removeEventListener("wheel", onWheel);
+  }, []);
+
+  const onPointerDown = (e) => {
+    if (zoom === 1) return;
+    drag.current = { x: e.clientX - offset.x, y: e.clientY - offset.y };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const onPointerMove = (e) => {
+    if (!drag.current) return;
+    setOffset({ x: e.clientX - drag.current.x, y: e.clientY - drag.current.y });
+  };
+  const onPointerUp = () => { drag.current = null; };
+
   return (
-    <div className="ad-lightbox" onClick={onClose} role="dialog" aria-modal="true" aria-label={image.label}>
-      <button className="ad-lightclose" onClick={onClose} aria-label="Close image">
-        <X size={20} />
-      </button>
-      <figure onClick={(e) => e.stopPropagation()}>
-        <img src={image.url} alt={image.label} />
-        <figcaption>{image.label}</figcaption>
-      </figure>
+    <div className="ad-lightbox" role="dialog" aria-modal="true" aria-label={image.label}>
+      <div className="ad-lightbar" onClick={(e) => e.stopPropagation()}>
+        <button className="ad-lightbtn" onClick={() => zoomBy(-ZOOM_STEP)} disabled={zoom <= ZOOM_MIN} aria-label="Zoom out" title="Zoom out (−)">
+          <ZoomOut size={17} />
+        </button>
+        <span className="ad-zoomlevel">{Math.round(zoom * 100)}%</span>
+        <button className="ad-lightbtn" onClick={() => zoomBy(ZOOM_STEP)} disabled={zoom >= ZOOM_MAX} aria-label="Zoom in" title="Zoom in (+)">
+          <ZoomIn size={17} />
+        </button>
+        <button className="ad-lightbtn" onClick={reset} disabled={zoom === 1} aria-label="Reset zoom" title="Reset (0)">
+          <RotateCcw size={16} />
+        </button>
+        <button className="ad-lightbtn" onClick={onClose} aria-label="Close image" title="Close (Esc)">
+          <X size={18} />
+        </button>
+      </div>
+
+      <div
+        className="ad-lightstage"
+        ref={stage}
+        onClick={(e) => { if (e.target === e.currentTarget && zoom === 1) onClose(); }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        style={{ cursor: zoom > 1 ? (drag.current ? "grabbing" : "grab") : "default" }}
+      >
+        <img
+          src={image.url}
+          alt={image.label}
+          draggable={false}
+          onLoad={onImageLoad}
+          style={
+            zoom === 1 || !fit
+              ? { transform: `translate(${offset.x}px, ${offset.y}px)` }
+              : {
+                  // Explicit size, not scale() — this is what keeps it sharp.
+                  width: `${fit.w * zoom}px`,
+                  height: `${fit.h * zoom}px`,
+                  maxWidth: "none",
+                  maxHeight: "none",
+                  transform: `translate(${offset.x}px, ${offset.y}px)`,
+                }
+          }
+        />
+      </div>
+
+      <figcaption className="ad-lightcap">
+        {image.label} · scroll or +/− to zoom{zoom > 1 ? " · drag to pan" : ""}
+      </figcaption>
     </div>
   );
 }

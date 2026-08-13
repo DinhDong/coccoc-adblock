@@ -280,24 +280,44 @@ table.ad-table { width: 100%; border-collapse: collapse; min-width: 860px; }
 
 /* enlarged screenshot */
 .ad-lightbox {
-  position: fixed; inset: 0; z-index: 100; background: rgba(15, 25, 20, 0.85);
-  display: flex; align-items: center; justify-content: center; padding: 32px;
-  cursor: zoom-out;
+  position: fixed; inset: 0; z-index: 100; background: rgba(15, 25, 20, 0.9);
+  display: flex; flex-direction: column;
 }
-.ad-lightbox figure { margin: 0; max-width: 100%; max-height: 100%; cursor: default; }
-.ad-lightbox img {
-  display: block; max-width: 100%; max-height: calc(100vh - 96px);
-  object-fit: contain; border-radius: 8px; background: var(--card);
+.ad-lightbar {
+  flex: none; display: flex; align-items: center; justify-content: flex-end; gap: 6px;
+  padding: 10px 14px; background: rgba(0,0,0,0.35);
 }
-.ad-lightbox figcaption {
-  color: #fff; font-size: 12.5px; text-align: center; margin-top: 10px;
+.ad-lightbtn {
+  background: none; border: 1px solid transparent; border-radius: 6px;
+  color: #fff; cursor: pointer; padding: 6px; line-height: 0;
 }
-.ad-lightclose {
-  position: absolute; top: 16px; right: 18px; background: none; border: none;
-  color: #fff; cursor: pointer; padding: 6px; line-height: 0; border-radius: 6px;
+.ad-lightbtn:hover:not(:disabled) { background: rgba(255,255,255,0.16); }
+.ad-lightbtn:disabled { opacity: 0.35; cursor: default; }
+.ad-lightbtn:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
+.ad-zoomlevel {
+  color: #fff; font-size: 12.5px; font-family: var(--mono);
+  min-width: 52px; text-align: center; user-select: none;
 }
-.ad-lightclose:hover { background: rgba(255,255,255,0.15); }
-.ad-lightclose:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
+/* overflow hidden keeps a scaled image inside the stage instead of forcing
+   the whole overlay to scroll */
+.ad-lightstage {
+  flex: 1; min-height: 0; overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+  touch-action: none;
+}
+/* No will-change/transform scaling here: that pins the image to one GPU
+   texture rasterised at layout size, so zooming magnifies that bitmap instead
+   of resampling the source. Zoom sets width/height explicitly instead. */
+.ad-lightstage img {
+  display: block; max-width: 100%; max-height: 100%;
+  object-fit: contain; border-radius: 6px; background: var(--card);
+  user-select: none; -webkit-user-drag: none;
+  image-rendering: auto;
+}
+.ad-lightcap {
+  flex: none; color: rgba(255,255,255,0.85); font-size: 12.5px;
+  text-align: center; padding: 10px 14px 14px;
+}
 
 /* bulk selection in the rule library */
 .ad-check { width: 15px; height: 15px; accent-color: var(--green-deep); cursor: pointer; }

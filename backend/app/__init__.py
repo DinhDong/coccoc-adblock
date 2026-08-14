@@ -224,6 +224,9 @@ def create_app():
         if duplicate_choice not in {None, "discard", "keep"}:
             return {"error": "duplicate_choice must be 'discard' or 'keep'"}, 400
 
+        if get_ticket_status(report_id) is None:
+            return {"error": "ticket not found; create it before starting the pipeline"}, 404
+
         update_ticket_status(report_id, "crawling")
 
         try:

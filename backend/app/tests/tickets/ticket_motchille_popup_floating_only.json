@@ -1,0 +1,79 @@
+{
+  "platform": "desktop",
+  "problem_type": "specific_ad_not_blocked",
+  "request": "[Desktop][Adblock] - motchille.app/danh-sach/phim-chieu-rap: Block popup and floating ads only",
+  "description": "This ticket-context test case is intentionally narrow. Only popup, modal, overlay, and floating ad elements should be blocked. Do not try to block all banners, movie cards, category blocks, or normal page content.",
+  "steps": [
+    "Open https://motchille.app/danh-sach/phim-chieu-rap",
+    "Enable Adblock mode",
+    "Observe any popup, modal, overlay, or floating ad containers",
+    "Verify the movie listing page remains usable after those popup/floating ads are hidden"
+  ],
+  "actual": "Popup, modal, overlay, or floating ads may appear on the movie listing page.",
+  "expected": "Popup, modal, overlay, and floating ads are hidden while normal movie listing content remains visible and usable.",
+  "target_to_block": [
+    "popup modal",
+    "modal backdrop",
+    "fullscreen overlay",
+    "floating ad container",
+    "sticky floating ad",
+    "closeable popup ad"
+  ],
+  "target_to_preserve": [
+    "movie cards",
+    "movie posters",
+    "movie titles",
+    "category listing",
+    "pagination",
+    "navigation/header/search",
+    "main content",
+    "footer"
+  ],
+  "current_rules": [],
+  "matched_rules": [
+    {
+      "rule": "motchille.app##div.adserver",
+      "problem": "too broad for this ticket; this test only wants popup/floating ads"
+    }
+  ],
+  "blocked_resources": [],
+  "validation_hints": {
+    "must_preserve_text": [
+      "Phim chieu rap",
+      "Phim",
+      "The loai"
+    ],
+    "must_not_generate_rules": [
+      "motchille.app##body",
+      "motchille.app##main",
+      "motchille.app##header",
+      "motchille.app##footer",
+      "motchille.app##nav",
+      "motchille.app##section",
+      "motchille.app##article",
+      "motchille.app##div.container",
+      "motchille.app##div.content",
+      "motchille.app##div.movie",
+      "motchille.app##div.movie-item",
+      "motchille.app##div.film",
+      "motchille.app##div.film-item",
+      "motchille.app##div.card",
+      "motchille.app##a[href*=\"/phim/\"]",
+      "||motchille.app^$document"
+    ],
+    "prefer_narrow_rules": [
+      "motchille.app##div.modal-backdrop",
+      "motchille.app##div.modal",
+      "motchille.app##div.popup",
+      "motchille.app##div.overlay",
+      "motchille.app##div.floating",
+      "motchille.app##div[class*=\"popup\"]",
+      "motchille.app##div[class*=\"modal\"]",
+      "motchille.app##div[class*=\"overlay\"]",
+      "motchille.app##div[class*=\"floating\"]"
+    ]
+  },
+  "raw": {
+    "test_goal": "This ticket is intentionally narrow. It verifies ticket_context flow for Motchille and should not solve broad banner or sitewide ad blocking."
+  }
+}

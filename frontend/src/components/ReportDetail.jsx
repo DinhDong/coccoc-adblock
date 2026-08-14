@@ -456,7 +456,11 @@ function RuleRow({ r, index, state, selected, onToggle, onDecide, onEditRule, on
             {r.decision === "approve" ? <><CheckCircle2 /> Deployed</> : <><XCircle /> Rejected</>}
           </span>
         )}
-        {r.status === "failed" && <span className="ad-mute">—</span>}
+        {r.status === "failed" && (
+          <span className="ad-decided r" title="The sandbox rejected this rule; no moderator decision needed">
+            <XCircle /> Auto-rejected
+          </span>
+        )}
       </td>
       <td>
         <RuleActions
@@ -538,6 +542,14 @@ export default function ReportDetail({
   };
   // Anything the sandbox did not auto-reject is the moderator's to rule on,
   // including hand-written rules that were never validated.
+  // A run lives on a worker thread now, so a backend restart mid-run leaves
+  // the ticket stuck in-process with nothing to move it on. Flag it rather
+  // than resetting it automatically — a teammate's run may still be alive.
+  const stalled =
+    t.state === "inprocess" &&
+    t.updatedAt &&
+    Date.now() - new Date(t.updatedAt).getTime() > 10 * 60 * 1000;
+
   const decidable = (t.rules || []).filter((r) => r.status !== "failed");
   const undecided = decidable.filter((r) => !r.decision).length;
   const approved = decidable.filter((r) => r.decision === "approve").length;
@@ -696,8 +708,11 @@ export default function ReportDetail({
         )}
         {t.state === "inprocess" && (
           <>
-            <span className="ad-tally">The pipeline is processing this report. Refresh to see updates.</span>
-            <EditTicketButton onEdit={onEdit} />
+            <span className="ad-tally">
+              {stalled
+                ? "No progress for over 10 minutes — the backend may have restarted mid-run. Cancel to put this back in Draft, then run it again."
+                : "The pipeline is running this report in the background. You can close this and come back."}
+            </span>
             <button className="ad-btn ad-btn-ghost" onClick={onCancelRun}>Cancel run</button>
           </>
         )}

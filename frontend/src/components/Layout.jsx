@@ -1,5 +1,5 @@
 import {
-  LayoutDashboard, ClipboardList, FileCode2, MessageSquareText, Settings,
+  ClipboardList, FileCode2, MessageSquareText, Settings,
   TrendingUp, Gauge, HelpCircle, Coins,
 } from "lucide-react";
 import { CURRENT_USER, VIEW_TITLES } from "../constants.js";
@@ -19,7 +19,6 @@ export default function Layout({ view, setView, lastSync, children }) {
           </div>
         </div>
         <nav className="ad-nav">
-          <button className={"ad-navitem" + (view === "dashboard" ? " on" : "")} onClick={() => setView("dashboard")}><LayoutDashboard /> Dashboard</button>
           <div className="ad-navlabel">Reports</div>
           <button className={"ad-navitem" + (view === "reports" ? " on" : "")} onClick={() => setView("reports")}><ClipboardList /> List</button>
           <div className="ad-navlabel">Rules</div>

@@ -1,12 +1,11 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { STATE_ORDER, STAGES, CURRENT_USER } from "./constants.js";
-import { nowISO, todayISO, makeRules } from "./utils.js";
+import { nowISO, todayISO } from "./utils.js";
 import Layout from "./components/Layout.jsx";
 import ReportDetail, { clearReportImageCache } from "./components/ReportDetail.jsx";
 import NewReportModal from "./components/NewReportModal.jsx";
 import DuplicateTargetModal from "./components/DuplicateTargetModal.jsx";
 import Reports from "./pages/Reports.jsx";
-import Dashboard from "./pages/Dashboard.jsx";
 import Trend from "./pages/Trend.jsx";
 import Performance from "./pages/Performance.jsx";
 import RuleLibrary from "./pages/RuleLibrary.jsx";
@@ -16,7 +15,7 @@ export default function App() {
   const [tickets, setTickets] = useState([]);
   const [modal, setModal] = useState(null); // {kind:'ticket',id} | {kind:'new'}
   const [query, setQuery] = useState("");
-  const [view, setView] = useState("reports"); // "reports" | "dashboard" | "trend" | "performance"
+  const [view, setView] = useState("reports"); // "reports" | "library" | "trend" | "performance" | "tokens" | "playground"
   const [tab, setTab] = useState("review");
   const [userFilter, setUserFilter] = useState("all");
   const [refreshing, setRefreshing] = useState(false);
@@ -93,15 +92,6 @@ export default function App() {
     }
   };
 
-  const advance = (id, stageIdx) => {
-    if (stageIdx >= STAGES.length) {
-      setT(id, (t) => ({ state: "review", stage: null, rules: makeRules(t), reviewReadyAt: nowISO() }));
-      return;
-    }
-    setT(id, { state: "inprocess", stage: STAGES[stageIdx].k });
-    pushTimer(id, setTimeout(() => advance(id, stageIdx + 1), 2700 + stageIdx * 500));
-  };
-
   // Ask the backend whether this link has been run before, so the choice can
   // be put to the user before anything is crawled or any tokens are spent.
   const findDuplicates = async (id, url) => {
@@ -148,7 +138,7 @@ export default function App() {
     }
 
     try {
-      await fetch(`${backendUrl}/api/tickets/${encodeURIComponent(id)}/run`, {
+      const response = await fetch(`${backendUrl}/api/tickets/${encodeURIComponent(id)}/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -165,28 +155,89 @@ export default function App() {
           duplicate_choice: duplicateChoice,
         }),
       });
+
+      // 202 means the run was accepted onto the worker queue and is now
+      // running in the background; the outcome arrives via polling.
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        // 409 means a run for this report is already queued or running. The
+        // ticket really is in progress, so keep showing that and attach a
+        // watcher rather than resetting it to draft.
+        if (response.status === 409) {
+          clearReportImageCache(id);
+          setTab("review");
+          watchRun(id);
+          return;
+        }
+        throw new Error(body.error || `run rejected (${response.status})`);
+      }
     } catch (error) {
-      console.error(`Failed to run pipeline for ticket ${id}`, error);
+      console.error(`Failed to queue pipeline for ticket ${id}`, error);
+      window.alert(`Could not start this run: ${error.message}`);
+      setT(id, { state: "draft", stage: null, runStartedAt: null });
+      return;
     }
 
     // A re-run replaces the screenshots, so drop any cached presigned URLs
     // for this report before the modal is opened again.
     clearReportImageCache(id);
-    await refreshBoard();
     setTab("review");
+    watchRun(id);
+  };
+
+  // The run outlives this request now, so follow it by polling the ticket
+  // until the backend moves it out of an in-progress state. Kept in a ref so
+  // a second run on the same report replaces its watcher instead of stacking.
+  const watchers = useRef({});
+
+  const watchRun = (id) => {
+    if (watchers.current[id]) clearInterval(watchers.current[id]);
+
+    const started = Date.now();
+    watchers.current[id] = setInterval(async () => {
+      // Give up after 10 minutes rather than polling a dead backend forever.
+      if (Date.now() - started > 10 * 60 * 1000) {
+        clearInterval(watchers.current[id]);
+        delete watchers.current[id];
+        return;
+      }
+
+      try {
+        const response = await fetch(`${backendUrl}/api/tickets`);
+        if (!response.ok) return;
+        const data = await response.json();
+        const fresh = (data.tickets || []).find((t) => t.id === id);
+        setTickets(data.tickets || []);
+        setLastSync(new Date());
+
+        if (fresh && fresh.state !== "inprocess") {
+          clearInterval(watchers.current[id]);
+          delete watchers.current[id];
+        }
+      } catch (error) {
+        // Transient backend hiccup — keep polling until the timeout.
+        console.debug("run poll failed", error);
+      }
+    }, 4000);
   };
   const cancelRun = async (id) => { clearFor(id); setT(id, { state: "draft", stage: null, runStartedAt: null }); await updateTicketStatusInBackend(id, "draft"); setTab("draft"); };
 
-  // resume seeded in-process reports; clear all timers on unmount
+  // A run now outlives the page, so any ticket the backend still reports as
+  // in-process gets a watcher rather than a simulated stage timer.
   useEffect(() => {
     tickets.forEach((t) => {
-      if (t.state === "inprocess") {
-        const idx = Math.max(0, STAGES.findIndex((s) => s.k === t.stage));
-        pushTimer(t.id, setTimeout(() => advance(t.id, idx + 1), 3200));
-      }
+      if (t.state === "inprocess" && !watchers.current[t.id]) watchRun(t.id);
     });
-    return () => Object.values(timers.current).flat().forEach(clearTimeout);
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tickets]);
+
+  useEffect(() => {
+    const running = watchers.current;
+    const pending = timers.current;
+    return () => {
+      Object.values(running).forEach(clearInterval);
+      Object.values(pending).flat().forEach(clearTimeout);
+    };
   }, []);
 
   useEffect(() => {
@@ -506,9 +557,6 @@ ${error.message}`);
           onOpen={(id) => setModal({ kind: "ticket", id })}
           onNew={() => setModal({ kind: "new" })}
         />
-      )}
-      {view === "dashboard" && (
-        <Dashboard tickets={tickets} goReview={() => { setView("reports"); setTab("review"); }} />
       )}
       {view === "trend" && <Trend tickets={tickets} />}
       {view === "performance" && <Performance tickets={tickets} />}

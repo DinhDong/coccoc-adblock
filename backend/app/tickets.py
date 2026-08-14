@@ -234,11 +234,21 @@ def _rules_for_ui(
             continue
 
         passed = bool(outcome.get("passed"))
+
+        # The sandbox already ruled on a failed rule, so it counts as rejected
+        # without a moderator having to click it. An explicit decision still
+        # wins — someone may deliberately approve a rule the sandbox disliked.
+        auto_rejected = False
+        if not passed and not decision:
+            decision = "reject"
+            auto_rejected = True
+
         rows.append(
             {
                 "text": text,
                 "rule_type": rule_type,
                 "status": "passed" if passed else "failed",
+                "autoRejected": auto_rejected,
                 "conf": _derive_confidence(outcome),
                 "reason": (
                     outcome.get("failure_reason")

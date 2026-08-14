@@ -1,18 +1,18 @@
-beautifulsoup4>=4.12
-playwright>=1.50,<1.51
-playwright-stealth>=2.0.0
-openai>=1.0.0
-python-dotenv>=1.0.0
-Pillow>=10.0.0
-PyMySQL>=1.1.0
-cryptography>=42.0.0
-Flask>=3.0.0
-Flask-Cors>=4.0.0
-boto3>=1.35
-fastapi>=0.115,<1.0
-uvicorn[standard]>=0.30,<1.0
-python-multipart>=0.0.9,<1.0
+beautifulsoup4==4.15.0
+playwright==1.62.0
+playwright-stealth==2.0.3
+openai==3.0.0
+python-dotenv==1.2.2
+Pillow==12.3.0
+PyMySQL==1.2.0
+cryptography==50.0.0
+Flask==3.1.3
+Flask-Cors==6.0.5
+boto3==1.43.71
+fastapi==0.141.1
+uvicorn[standard]==0.52.3
+python-multipart==0.0.32
 
 # Test runner — the Dockerfile and docker-compose both document
 #   docker compose run --rm backend pytest app/tests/ -v
-pytest>=8.0.0
+pytest==9.1.1

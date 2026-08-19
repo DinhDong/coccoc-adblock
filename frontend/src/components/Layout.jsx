@@ -1,10 +1,9 @@
 import {
-  ClipboardList, FileCode2, MessageSquareText, Settings,
-  TrendingUp, Gauge, HelpCircle, Coins,
+  ClipboardList, FileCode2, FlaskConical, Settings,
+  TrendingUp, Gauge, HelpCircle, Coins, LogIn,
 } from "lucide-react";
-import { CURRENT_USER, VIEW_TITLES } from "../constants.js";
+import { VIEW_TITLES } from "../constants.js";
 import { agoText } from "../utils.js";
-import { Avatar } from "./Avatar.jsx";
 
 export default function Layout({ view, setView, lastSync, children }) {
   return (
@@ -23,7 +22,7 @@ export default function Layout({ view, setView, lastSync, children }) {
           <button className={"ad-navitem" + (view === "reports" ? " on" : "")} onClick={() => setView("reports")}><ClipboardList /> List</button>
           <div className="ad-navlabel">Rules</div>
           <button className={"ad-navitem" + (view === "library" ? " on" : "")} onClick={() => setView("library")}><FileCode2 /> Rule library</button>
-          <button className="ad-navitem" disabled title="Not part of this demo"><MessageSquareText /> Prompt templates</button>
+          <button className={"ad-navitem" + (view === "playground" ? " on" : "")} onClick={() => setView("playground")}><FlaskConical /> Rule playground</button>
           <div className="ad-navlabel">Analytics</div>
           <button className={"ad-navitem" + (view === "trend" ? " on" : "")} onClick={() => setView("trend")}><TrendingUp /> Trend</button>
           <button className={"ad-navitem" + (view === "performance" ? " on" : "")} onClick={() => setView("performance")}><Gauge /> Performance</button>
@@ -33,13 +32,6 @@ export default function Layout({ view, setView, lastSync, children }) {
           <button className="ad-navitem" disabled title="Not part of this demo"><Settings /> Settings</button>
           <button className="ad-navitem" disabled title="Not part of this demo"><HelpCircle /> Help</button>
         </nav>
-        <div className="ad-sidefoot">
-          <Avatar uk={CURRENT_USER.k} size={30} />
-          <div>
-            <div className="ad-name">{CURRENT_USER.name}</div>
-            <div className="ad-role">s3978728@rmit.edu.vn</div>
-          </div>
-        </div>
       </aside>
 
       {/* ---------- main ---------- */}
@@ -49,11 +41,9 @@ export default function Layout({ view, setView, lastSync, children }) {
             CMS / <b>{VIEW_TITLES[view]}</b>
             {view !== "reports" && <span className="ad-crumbsub"> · Last updated {agoText(lastSync)}</span>}
           </div>
-          <div className="ad-userchip">
-            <Avatar uk={CURRENT_USER.k} size={26} />
-            {CURRENT_USER.name}
-            <span className="ad-role">ADMIN</span>
-          </div>
+          <button className="ad-btn ad-btn-ghost" disabled title="Not part of this demo">
+            <LogIn /> Log in
+          </button>
         </header>
         {children}
       </div>

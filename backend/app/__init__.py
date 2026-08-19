@@ -13,6 +13,9 @@ try:
         merge_two_rules,
         fetch_report_images,
         test_rules_adhoc,
+        run_playground_test,
+        reconcile_stale_runs,
+        playground_image_path,
         update_ticket_status,
         update_ticket_details,
         get_ticket_status,
@@ -35,6 +38,9 @@ except ImportError:  # pragma: no cover
         merge_two_rules,
         fetch_report_images,
         test_rules_adhoc,
+        run_playground_test,
+        reconcile_stale_runs,
+        playground_image_path,
         update_ticket_status,
         update_ticket_details,
         get_ticket_status,
@@ -70,6 +76,16 @@ EDITABLE_FIELDS = {"url", "env", "focus", "targets", "notes", "name"}
 def create_app():
     app = Flask(__name__)
     CORS(app)
+
+    # Nothing is running yet in this process, so any ticket the database still
+    # calls in-progress was stranded by a previous one. Best-effort: a DB that
+    # is not reachable at boot must not stop the app from starting.
+    try:
+        stranded = reconcile_stale_runs()
+        if stranded:
+            app.logger.warning("Reset %d run(s) stranded by a previous process", stranded)
+    except Exception as exc:
+        app.logger.warning("Could not reconcile stale runs: %s", exc)
 
     @app.get("/health")
     def health():
@@ -154,6 +170,31 @@ def create_app():
             return {"error": str(exc)}, 404
         except Exception as exc:
             return {"error": "sandbox run failed: %s" % exc}, 500
+
+    @app.post("/api/playground/test")
+    def playground_test():
+        from flask import request
+
+        payload = request.get_json(force=True, silent=True) or {}
+        try:
+            return {"ok": True, "result": run_playground_test(
+                payload.get("url", ""),
+                payload.get("rules") or [],
+                payload.get("environment", "desktop"),
+            )}, 200
+        except ValueError as exc:
+            return {"error": str(exc)}, 400
+        except Exception as exc:
+            return {"error": "sandbox run failed: %s" % exc}, 500
+
+    @app.get("/api/playground/<run_id>/screenshot/<kind>")
+    def playground_screenshot(run_id, kind):
+        from flask import send_file
+
+        path = playground_image_path(run_id, kind)
+        if path is None:
+            return {"error": "not found"}, 404
+        return send_file(str(path.resolve()), mimetype="image/png")
 
     @app.post("/api/rules/bulk-delete")
     def bulk_delete_rules():

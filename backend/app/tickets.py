@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import uuid
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
@@ -728,6 +729,88 @@ def test_rules_adhoc(items: list) -> Dict[str, Any]:
     }
 
 
+PLAYGROUND_PREFIX = "scratch-"
+
+
+def run_playground_test(
+    url: str,
+    rules: list,
+    environment: str = "desktop",
+) -> Dict[str, Any]:
+    """
+    Render a page with hand-written rules applied, without a report.
+
+    Unlike test_rules_adhoc this takes a raw URL and rule strings, so it can
+    be used to try an idea before any report exists. Nothing is persisted:
+    no crawl_inputs row, no Ceph upload. The screenshots stay on local disk
+    and are served back through the API.
+    """
+    from .services.workflow import run_rule_validation
+
+    url = (url or "").strip()
+    if not url:
+        raise ValueError("a URL is required")
+    if not url.startswith(("http://", "https://")):
+        raise ValueError("URL must start with http:// or https://")
+
+    cleaned = [r.strip() for r in (rules or []) if isinstance(r, str) and r.strip()]
+    if not cleaned:
+        raise ValueError("enter at least one rule to test")
+
+    run_id = f"{PLAYGROUND_PREFIX}{uuid.uuid4().hex[:12]}"
+    result = run_rule_validation(
+        rules=cleaned,
+        url=url,
+        report_id=run_id,
+        environment=environment,
+        ticket_context={},
+        publish_images=False,
+    )
+
+    from .storage.report_images import local_image_paths
+
+    available = [
+        kind for kind, path in local_image_paths(run_id).items() if path.exists()
+    ]
+
+    return {
+        "runId": run_id,
+        "url": url,
+        "environment": environment,
+        "total": result.get("total", 0),
+        "passed": result.get("passed", 0),
+        "failed": result.get("failed", 0),
+        "validationMs": result.get("validation_elapsed_ms"),
+        "images": available,
+        "outcomes": [
+            {
+                "rule": o.get("rule"),
+                "passed": bool(o.get("passed")),
+                "reason": o.get("failure_reason") or o.get("failure_stage") or "",
+            }
+            for o in (result.get("outcomes") or [])
+        ],
+    }
+
+
+def playground_image_path(run_id: str, kind: str):
+    """
+    Resolve a scratch screenshot for serving, refusing anything that is not a
+    playground run id so this cannot be pointed at arbitrary files.
+    """
+    from .storage.report_images import local_image_paths
+
+    if not run_id.startswith(PLAYGROUND_PREFIX) or "/" in run_id or "\\" in run_id:
+        return None
+    if not re.fullmatch(r"scratch-[0-9a-f]{12}", run_id):
+        return None
+
+    path = local_image_paths(run_id).get(kind)
+    if path is None or not path.exists():
+        return None
+    return path
+
+
 def delete_rules_bulk(items: list) -> Dict[str, Any]:
     """Delete many rules in one call. Reports each failure rather than aborting."""
     deleted, failed = 0, []
@@ -844,6 +927,53 @@ ORDER BY ci.created_at DESC
 EDITABLE_TICKET_STATES = {"draft", "submitted", "review", "failed", "crawl_failed",
                           "generated", "validated", "no_rules", "crawling",
                           "generating", "validating", "inprocess"}
+
+
+RUNNING_STATUSES = ("crawling", "generating", "validating", "inprocess")
+
+
+def _db_is_private() -> bool:
+    """
+    True when MySQL is this machine's own instance.
+
+    Reconciling stale runs means writing to rows this process does not own. On
+    the shared team server another developer's run could legitimately be in
+    flight, and resetting it would destroy their work. Against a local
+    container there is no other writer, so it is safe.
+    """
+    host = (os.getenv("MYSQL_HOST") or "127.0.0.1").strip().lower()
+    return host in {"127.0.0.1", "localhost", "::1", "db"}
+
+
+def reconcile_stale_runs() -> int:
+    """
+    Fail any ticket left mid-run by a previous process.
+
+    The job registry lives in memory, so when the backend restarts nothing is
+    actually running any more — but the ticket still says 'crawling' and the
+    UI waits forever. Called once at startup.
+    """
+    if not _db_is_private():
+        return 0
+
+    placeholders = ",".join(["%s"] * len(RUNNING_STATUSES))
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT report_id FROM crawl_inputs WHERE status IN ({placeholders})",
+                RUNNING_STATUSES,
+            )
+            stranded = [r["report_id"] for r in cur.fetchall() if r.get("report_id")]
+
+    for report_id in stranded:
+        update_ticket_status(report_id, "failed")
+        record_run_failure(
+            report_id,
+            "The backend restarted while this run was in progress, so it was "
+            "abandoned. Nothing was saved — run the report again.",
+        )
+
+    return len(stranded)
 
 
 def get_ticket_status(report_id: str) -> Optional[str]:

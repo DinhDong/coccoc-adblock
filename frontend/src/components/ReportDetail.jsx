@@ -79,7 +79,7 @@ const ZOOM_MIN = 1;
 const ZOOM_MAX = 8;
 const ZOOM_STEP = 0.25;
 
-function Lightbox({ image, onClose }) {
+export function Lightbox({ image, onClose }) {
   const [zoom, setZoom] = useState(1);
   // Pan offset in screen pixels, so a zoomed-in crawl can be read top to bottom.
   const [offset, setOffset] = useState({ x: 0, y: 0 });

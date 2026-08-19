@@ -10,6 +10,7 @@ import Trend from "./pages/Trend.jsx";
 import Performance from "./pages/Performance.jsx";
 import RuleLibrary from "./pages/RuleLibrary.jsx";
 import TokenUsage from "./pages/TokenUsage.jsx";
+import Playground from "./pages/Playground.jsx";
 
 export default function App() {
   const [tickets, setTickets] = useState([]);
@@ -17,12 +18,13 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [view, setView] = useState("reports"); // "reports" | "library" | "trend" | "performance" | "tokens" | "playground"
   const [tab, setTab] = useState("review");
-  const [userFilter, setUserFilter] = useState("all");
   const [refreshing, setRefreshing] = useState(false);
   const [rules, setRules] = useState([]);
   const [rulesLoading, setRulesLoading] = useState(false);
   const [usage, setUsage] = useState(null);
   const [usageLoading, setUsageLoading] = useState(false);
+  // Rules handed over from the library so the playground can run them on open.
+  const [playgroundSeed, setPlaygroundSeed] = useState(null);
   const [lastSync, setLastSync] = useState(() => new Date());
   const backendUrl = "http://127.0.0.1:5000";
   const [, setNowTick] = useState(0);
@@ -509,7 +511,6 @@ ${error.message}`);
       tickets
         .filter(
           (t) =>
-            (userFilter === "all" || t.createdBy === userFilter || t.reviewedBy === userFilter) &&
             (!q || t.name.toLowerCase().includes(q) || t.url.toLowerCase().includes(q))
         )
         .sort(
@@ -517,7 +518,7 @@ ${error.message}`);
             b.created.localeCompare(a.created) ||
             parseInt(b.id.slice(1), 10) - parseInt(a.id.slice(1), 10)
         ),
-    [tickets, q, userFilter]
+    [tickets, q]
   );
   const byState = useMemo(() => {
     const m = Object.fromEntries(STATE_ORDER.map((k) => [k, []]));
@@ -531,7 +532,8 @@ ${error.message}`);
   const failures = byState.failed || [];
   const items =
     tab === "all" ? filtered
-    : tab === "review" ? [...failures, ...(byState.review || []), ...ghosts]
+    // Active runs first, then failures needing attention, then the queue.
+    : tab === "review" ? [...ghosts, ...failures, ...(byState.review || [])]
     : byState[tab] || [];
 
   const openTicket = modal?.kind === "ticket" ? tickets.find((t) => t.id === modal.id) : null;
@@ -549,8 +551,6 @@ ${error.message}`);
           setTab={setTab}
           query={query}
           setQuery={setQuery}
-          userFilter={userFilter}
-          setUserFilter={setUserFilter}
           lastSync={lastSync}
           refreshing={refreshing}
           onRefresh={refreshBoard}
@@ -571,8 +571,11 @@ ${error.message}`);
           onBulkDelete={bulkRemoveRules}
           onMergePreview={(items) => mergeRulePair(items, true)}
           onMergeRules={(items) => mergeRulePair(items, false)}
-          onTestRules={testRules}
+          onSendToPlayground={(seed) => { setPlaygroundSeed(seed); setView("playground"); }}
         />
+      )}
+      {view === "playground" && (
+        <Playground seed={playgroundSeed} onSeedConsumed={() => setPlaygroundSeed(null)} />
       )}
       {view === "tokens" && (
         <TokenUsage usage={usage} loading={usageLoading} onRefresh={loadUsage} />

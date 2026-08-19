@@ -319,12 +319,16 @@ def _normalize_ticket_state(status: str) -> tuple[str, str | None]:
         return "draft", None
 
     status = status.lower()
-    if status in {"crawling", "generating", "validating", "inprocess"}:
+    # "processing" is set by the standalone service worker
+    # (app/services/worker.py) when it claims a row; without it here a ticket
+    # that worker is actively running would render as a Draft.
+    if status in {"crawling", "generating", "validating", "inprocess", "processing"}:
         stage = {
             "crawling": "crawl",
             "generating": "generate",
             "validating": "validate",
             "inprocess": "crawl",
+            "processing": "crawl",
         }[status]
         return "inprocess", stage
 
@@ -338,7 +342,7 @@ def _normalize_ticket_state(status: str) -> tuple[str, str | None]:
         # Distinct from "draft": the run happened and did not complete.
         return "failed", None
 
-    if status in {"draft", "submitted"}:
+    if status in {"draft", "submitted", "new"}:
         return "draft", None
 
     return "draft", None

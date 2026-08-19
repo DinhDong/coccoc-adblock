@@ -618,7 +618,6 @@ def run_rule_validation(
     )
 
     return {
-        "status": "review",
         "total": report.total,
         "passed": report.passed_count,
         "failed": report.failed,
@@ -747,6 +746,7 @@ def run_pipeline(
 
         optional crawl
         → load crawl result
+        → normalize ticket context
         → generate rules
         → optionally validate
         → return summary
@@ -754,6 +754,21 @@ def run_pipeline(
     workflow_elapsed_ms starts immediately before rule generation. It therefore
     represents generation plus validation and excludes a separately executed
     crawler command.
+
+    Args:
+        report_id:      Matches data/crawl_outputs/results/<report_id>.json
+        verbose:        Print stage headers and per-rule output to stdout.
+        run_validation: If False, skip validation/sandbox stage.
+        skip_external:  Skip external filter list (EasyList etc.) dedup check.
+        url:            If provided, crawl this URL first (Stage 0) and generate
+                        rules for the resulting crawl. If omitted, an existing
+                        crawl result for report_id is reused.
+        environment:    Crawl environment used when url is provided.
+        ticket_context: Ticket metadata forwarded to the crawl when url is
+                        provided.
+        focus_region:   Optional region scope forwarded to the crawl.
+        interactive:    If False, keep existing rules without prompting.
+        **render_kwargs: Extra render options forwarded to the crawler.
     """
     from app.services.rule_registry import (
         get_domain,
@@ -836,23 +851,6 @@ def run_pipeline(
 
     env = crawl_result.get("environment", "desktop")
     page_url = crawl_result.get("url", "unknown")
-    crawl_elapsed_ms = _extract_crawl_elapsed_ms(crawl_result)
-
-    try:
-        save_crawl_input(
-            report_id=report_id,
-            domain=get_domain(page_url),
-            url=page_url,
-            ticket_context=crawl_result.get("ticket_context", {}),
-            status="success",
-            crawl_duration_ms=crawl_elapsed_ms,
-            before_screenshot=crawl_result.get("files", {}).get("screenshot", ""),
-        )
-    except Exception:
-        logger.warning(
-            "Pipeline: could not save existing crawl result to DB for %s",
-            report_id,
-        )
     normalized_ticket_context = crawl_result.get(
         "ticket_context",
         {},

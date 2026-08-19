@@ -1,7 +1,19 @@
+"""
+Database engine and session helpers.
+
+The worker can run without a database in file mode. Database mode is enabled
+when DATABASE_URL is configured, for example:
+
+    mysql+pymysql://adblock:adblock_pass@db:3306/adblock
+"""
+
+from __future__ import annotations
+
 import json
 import os
 import threading
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 try:

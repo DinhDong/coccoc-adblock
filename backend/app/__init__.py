@@ -271,7 +271,7 @@ def create_app():
             return {"error": "duplicate_choice must be 'discard' or 'keep'"}, 400
 
         if get_ticket_status(report_id) is None:
-            return {"error": "ticket not found"}, 404
+            return {"error": "ticket not found; create it before starting the pipeline"}, 404
 
         # Runs in a worker thread. The pipeline writes its own progress to
         # MySQL as it goes, so the client learns the outcome by polling the

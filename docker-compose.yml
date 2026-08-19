@@ -90,9 +90,12 @@ services:
   worker:
     build: ./backend
     env_file: .env.local
-    command: ["python", "-m", "app.services.worker", "--source=db", "--sleep=300"]
+    # The worker takes no arguments: the database is its only source and the
+    # few knobs it has are environment variables.
+    command: ["python", "-m", "app.services.worker"]
     environment:
       WORKER_LOG_LEVEL: INFO
+      WORKER_SLEEP_SECONDS: "300"
     restart: unless-stopped
     volumes:
       - ./backend:/app

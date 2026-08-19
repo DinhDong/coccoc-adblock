@@ -56,40 +56,51 @@ needs no manual SQL.
 
 ### Running the worker service
 
-`docker compose up backend` now starts the long-running worker:
+Compose starts it automatically. It takes **no arguments** — the database is its
+only source of work:
 
 ```bash
 python -m app.services.worker
 ```
 
-Worker modes:
+It polls `crawl_inputs` for `status = 'new'`, claims the oldest row with
+`FOR UPDATE SKIP LOCKED` (so several worker containers are safe to run at once),
+marks it `processing`, runs crawl -> generate -> validate, writes `rule_outputs`,
+and sets the input to `completed` or `failed`. When there is nothing to do it
+sleeps and polls again until it receives a stop signal.
 
-- `auto` (default): use DB mode when MySQL is configured (`MYSQL_USER`, `MYSQL_DATABASE`) and `crawl_inputs` / `rule_outputs` exist; otherwise use file mode.
-- `files`: scan `backend/app/tests/tickets/*.json`, skip already processed tickets in `backend/data/service_worker/processed_tickets.json`, then run crawl -> generate -> validate.
-- `db`: poll `crawl_inputs` where `status = 'new'`, mark jobs `processing`, write `rule_outputs`, then mark inputs `completed` or `failed`.
-- When no jobs are available, the worker sleeps for `WORKER_SLEEP_SECONDS` and keeps polling until it receives a stop signal.
+**It does not stop on failures.** A dropped MySQL connection, a malformed row or
+a crashing pipeline is logged against that one record and the worker moves on to
+the next. Only a stop signal (SIGINT/SIGTERM) ends the loop.
 
-Useful commands:
+Configured entirely by environment variables:
+
+| variable | default | purpose |
+|---|---|---|
+| `WORKER_SLEEP_SECONDS` | `300` | idle wait between polls |
+| `WORKER_LOG_LEVEL` | `INFO` | logging verbosity |
+| `WORKER_SKIP_VALIDATION` | unset | set truthy to skip the sandbox stage |
+| `WORKER_SKIP_EXTERNAL` | unset | set truthy to skip public filter-list checks |
+| `WORKER_HEADFUL` | unset | set truthy to watch the browser |
 
 ```bash
-# Auto-detect source
-docker compose run --rm backend app.services.worker --once
+# Follow it
+docker compose logs -f worker
 
-# Force file mode for test tickets
-docker compose run --rm backend app.services.worker --source files --once
+# Run one outside compose (uses your .env.local)
+cd backend && python -m app.services.worker
 
-# Force database mode
-docker compose run --rm backend app.services.worker --source db --once
-
-# Custom idle sleep interval
-docker compose run --rm backend app.services.worker --sleep 60
-
-# Keep waiting forever when idle
-docker compose run --rm backend app.services.worker
+# Queue work for it
+UPDATE crawl_inputs SET status = 'new' WHERE report_id = 'RPT-...';
 ```
 
-Failed jobs are terminal. Admins renew them manually by changing DB status back
-to `new` or by editing/removing the file-mode ledger entry.
+A record left `processing` means the worker died mid-run; reset it to `new` to
+have it picked up again. Failed records stay `failed` until an admin sets them
+back to `new`.
+
+Note this is the *unattended* path. The Run button in the UI goes through the
+in-process queue instead (see "The two workers" below), because a moderator
+should not wait for the next poll.
 
 ### Running the pipeline manually
 
@@ -204,7 +215,7 @@ coccoc-adblock/
 │       │   └── preview_render.py
 │       │
 │       ├── tests/
-│       │   └── tickets/                # sample tickets for --source=file
+│       │   └── tickets/                # sample tickets (legacy file mode)
 │       │
 │       └── data/                       # bind-mounted, survives the container
 │           ├── crawl_outputs/          # html, screenshots, results
@@ -246,11 +257,10 @@ coccoc-adblock/
 They are not duplicates and both are wired up in `docker-compose.yml`.
 
 **`services/worker.py` — standalone polling daemon.** Runs as its own container
-(`python -m app.services.worker --source=db --sleep=300`). Claims rows with
+(`python -m app.services.worker`, no arguments). Claims rows with
 `status='new'` using `FOR UPDATE SKIP LOCKED`, so several copies can run safely.
-Also has a file source that reads `app/tests/tickets/*.json` and keeps a ledger
-at `data/service_worker/processed_tickets.json`. This is the unattended/batch
-path: nothing needs to be watching.
+This is the unattended/batch path: nothing needs to be watching, and a failing
+record never stops the loop.
 
 **`services/jobs.py` — in-process queue.** Lives inside the Flask app and exists
 only so `POST /api/tickets/<id>/run` can return `202` immediately instead of

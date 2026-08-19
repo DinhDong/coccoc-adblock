@@ -1,114 +1,93 @@
-import json
-import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
 import app.services.worker as worker_module
-from app.services.worker import (
-    FileJobSource,
-    build_job_from_ticket,
-    extract_url_from_ticket,
-    run_worker,
-)
+from app.services.worker import run_worker
 
 
-class WorkerFileModeTests(unittest.TestCase):
-    def test_extracts_url_from_steps(self) -> None:
-        ticket = {
-            "request": "[Desktop][Adblock] - example.com/path: Block popup",
-            "steps": ["Open https://example.com/path", "Enable Adblock mode"],
-        }
+class FakeJob:
+    def __init__(self, report_id: str) -> None:
+        self.report_id = report_id
+        self.url = "https://example.com/"
+        self.environment = "desktop"
+        self.input_id = 1
 
-        self.assertEqual(extract_url_from_ticket(ticket), "https://example.com/path")
 
-    def test_builds_job_from_ticket_file(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            ticket_path = Path(temp_dir) / "ticket_example.json"
-            ticket_path.write_text(
-                json.dumps(
-                    {
-                        "platform": "desktop",
-                        "problem_type": "specific_ad_not_blocked",
-                        "steps": ["Open https://example.com/path"],
-                    }
-                ),
-                encoding="utf-8",
-            )
+class StubStopFlag:
+    """Stops the loop after a fixed number of idle/backoff waits."""
 
-            job = build_job_from_ticket(ticket_path)
+    def __init__(self, stop_after: int = 3) -> None:
+        self.value = False
+        self.waits = 0
+        self.stop_after = stop_after
 
-            self.assertEqual(job.domain, "example.com")
-            self.assertEqual(job.url, "https://example.com/path")
-            self.assertEqual(job.environment, "desktop")
-            self.assertEqual(job.jira_ticket_code, "ticket_example")
+    def install(self) -> None:
+        pass
 
-    def test_failed_ticket_is_not_claimed_again(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            base = Path(temp_dir)
-            tickets_dir = base / "tickets"
-            tickets_dir.mkdir()
-            ticket_path = tickets_dir / "ticket_example.json"
-            ticket_path.write_text(
-                json.dumps({"steps": ["Open https://example.com/path"]}),
-                encoding="utf-8",
-            )
-            source = FileJobSource(
-                tickets_dir=tickets_dir,
-                ledger_file=base / "processed_tickets.json",
-            )
+    def wait(self, _seconds: int) -> None:
+        self.waits += 1
+        if self.waits >= self.stop_after:
+            self.value = True
 
-            job = source.claim_next()
 
-            self.assertIsNotNone(job)
-            source.mark_failed(
-                job,
-                "test failure",
-                {"status": "failed", "error_message": "test failure"},
-            )
+class WorkerLoopTests(unittest.TestCase):
+    def test_sleeps_and_exits_when_no_work(self) -> None:
+        claims = []
 
-            self.assertIsNone(source.claim_next())
+        def claim():
+            claims.append(1)
+            return None
 
-    def test_worker_keeps_polling_until_explicitly_stopped(self) -> None:
-        class EmptySource:
-            name = "empty"
-
-            def __init__(self) -> None:
-                self.claim_count = 0
-
-            def claim_next(self):
-                self.claim_count += 1
-                return None
-
-            def mark_completed(self, job, output):
-                raise AssertionError("No job should be completed")
-
-            def mark_failed(self, job, error_message, output):
-                raise AssertionError("No job should fail")
-
-        class TestStopFlag:
-            def __init__(self) -> None:
-                self.value = False
-                self.wait_count = 0
-
-            def install(self) -> None:
-                pass
-
-            def wait(self, _seconds: int) -> None:
-                self.wait_count += 1
-                if self.wait_count == 3:
-                    self.value = True
-
-        source = EmptySource()
-        with patch.object(worker_module, "StopFlag", TestStopFlag):
-            processed = run_worker(
-                source=source,
-                sleep_seconds=0,
-                once=False,
-            )
+        with patch.object(worker_module, "claim_next_job", claim), \
+             patch.object(worker_module, "StopFlag", StubStopFlag):
+            processed = run_worker(sleep_seconds=0)
 
         self.assertEqual(processed, 0)
-        self.assertEqual(source.claim_count, 3)
+        self.assertEqual(len(claims), 3)
+
+    def test_continues_after_a_claim_error(self) -> None:
+        """A dropped database connection must not end the service."""
+        state = {"n": 0}
+
+        def claim():
+            state["n"] += 1
+            if state["n"] == 1:
+                raise RuntimeError("MySQL server has gone away")
+            return None
+
+        with patch.object(worker_module, "claim_next_job", claim), \
+             patch.object(worker_module, "StopFlag", StubStopFlag):
+            processed = run_worker(sleep_seconds=0)
+
+        self.assertEqual(processed, 0)
+        self.assertGreater(state["n"], 1, "worker stopped on the first claim error")
+
+    def test_continues_to_next_record_after_a_failing_one(self) -> None:
+        """One bad record must not block the ones behind it."""
+        state = {"n": 0}
+        done = []
+
+        def claim():
+            state["n"] += 1
+            if state["n"] == 1:
+                return FakeJob("bad")
+            if state["n"] == 2:
+                return FakeJob("good")
+            return None
+
+        def process(job, **_kwargs):
+            if job.report_id == "bad":
+                raise RuntimeError("pipeline crashed and could not be recorded")
+            done.append(job.report_id)
+
+        with patch.object(worker_module, "claim_next_job", claim), \
+             patch.object(worker_module, "process_job", process), \
+             patch.object(worker_module, "StopFlag", StubStopFlag):
+            processed = run_worker(sleep_seconds=0)
+
+        self.assertEqual(done, ["good"])
+        self.assertEqual(processed, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

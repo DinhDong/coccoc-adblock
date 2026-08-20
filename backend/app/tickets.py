@@ -839,10 +839,6 @@ def fetch_token_usage() -> Dict[str, Any]:
     """
     Token spend per report plus totals, for the usage page.
 
-    TOKEN_BUDGET is optional: this project has no provider-side quota wired in,
-    so the budget is whatever ceiling the team chooses to track against. When
-    unset, the page reports that no limit is configured rather than inventing
-    one.
     """
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -909,12 +905,6 @@ ORDER BY ci.created_at DESC
         bucket["completion"] += run["completionTokens"]
         bucket["total"] += run["totalTokens"]
 
-    budget = os.getenv("TOKEN_BUDGET")
-    try:
-        budget_value = int(budget) if budget else None
-    except ValueError:
-        budget_value = None
-
     return {
         "runs": runs,
         "byModel": sorted(by_model.values(), key=lambda m: -m["total"]),
@@ -924,7 +914,6 @@ ORDER BY ci.created_at DESC
             "completionTokens": sum(r["completionTokens"] for r in runs),
             "totalTokens": sum(r["totalTokens"] for r in runs),
         },
-        "budget": budget_value,
     }
 
 

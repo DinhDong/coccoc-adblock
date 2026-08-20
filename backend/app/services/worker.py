@@ -43,7 +43,10 @@ DEFAULT_TICKETS_DIR = Path("app/tests/tickets")
 DEFAULT_LEDGER_FILE = Path("data/service_worker/processed_tickets.json")
 DEFAULT_SLEEP_SECONDS = 5
 
-SUCCESS_PIPELINE_STATUSES = {"ok", "generated", "no_rules"}
+# Must match the set the HTTP API treats as success (app/__init__.py).
+# run_pipeline returns "review" on its main success path; leaving it out
+# marked every completed run as failed.
+SUCCESS_PIPELINE_STATUSES = {"review", "validated", "generated", "no_rules", "ok"}
 TERMINAL_FILE_STATUSES = {"completed", "failed"}
 
 URL_RE = re.compile(r"https?://[^\s\]})\"'<>]+", re.IGNORECASE)
@@ -154,13 +157,27 @@ def save_job_result(
                     job.input_id,
                 ),
             )
+            # Upsert: run_pipeline has already written a row for this input
+            # via save_rule_output/save_rule_validation. Inserting again left
+            # two rows per report, which duplicated every ticket in the API's
+            # LEFT JOIN against rule_outputs.
             cur.execute(
-                "INSERT INTO rule_outputs "
-                "(input_id, rules, input_tokens, output_tokens, "
-                "validation_result, after_screenshot, status, error_message) "
-                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                "SELECT id FROM rule_outputs WHERE input_id=%s", (job.input_id,)
+            )
+            existing = cur.fetchone()
+
+            cur.execute(
                 (
-                    job.input_id,
+                    "UPDATE rule_outputs SET rules=%s, input_tokens=%s, "
+                    "output_tokens=%s, validation_result=%s, after_screenshot=%s, "
+                    "status=%s, error_message=%s, updated_at=NOW() WHERE input_id=%s"
+                    if existing else
+                    "INSERT INTO rule_outputs "
+                    "(rules, input_tokens, output_tokens, validation_result, "
+                    "after_screenshot, status, error_message, input_id) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)"
+                ),
+                (
                     json.dumps(output.get("rules", []), ensure_ascii=False),
                     int(output.get("input_tokens") or 0),
                     int(output.get("output_tokens") or 0),
@@ -171,6 +188,7 @@ def save_job_result(
                     str(output.get("after_screenshot") or ""),
                     str(output.get("status") or input_status),
                     error_message or str(output.get("error_message") or ""),
+                    job.input_id,
                 ),
             )
             conn.commit()
@@ -271,7 +289,11 @@ def process_job(
             ticket_context=job.ticket_context,
             headless=headless,
             enable_scroll=True,
-            interactive=False,
+            # Never block on the CLI's "domain already has rules" prompt: keep
+            # what is already registered and only add genuinely new rules.
+            # (This replaced interactive=False, which was not a run_pipeline
+            # parameter and reached render_url as an unexpected kwarg.)
+            duplicate_choice="keep",
         )
         duration_ms = int((time.perf_counter() - started_at) * 1000)
         error_message = pipeline_error_message(result)

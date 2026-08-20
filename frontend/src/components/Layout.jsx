@@ -1,6 +1,6 @@
 import {
-  ClipboardList, FileCode2, FlaskConical, Settings,
-  TrendingUp, Gauge, HelpCircle, Coins, LogIn,
+  ClipboardList, FileCode2, FlaskConical, Radio, Settings,
+  Gauge, HelpCircle, Coins, LogIn,
 } from "lucide-react";
 import { VIEW_TITLES } from "../constants.js";
 import { agoText } from "../utils.js";
@@ -21,10 +21,10 @@ export default function Layout({ view, setView, lastSync, children }) {
           <div className="ad-navlabel">Reports</div>
           <button className={"ad-navitem" + (view === "reports" ? " on" : "")} onClick={() => setView("reports")}><ClipboardList /> List</button>
           <div className="ad-navlabel">Rules</div>
+          <button className={"ad-navitem" + (view === "live" ? " on" : "")} onClick={() => setView("live")}><Radio /> Live rules</button>
           <button className={"ad-navitem" + (view === "library" ? " on" : "")} onClick={() => setView("library")}><FileCode2 /> Rule library</button>
           <button className={"ad-navitem" + (view === "playground" ? " on" : "")} onClick={() => setView("playground")}><FlaskConical /> Rule playground</button>
           <div className="ad-navlabel">Analytics</div>
-          <button className={"ad-navitem" + (view === "trend" ? " on" : "")} onClick={() => setView("trend")}><TrendingUp /> Trend</button>
           <button className={"ad-navitem" + (view === "performance" ? " on" : "")} onClick={() => setView("performance")}><Gauge /> Performance</button>
           <button className={"ad-navitem" + (view === "tokens" ? " on" : "")} onClick={() => setView("tokens")}><Coins /> Token usage</button>
           <div style={{ flex: 1 }} />

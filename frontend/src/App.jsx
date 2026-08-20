@@ -6,9 +6,9 @@ import ReportDetail, { clearReportImageCache } from "./components/ReportDetail.j
 import NewReportModal from "./components/NewReportModal.jsx";
 import DuplicateTargetModal from "./components/DuplicateTargetModal.jsx";
 import Reports from "./pages/Reports.jsx";
-import Trend from "./pages/Trend.jsx";
 import Performance from "./pages/Performance.jsx";
 import RuleLibrary from "./pages/RuleLibrary.jsx";
+import LiveRules from "./pages/LiveRules.jsx";
 import TokenUsage from "./pages/TokenUsage.jsx";
 import Playground from "./pages/Playground.jsx";
 
@@ -26,9 +26,15 @@ export default function App() {
   // Rules handed over from the library so the playground can run them on open.
   const [playgroundSeed, setPlaygroundSeed] = useState(null);
   const [lastSync, setLastSync] = useState(() => new Date());
+  // "localhost" resolves to ::1 before 127.0.0.1 on Windows, but Flask binds
+  // IPv4 only by default. Chrome tries the IPv6 address first and the request
+  // dies with ERR_CONNECTION_RESET, which surfaces as a CORS error and makes
+  // every button feel intermittently broken. Address IPv4 directly instead.
+  const backendHost =
+    window.location.hostname === "localhost" ? "127.0.0.1" : window.location.hostname;
   const backendUrl = (
     import.meta.env.VITE_BACKEND_URL ||
-    `${window.location.protocol}//${window.location.hostname}:5000`
+    `${window.location.protocol}//${backendHost}:5000`
   ).replace(/\/$/, "");
   const [, setNowTick] = useState(0);
   const nextRpt = useRef(148);
@@ -267,10 +273,21 @@ export default function App() {
   // Load database truth on startup and keep long-running pipeline stages fresh.
   useEffect(() => {
     loadTickets();
-    const poller = window.setInterval(loadTickets, 3000);
+    // Skip a tick while a decision is in flight; otherwise the poll can
+    // return a read that predates the write and undo it on screen.
+    const poller = window.setInterval(() => {
+      if (decidingCount.current === 0 && !reviewingRef.current) loadTickets();
+    }, 3000);
     return () => window.clearInterval(poller);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const open = modal?.kind === "ticket";
+    reviewingRef.current = open;
+    if (!open) loadTickets();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modal]);
 
   useEffect(() => {
     if (!modal) return;
@@ -288,39 +305,110 @@ export default function App() {
   // Rules are only needed by the library, and they go stale whenever a run
   // finishes or a decision changes — so refetch on entry rather than once.
   useEffect(() => {
-    if (view === "library") loadRules();
+    if (view === "library" || view === "live") loadRules();
     if (view === "tokens") loadUsage();
   }, [view]);
 
   // Toggling the active choice clears the decision, so `next` may be null.
   // Decisions live in the DB keyed by rule text — without persisting, the next
   // loadTickets() would rebuild `rules` from the server and drop them.
-  const decide = async (id, ruleIdx, val) => {
-    const ticket = tickets.find((t) => t.id === id);
-    const rule = ticket?.rules?.[ruleIdx];
-    if (!rule) return;
+  // Decisions are written one rule at a time while a 3s poller is replacing the
+  // whole ticket array. Three things made that glitch, all fixed here:
+  //   * the poller could land between the click and the write completing, so it
+  //     replayed the pre-click value and the button appeared to flip back;
+  //   * rules were addressed by array index, which points at a different rule
+  //     if the poller ever returns them in another order;
+  //   * the previous decision was read from a render-time closure that the
+  //     poller had already replaced, so toggling off often computed the wrong
+  //     next value.
+  const decidingCount = useRef(0);
+  // Each response carries the whole decisions map, so a slow earlier reply
+  // would repaint values a later click has already superseded. Only the most
+  // recent request per rule is allowed to write to the screen.
+  const decisionSeq = useRef({});
+  // The background refresh must not rewrite rows the moderator is working on.
+  // While a report is open, every poll replaced the rules array, and a click
+  // landing just after one computed its toggle from the refreshed value —
+  // turning "approve" into "unset" because it looked like a repeat click.
+  const reviewingRef = useRef(false);
+  // One in-flight write per rule, in click order. A row lock on the server
+  // serialises concurrent writes but does not preserve their order — the
+  // second of two rapid clicks could acquire the lock first, leaving the
+  // database holding the older intent while the screen showed the newer one.
+  const decisionChain = useRef({});
 
-    const next = rule.decision === val ? null : val;
+  // Current decision per rule, updated synchronously on click and whenever the
+  // server confirms. React state updaters run during render, so computing the
+  // toggle inside one meant a fast second click could read it before it had
+  // been assigned and drop the click entirely.
+  const decisionNow = useRef({});
 
-    setT(id, (t) => ({
-      rules: t.rules.map((r, i) => (i === ruleIdx ? { ...r, decision: next ?? undefined } : r)),
-    }));
+  const decide = async (id, ruleText, val) => {
+    const key = `${id}::${ruleText}`;
 
-    try {
-      const response = await fetch(`${backendUrl}/api/tickets/${encodeURIComponent(id)}/decisions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rule: rule.text, decision: next, decided_by: CURRENT_USER.k }),
-      });
-      if (!response.ok) throw new Error(`decision save failed ${response.status}`);
-    } catch (error) {
-      console.error(`Failed to save decision for ${id}`, error);
-      // Put the row back the way it was so the UI does not claim a decision
-      // the backend never stored.
-      setT(id, (t) => ({
-        rules: t.rules.map((r, i) => (i === ruleIdx ? { ...r, decision: rule.decision } : r)),
-      }));
+    if (!(key in decisionNow.current)) {
+      const rule = tickets.find((t) => t.id === id)?.rules?.find((r) => r.text === ruleText);
+      if (!rule) return;
+      decisionNow.current[key] = rule.decision ?? null;
     }
+
+    const previous = decisionNow.current[key];
+    const next = previous === val ? null : val;
+    decisionNow.current[key] = next;
+
+    const mySeq = (decisionSeq.current[key] || 0) + 1;
+    decisionSeq.current[key] = mySeq;
+
+    const paint = (value) =>
+      setTickets((ts) =>
+        ts.map((t) =>
+          t.id === id
+            ? {
+                ...t,
+                rules: (t.rules || []).map((r) =>
+                  r.text === ruleText ? { ...r, decision: value ?? undefined } : r
+                ),
+              }
+            : t
+        )
+      );
+
+    paint(next);
+
+    const send = async () => {
+      decidingCount.current += 1;
+      try {
+        const response = await fetch(`${backendUrl}/api/tickets/${encodeURIComponent(id)}/decisions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rule: ruleText, decision: next, decided_by: CURRENT_USER.k }),
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error || `decision save failed ${response.status}`);
+
+        // Only the newest click on this rule may repaint; an older reply
+        // carries a value the moderator has already moved past.
+        if (decisionSeq.current[key] === mySeq) {
+          const entry = body.decisions?.[ruleText];
+          const server = entry && typeof entry === "object" ? entry.decision : entry;
+          decisionNow.current[key] = server ?? null;
+          paint(server ?? null);
+        }
+      } catch (error) {
+        console.error(`Failed to save decision for ${id}`, error);
+        if (decisionSeq.current[key] !== mySeq) return;
+        decisionNow.current[key] = previous;
+        paint(previous);
+      } finally {
+        decidingCount.current -= 1;
+      }
+    };
+
+    // Queue behind any write already running for this rule: a row lock
+    // serialises writes but does not preserve the order they were clicked in.
+    const chained = (decisionChain.current[key] || Promise.resolve()).then(send, send);
+    decisionChain.current[key] = chained;
+    return chained;
   };
 
   const finishReview = async (id) => {
@@ -592,8 +680,9 @@ ${error.message}`);
           onNew={() => setModal({ kind: "new" })}
         />
       )}
-      {view === "trend" && <Trend tickets={tickets} />}
-      {view === "performance" && <Performance tickets={tickets} />}
+      {view === "performance" && (
+        <Performance tickets={tickets} onRefresh={refreshBoard} refreshing={refreshing} />
+      )}
       {view === "library" && (
         <RuleLibrary
           rules={rules}
@@ -606,6 +695,14 @@ ${error.message}`);
           onMergePreview={(items) => mergeRulePair(items, true)}
           onMergeRules={(items) => mergeRulePair(items, false)}
           onSendToPlayground={(seed) => { setPlaygroundSeed(seed); setView("playground"); }}
+        />
+      )}
+      {view === "live" && (
+        <LiveRules
+          rules={rules}
+          loading={rulesLoading}
+          onRefresh={loadRules}
+          onOpenReport={(id) => setModal({ kind: "ticket", id })}
         />
       )}
       {view === "playground" && (
@@ -651,7 +748,7 @@ ${error.message}`);
               onRun={() => startRun(openTicket.id)}
               onCancelRun={() => cancelRun(openTicket.id)}
               onDelete={() => deleteTicket(openTicket.id)}
-              onDecide={(ri, val) => decide(openTicket.id, ri, val)}
+              onDecide={(ruleText, val) => decide(openTicket.id, ruleText, val)}
               onFinish={() => finishReview(openTicket.id)}
               onEdit={() => setModal({ kind: "edit", id: openTicket.id })}
               onAddRule={(rule) => addRule(openTicket.id, rule)}

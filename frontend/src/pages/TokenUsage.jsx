@@ -1,61 +1,7 @@
-import { RefreshCw, AlertTriangle } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { fmtDate, fmtDur } from "../utils.js";
 
 const n = (v) => (typeof v === "number" ? v.toLocaleString() : "—");
-
-function BudgetBar({ used, budget }) {
-  // No provider quota is wired into this project, so the budget is whatever
-  // ceiling the team opts into via TOKEN_BUDGET.
-  if (!budget) {
-    return (
-      <div className="ad-panel" style={{ marginTop: 16 }}>
-        <h3>Budget</h3>
-        <p className="ad-notes">
-          No token limit is configured. The pipeline caps each response at 1,024 completion
-          tokens, but there is no cap on total spend and nothing here is enforced against the
-          provider account.
-        </p>
-        <p className="ad-notes" style={{ marginTop: 8 }}>
-          To track against a ceiling, set <code className="ad-code">TOKEN_BUDGET</code> in
-          <code className="ad-code">.env.local</code> and restart the backend.
-        </p>
-      </div>
-    );
-  }
-
-  const pctUsed = Math.min(100, Math.round((used / budget) * 100));
-  const over = used > budget;
-  const near = !over && pctUsed >= 80;
-
-  return (
-    <div className="ad-panel" style={{ marginTop: 16 }}>
-      <h3>Budget</h3>
-      {(over || near) && (
-        <div className={"ad-warnbox" + (over ? " ad-errbox" : "")} style={{ marginBottom: 12 }}>
-          <AlertTriangle className="ad-warnicon" />
-          <div>
-            <div className="ad-warntitle">
-              {over ? "Over the configured budget" : "Approaching the configured budget"}
-            </div>
-            <div className="ad-warnbody">
-              {n(used)} of {n(budget)} tokens used ({pctUsed}%).
-              {over && ` That is ${n(used - budget)} over.`}
-            </div>
-          </div>
-        </div>
-      )}
-      <div className="ad-progress">
-        <div
-          className={"ad-progressfill" + (over ? " over" : near ? " near" : "")}
-          style={{ width: `${pctUsed}%` }}
-        />
-      </div>
-      <div className="ad-progresslabel">
-        {n(used)} / {n(budget)} tokens · {n(Math.max(0, budget - used))} remaining
-      </div>
-    </div>
-  );
-}
 
 export default function TokenUsage({ usage, loading, onRefresh }) {
   const runs = usage?.runs || [];
@@ -107,8 +53,6 @@ export default function TokenUsage({ usage, loading, onRefresh }) {
           <div className="ad-kpisub">prompt + completion</div>
         </div>
       </div>
-
-      <BudgetBar used={totals.totalTokens} budget={usage?.budget} />
 
       <div className="ad-panel" style={{ marginTop: 16 }}>
         <h3>By model</h3>

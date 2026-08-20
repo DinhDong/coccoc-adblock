@@ -3,23 +3,16 @@ import pytest
 from app.services.domain_classifier import (
     DOMESTIC,
     FOREIGN,
-    INVALID,
-    UNKNOWN,
     classify_domain,
 )
 
 
 @pytest.fixture(autouse=True)
 def clear_domain_overrides(monkeypatch):
-    """
-    Keep every test independent from values that may exist
-    in .env.local or the Docker environment.
-    """
     monkeypatch.delenv(
         "DOMESTIC_DOMAIN_OVERRIDES",
         raising=False,
     )
-
     monkeypatch.delenv(
         "FOREIGN_DOMAIN_OVERRIDES",
         raising=False,
@@ -39,16 +32,12 @@ def test_vietnamese_com_site_is_domestic():
     html = """
     <html lang="vi">
       <head>
-        <meta
-          property="og:locale"
-          content="vi_VN"
-        >
+        <meta property="og:locale" content="vi_VN">
       </head>
-
       <body>
         Tin tức Việt Nam mới nhất trong ngày.
-        Các thông tin được cập nhật tại Hà Nội
-        và Thành phố Hồ Chí Minh.
+        Các thông tin được cập nhật tại Hà Nội và
+        Thành phố Hồ Chí Minh.
       </body>
     </html>
     """
@@ -66,12 +55,8 @@ def test_foreign_site_is_foreign():
     html = """
     <html lang="en">
       <head>
-        <meta
-          property="og:locale"
-          content="en_US"
-        >
+        <meta property="og:locale" content="en_US">
       </head>
-
       <body>
         This is an international English language website.
         Latest world news, technology, sports and business.
@@ -88,20 +73,34 @@ def test_foreign_site_is_foreign():
     assert result.eligible is False
 
 
-def test_non_vn_without_page_evidence_is_unknown():
+def test_non_vn_precheck_requests_page_evidence():
     result = classify_domain(
         "https://example.com"
     )
 
-    assert result.classification == UNKNOWN
+    assert result.classification is None
+    assert result.eligible is False
+    assert result.requires_page_evidence is True
+    assert "classification" not in result.to_dict()
+
+
+def test_non_vn_without_final_page_evidence_is_foreign():
+    result = classify_domain(
+        "https://example.com",
+        "",
+    )
+
+    assert result.classification == FOREIGN
     assert result.eligible is False
 
 
-def test_invalid_url_is_blocked():
+def test_invalid_url_is_rejected_without_domain_classification():
     result = classify_domain("")
 
-    assert result.classification == INVALID
+    assert result.classification is None
     assert result.eligible is False
+    assert result.valid_url is False
+    assert "classification" not in result.to_dict()
 
 
 def test_domestic_override(monkeypatch):
@@ -123,7 +122,6 @@ def test_foreign_override_wins(monkeypatch):
         "DOMESTIC_DOMAIN_OVERRIDES",
         "example.com",
     )
-
     monkeypatch.setenv(
         "FOREIGN_DOMAIN_OVERRIDES",
         "example.com",
@@ -141,24 +139,17 @@ def test_strong_vietnamese_content_overrides_wrong_lang():
     vietnamese_text = """
     Tin tức Việt Nam mới nhất trong ngày được cập nhật liên tục.
     Các thông tin về người dân tại Hà Nội và Thành phố Hồ Chí Minh
-    được đăng tải trong các bài viết mới.
-
-    Người dùng có thể theo dõi những thông tin về kinh tế,
-    xã hội, giáo dục và cuộc sống tại Việt Nam.
-
-    Các nội dung này được cập nhật thường xuyên cho người đọc
-    trong nước và những người quan tâm đến Việt Nam.
+    được đăng tải trong các bài viết mới. Người dùng có thể theo dõi
+    những thông tin về kinh tế, xã hội, giáo dục và cuộc sống tại
+    Việt Nam. Các nội dung này được cập nhật thường xuyên cho người
+    đọc trong nước và những người quan tâm đến Việt Nam.
     """ * 5
 
     html = f"""
     <html lang="en">
       <head>
-        <meta
-          property="og:locale"
-          content="en_US"
-        >
+        <meta property="og:locale" content="en_US">
       </head>
-
       <body>
         {vietnamese_text}
       </body>
@@ -172,3 +163,21 @@ def test_strong_vietnamese_content_overrides_wrong_lang():
 
     assert result.classification == DOMESTIC
     assert result.eligible is True
+
+
+def test_ambiguous_rendered_site_is_foreign_not_unknown():
+    html = """
+    <html>
+      <body>
+        Welcome to our website.
+      </body>
+    </html>
+    """
+
+    result = classify_domain(
+        "https://example.com",
+        html,
+    )
+
+    assert result.classification == FOREIGN
+    assert result.eligible is False

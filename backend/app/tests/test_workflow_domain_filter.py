@@ -1,10 +1,10 @@
 from app.services.domain_classifier import (
     DOMESTIC,
     FOREIGN,
-    UNKNOWN,
 )
 from app.services.workflow import (
     _classify_crawl_result_domain,
+    _domain_block_message,
     _load_json_mapping,
 )
 
@@ -152,10 +152,32 @@ def test_legacy_non_vn_without_saved_html_fails_closed(monkeypatch):
         "legacy-no-html",
     )
 
-    assert result["classification"] == UNKNOWN
+    assert result["classification"] == FOREIGN
     assert result["eligible"] is False
     assert source == "url_without_saved_html"
 
+
+def test_foreign_block_message_hides_classifier_signals():
+    classification = {
+        "hostname": "foreign-example.com",
+        "classification": FOREIGN,
+        "eligible": False,
+        "score": -4,
+        "reasons": [
+            "HTML language is not Vietnamese (en)",
+            "Page locale is not Vietnamese (en_us)",
+        ],
+        "valid_url": True,
+    }
+
+    message = _domain_block_message(
+        classification,
+        "foreign-example.com",
+    )
+
+    assert message == "Requested website is not a domestic website."
+    assert "HTML language" not in message
+    assert "locale" not in message
 
 
 def test_legacy_json_with_utf8_bom_is_read_and_classified(

@@ -18,8 +18,6 @@ from urllib.parse import urlparse
 
 from app.services.domain_classifier import (
     FOREIGN,
-    INVALID,
-    UNKNOWN,
     DomainClassification,
     classify_domain,
 )
@@ -36,8 +34,8 @@ class CrawlService:
     Orchestrates the complete crawler pipeline:
     1. Pre-check domain eligibility from the submitted URL.
     2. Render page with browser (+ capture network requests).
-    3. For non-.vn/unknown domains, classify using full rendered HTML.
-    4. Stop foreign/unknown/invalid domains before extraction and AI stages.
+    3. For non-.vn domains, classify using full rendered HTML.
+    4. Stop foreign or invalid requests before extraction and AI stages.
     5. Extract ad-relevant data from focus-scoped HTML.
     6. Detect ad candidates from extracted data + network requests.
     7. Save clean results.
@@ -127,7 +125,7 @@ class CrawlService:
         # - invalid URLs can be rejected immediately
         # - explicit foreign overrides can be rejected immediately
         # - .vn / domestic overrides are accepted immediately
-        # - other domains remain UNKNOWN until rendered HTML is available
+        # - other domains request rendered page evidence before a final decision
         domain_classification = classify_domain(url)
 
         logger.info(
@@ -139,7 +137,10 @@ class CrawlService:
             domain_classification.score,
         )
 
-        if domain_classification.classification in {INVALID, FOREIGN}:
+        if (
+            not domain_classification.valid_url
+            or domain_classification.classification == FOREIGN
+        ):
             return self._domain_block_response(
                 url=url,
                 report_id=report_id,
@@ -210,8 +211,8 @@ class CrawlService:
         # Domain gate, phase 2:
         # Non-.vn domains need page evidence. Use the complete rendered page,
         # never focus-scoped HTML, otherwise a small focus region could produce
-        # a false FOREIGN/UNKNOWN classification.
-        if not domain_classification.eligible:
+        # a false foreign decision.
+        if domain_classification.requires_page_evidence:
             classification_html = (
                 getattr(render_result, "full_html", "")
                 or render_result.html
@@ -430,34 +431,20 @@ class CrawlService:
         and blocked=True fields let the API/frontend distinguish an intentional
         policy block from a technical crawler failure.
         """
-        if classification.classification == INVALID:
-            message = "Domain blocked because the submitted URL is invalid."
-        elif classification.classification == FOREIGN:
-            message = (
-                f"Domain blocked: {classification.hostname or url} "
-                "is classified as a foreign website."
-            )
-        elif classification.classification == UNKNOWN:
-            message = (
-                f"Domain blocked: {classification.hostname or url} "
-                "could not be verified as a domestic website."
-            )
+        if not classification.valid_url:
+            message = "Requested website URL is invalid."
         else:
-            message = (
-                f"Domain blocked: {classification.hostname or url} "
-                "is not eligible for processing."
-            )
+            message = "Requested website is not a domestic website."
 
-        if classification.reasons:
-            message = (
-                f"{message} Reason: "
-                + "; ".join(classification.reasons)
-            )
-
+        # Keep detailed classifier evidence in logs/structured metadata for
+        # debugging, but do not expose implementation details as the user-facing
+        # block reason.
         logger.warning(
-            "%s | score=%s",
+            "%s | classification=%s | score=%s | reasons=%s",
             message,
+            classification.classification,
             classification.score,
+            "; ".join(classification.reasons),
         )
 
         error_path = self.storage.save_error(

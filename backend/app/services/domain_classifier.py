@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import asdict, dataclass
-from typing import List
+from typing import List, Optional
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
@@ -11,12 +11,8 @@ from bs4 import BeautifulSoup
 
 DOMESTIC = "domestic"
 FOREIGN = "foreign"
-UNKNOWN = "unknown"
-INVALID = "invalid"
 
 
-# Common Vietnamese words used only as supporting evidence.
-# A few matching words alone are NOT enough to mark a site as domestic.
 VIETNAMESE_WORDS = {
     "và",
     "của",
@@ -42,52 +38,52 @@ VIETNAMESE_WORDS = {
     "nam",
 }
 
-
-# Vietnamese-specific letters and diacritics.
 VIETNAMESE_DIACRITICS_RE = re.compile(
     r"[ăâđêôơư"
-    r"àáạảãằắặẳẵầấậẩẫ"
-    r"èéẹẻẽềếệểễ"
-    r"ìíịỉĩ"
-    r"òóọỏõồốộổỗờớợởỡ"
-    r"ùúụủũừứựửữ"
-    r"ỳýỵỷỹ"
+    r"àáạảãằắặẳẵầấậẩẫèéẹẻẽềếệểễ"
+    r"ìíịỉĩòóọỏõồốộổỗờớợởỡ"
+    r"ùúụủũừứựửữỳýỵỷỹ"
     r"ĂÂĐÊÔƠƯ"
-    r"ÀÁẠẢÃẰẮẶẲẴẦẤẬẨẪ"
-    r"ÈÉẸẺẼỀẾỆỂỄ"
-    r"ÌÍỊỈĨ"
-    r"ÒÓỌỎÕỒỐỘỔỖỜỚỢỞỠ"
-    r"ÙÚỤỦŨỪỨỰỬỮ"
-    r"ỲÝỴỶỸ]"
+    r"ÀÁẠẢÃẰẮẶẲẴẦẤẬẨẪÈÉẸẺẼỀẾỆỂỄ"
+    r"ÌÍỊỈĨÒÓỌỎÕỒỐỘỔỖỜỚỢỞỠ"
+    r"ÙÚỤỦŨỪỨỰỬỮỲÝỴỶỸ]"
 )
 
-
-WORD_RE = re.compile(
-    r"\b[\wÀ-ỹ]+\b",
-    re.UNICODE,
-)
+WORD_RE = re.compile(r"\b[\wÀ-ỹ]+\b", re.UNICODE)
 
 
 @dataclass(frozen=True)
 class DomainClassification:
+    """
+    Domain eligibility decision.
+
+    Final company-facing classification is binary: domestic or foreign.
+
+    Before a non-.vn page has been rendered, classification can temporarily be
+    None with requires_page_evidence=True. That is an internal crawler state,
+    not a third domain classification, and is never persisted as a final result.
+    """
+
     hostname: str
-    classification: str
+    classification: Optional[str]
     eligible: bool
     score: int
     reasons: List[str]
+    requires_page_evidence: bool = False
+    valid_url: bool = True
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        data = asdict(self)
+
+        # Do not expose a third/null classification value. Pending and invalid
+        # states are represented by their dedicated flags instead.
+        if self.classification is None:
+            data.pop("classification", None)
+
+        return data
 
 
 def _hostname_from_url(url: str) -> str:
-    """
-    Extract a normalized hostname from a URL.
-
-    Examples:
-        https://example.com/page -> example.com
-        example.vn -> example.vn
-    """
     value = (url or "").strip()
 
     if not value:
@@ -97,21 +93,12 @@ def _hostname_from_url(url: str) -> str:
         value = f"https://{value}"
 
     try:
-        return (
-            urlparse(value).hostname
-            or ""
-        ).lower().rstrip(".")
+        return (urlparse(value).hostname or "").lower().rstrip(".")
     except ValueError:
         return ""
 
 
 def _domains_from_env(name: str) -> set[str]:
-    """
-    Read comma-separated domains from an environment variable.
-
-    Example:
-        DOMESTIC_DOMAIN_OVERRIDES=example.com,news.vn
-    """
     raw = os.getenv(name, "")
 
     return {
@@ -121,70 +108,28 @@ def _domains_from_env(name: str) -> set[str]:
     }
 
 
-def _matches_domain(
-    hostname: str,
-    domain: str,
-) -> bool:
-    """
-    Match both a domain and its subdomains.
-
-    example.com matches:
-        example.com
-        news.example.com
-
-    It does NOT match:
-        fakeexample.com
-    """
-    return (
-        hostname == domain
-        or hostname.endswith(f".{domain}")
-    )
+def _matches_domain(hostname: str, domain: str) -> bool:
+    return hostname == domain or hostname.endswith(f".{domain}")
 
 
-def _matches_any(
-    hostname: str,
-    domains: set[str],
-) -> bool:
+def _matches_any(hostname: str, domains: set[str]) -> bool:
     return any(
-        _matches_domain(
-            hostname,
-            domain,
-        )
+        _matches_domain(hostname, domain)
         for domain in domains
     )
 
 
-def _extract_html_signals(
-    html: str,
-) -> tuple[str, str, str]:
-    """
-    Extract language-related evidence from page HTML.
-
-    Returns:
-        html_lang:
-            Value of <html lang="...">
-
-        locale:
-            og:locale, language, or content-language metadata
-
-        text:
-            Visible-ish page text with scripts/styles removed
-    """
+def _extract_html_signals(html: str) -> tuple[str, str, str]:
     if not html:
         return "", "", ""
 
-    soup = BeautifulSoup(
-        html,
-        "html.parser",
-    )
+    soup = BeautifulSoup(html, "html.parser")
 
     html_tag = soup.find("html")
     html_lang = ""
 
     if html_tag:
-        html_lang = str(
-            html_tag.get("lang", "")
-        ).strip().lower()
+        html_lang = str(html_tag.get("lang", "")).strip().lower()
 
     locale = ""
 
@@ -201,228 +146,143 @@ def _extract_html_signals(
             "language",
             "content-language",
         }:
-            locale = str(
-                meta.get("content", "")
-            ).strip().lower()
-
+            locale = str(meta.get("content", "")).strip().lower()
             if locale:
                 break
 
-    # Script/style text is not useful for
-    # deciding the page language.
-    for tag in soup(
-        [
-            "script",
-            "style",
-            "noscript",
-        ]
-    ):
+    for tag in soup(["script", "style", "noscript"]):
         tag.decompose()
 
-    text = soup.get_text(
-        " ",
-        strip=True,
-    )
-
-    # Avoid analysing an unnecessarily huge page.
+    text = soup.get_text(" ", strip=True)
     text = text[:200_000]
 
-    return (
-        html_lang,
-        locale,
-        text,
-    )
+    return html_lang, locale, text
 
 
 def classify_domain(
     url: str,
-    html: str = "",
+    html: Optional[str] = None,
 ) -> DomainClassification:
     """
-    Classify a website as:
+    Classify a valid website as DOMESTIC or FOREIGN.
 
-        domestic
-        foreign
-        unknown
-        invalid
+    html=None means the caller is doing the pre-render URL check. A non-.vn
+    domain with no decisive override then requests page evidence instead of
+    receiving a final classification.
 
-    Rules:
-
-    1. Manual overrides have highest priority.
-    2. .vn is considered a strong domestic signal.
-    3. Non-.vn domains require page evidence.
-    4. Vietnamese HTML metadata and content increase the score.
-    5. Foreign metadata decreases the score.
-    6. Strong Vietnamese content can override incorrect lang/locale
-       metadata because some domestic websites may leave lang="en".
-    7. Ambiguous sites are classified as UNKNOWN instead of guessing.
-
-    Only DOMESTIC sites are eligible for further crawler processing.
+    html="" (or any rendered HTML string) means the caller is asking for a final
+    decision. At that point every valid site is classified as either DOMESTIC or
+    FOREIGN. There is intentionally no third final classification.
     """
-
     hostname = _hostname_from_url(url)
 
     if not hostname:
         return DomainClassification(
             hostname="",
-            classification=INVALID,
+            classification=None,
             eligible=False,
             score=0,
-            reasons=[
-                "URL does not contain a valid hostname",
-            ],
+            reasons=["URL does not contain a valid hostname"],
+            requires_page_evidence=False,
+            valid_url=False,
         )
 
     domestic_overrides = _domains_from_env(
         "DOMESTIC_DOMAIN_OVERRIDES"
     )
-
     foreign_overrides = _domains_from_env(
         "FOREIGN_DOMAIN_OVERRIDES"
     )
 
-    # Foreign override has priority in case
-    # the same domain accidentally appears in both lists.
-    if _matches_any(
-        hostname,
-        foreign_overrides,
-    ):
+    # Foreign override wins if a domain is accidentally present in both lists.
+    if _matches_any(hostname, foreign_overrides):
         return DomainClassification(
             hostname=hostname,
             classification=FOREIGN,
             eligible=False,
             score=-100,
-            reasons=[
-                "Matched foreign domain override",
-            ],
+            reasons=["Matched foreign domain override"],
         )
 
-    if _matches_any(
-        hostname,
-        domestic_overrides,
-    ):
+    if _matches_any(hostname, domestic_overrides):
         return DomainClassification(
             hostname=hostname,
             classification=DOMESTIC,
             eligible=True,
             score=100,
-            reasons=[
-                "Matched domestic domain override",
-            ],
+            reasons=["Matched domestic domain override"],
         )
 
-    # .vn is a deterministic strong signal.
-    if (
-        hostname == "vn"
-        or hostname.endswith(".vn")
-    ):
+    if hostname == "vn" or hostname.endswith(".vn"):
         return DomainClassification(
             hostname=hostname,
             classification=DOMESTIC,
             eligible=True,
             score=100,
-            reasons=[
-                "Hostname uses the .vn country-code domain",
-            ],
+            reasons=["Hostname uses the .vn country-code domain"],
         )
 
-    # A .com/.net/etc. domain cannot be judged
-    # from the hostname alone.
-    if not html:
+    # Pre-render check for non-.vn domains. This is not a classification; it is
+    # only an instruction to the crawler to render the page before deciding.
+    if html is None:
         return DomainClassification(
             hostname=hostname,
-            classification=UNKNOWN,
+            classification=None,
             eligible=False,
             score=0,
-            reasons=[
-                "Non-.vn domain requires page evidence",
-            ],
+            reasons=["Page evidence is required for non-.vn domains"],
+            requires_page_evidence=True,
         )
 
-    (
-        html_lang,
-        locale,
-        text,
-    ) = _extract_html_signals(html)
+    html_lang, locale, text = _extract_html_signals(html)
 
     score = 0
     reasons: List[str] = []
 
-    # ---------------------------------------------------------
-    # HTML language metadata
-    # ---------------------------------------------------------
-
     if html_lang.startswith("vi"):
         score += 4
-
         reasons.append(
             f"HTML language is Vietnamese ({html_lang})"
         )
-
     elif html_lang:
         score -= 2
-
         reasons.append(
             f"HTML language is not Vietnamese ({html_lang})"
         )
 
-    # ---------------------------------------------------------
-    # Locale metadata
-    # ---------------------------------------------------------
-
-    normalized_locale = (
-        locale.replace("-", "_")
-    )
+    normalized_locale = locale.replace("-", "_")
 
     if normalized_locale.startswith("vi"):
         score += 4
-
         reasons.append(
             f"Page locale is Vietnamese ({locale})"
         )
-
     elif locale:
         score -= 2
-
         reasons.append(
             f"Page locale is not Vietnamese ({locale})"
         )
 
-    # ---------------------------------------------------------
-    # Vietnamese characters
-    # ---------------------------------------------------------
+    text_lower = text.lower()
 
     diacritic_count = len(
-        VIETNAMESE_DIACRITICS_RE.findall(
-            text
-        )
+        VIETNAMESE_DIACRITICS_RE.findall(text)
     )
 
     if diacritic_count >= 30:
         score += 3
-
         reasons.append(
-            "Strong Vietnamese text evidence "
+            f"Strong Vietnamese text evidence "
             f"({diacritic_count} diacritic characters)"
         )
-
     elif diacritic_count >= 8:
         score += 2
-
         reasons.append(
-            "Vietnamese text evidence "
+            f"Vietnamese text evidence "
             f"({diacritic_count} diacritic characters)"
         )
 
-    # ---------------------------------------------------------
-    # Vietnamese vocabulary
-    # ---------------------------------------------------------
-
-    text_lower = text.lower()
-
-    words = WORD_RE.findall(
-        text_lower
-    )
+    words = WORD_RE.findall(text_lower)
 
     vietnamese_word_count = sum(
         1
@@ -432,35 +292,26 @@ def classify_domain(
 
     if vietnamese_word_count >= 20:
         score += 3
-
         reasons.append(
-            "Strong Vietnamese vocabulary evidence "
+            f"Strong Vietnamese vocabulary evidence "
             f"({vietnamese_word_count} common words)"
         )
-
     elif vietnamese_word_count >= 8:
         score += 2
-
         reasons.append(
-            "Vietnamese vocabulary evidence "
+            f"Vietnamese vocabulary evidence "
             f"({vietnamese_word_count} common words)"
         )
-
     elif vietnamese_word_count >= 3:
         score += 1
-
         reasons.append(
-            "Weak Vietnamese vocabulary evidence "
+            f"Weak Vietnamese vocabulary evidence "
             f"({vietnamese_word_count} common words)"
         )
-
-    # ---------------------------------------------------------
-    # Vietnam-specific supporting markers
-    # ---------------------------------------------------------
 
     vietnam_markers = 0
 
-    markers = (
+    for marker in (
         "việt nam",
         "viet nam",
         "hà nội",
@@ -472,79 +323,50 @@ def classify_domain(
         "₫",
         " vnd",
         "+84",
-    )
-
-    for marker in markers:
+    ):
         if marker in text_lower:
             vietnam_markers += 1
 
     if vietnam_markers >= 2:
         score += 2
-
         reasons.append(
-            f"Found {vietnam_markers} "
-            "Vietnam-specific markers"
+            f"Found {vietnam_markers} Vietnam-specific markers"
         )
-
     elif vietnam_markers == 1:
         score += 1
-
         reasons.append(
             "Found one Vietnam-specific marker"
         )
 
-    # ---------------------------------------------------------
-    # Final classification
-    # ---------------------------------------------------------
-
-    # Some real domestic sites may accidentally keep:
-    #
-    #   <html lang="en">
-    #   og:locale=en_US
-    #
-    # Strong Vietnamese content therefore has permission
-    # to override conflicting metadata.
+    # Strong Vietnamese body content is allowed to override incorrect metadata.
+    # Some domestic sites keep lang="en" or en_US by mistake.
     strong_vietnamese_content = (
         diacritic_count >= 30
         and vietnamese_word_count >= 20
     )
 
-    if strong_vietnamese_content:
+    if strong_vietnamese_content or score >= 4:
         classification = DOMESTIC
         eligible = True
 
-        reasons.append(
-            "Strong Vietnamese content overrides "
-            "potentially incorrect page language metadata"
-        )
-
-    elif score >= 4:
-        classification = DOMESTIC
-        eligible = True
-
-    # Only classify as FOREIGN when:
-    #
-    # - negative evidence is strong
-    # - there is almost no Vietnamese content
-    #
-    # Otherwise use UNKNOWN instead of guessing.
-    elif (
-        score <= -4
-        and diacritic_count < 8
-        and vietnamese_word_count < 3
-    ):
+        if strong_vietnamese_content and score < 4:
+            reasons.append(
+                "Strong Vietnamese content overrides conflicting page metadata"
+            )
+    else:
+        # Company policy is binary. If a valid rendered site cannot be verified
+        # as domestic, it is classified as foreign and is not processed.
         classification = FOREIGN
         eligible = False
 
-    else:
-        classification = UNKNOWN
-        eligible = False
-
-    if not reasons:
-        reasons.append(
-            "Not enough evidence to determine "
-            "whether the domain is domestic"
-        )
+        if not reasons:
+            reasons.append(
+                "No sufficient evidence that the website is domestic"
+            )
+        elif score > -4:
+            reasons.append(
+                "Evidence is insufficient to classify the website as domestic"
+            )
 
     return DomainClassification(
         hostname=hostname,

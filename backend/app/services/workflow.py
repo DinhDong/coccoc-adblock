@@ -796,21 +796,21 @@ def _classify_crawl_result_domain(
         2. Classify from the URL alone when that is decisive.
         3. For unresolved non-.vn legacy results, inspect saved crawl HTML.
 
-    The workflow is fail-closed: UNKNOWN, FOREIGN, and INVALID are blocked.
+    Final website classification is binary: DOMESTIC or FOREIGN.
+
+    Invalid URLs are rejected as input errors rather than treated as a third
+    domain classification. Older stored labels outside the binary contract are
+    ignored and recalculated.
     """
     from app.services.domain_classifier import (
         DOMESTIC,
         FOREIGN,
-        INVALID,
-        UNKNOWN,
         classify_domain,
     )
 
     valid_labels = {
         DOMESTIC,
         FOREIGN,
-        UNKNOWN,
-        INVALID,
     }
 
     stored = crawl_result.get("domain_classification")
@@ -828,10 +828,10 @@ def _classify_crawl_result_domain(
     page_url = str(crawl_result.get("url", "") or "").strip()
     preclassification = classify_domain(page_url)
 
-    if (
-        preclassification.eligible
-        or preclassification.classification in {FOREIGN, INVALID}
-    ):
+    if not preclassification.valid_url:
+        return preclassification.to_dict(), "url"
+
+    if preclassification.classification in valid_labels:
         return preclassification.to_dict(), "url"
 
     html, html_source = _load_saved_html_for_domain_check(
@@ -854,45 +854,13 @@ def _domain_block_message(
     classification: Mapping[str, Any],
     fallback_domain: str,
 ) -> str:
-    """Build a user-facing explanation for a domain policy block."""
-    label = str(
-        classification.get("classification", "unknown")
-        or "unknown"
-    ).strip().lower()
+    """Build the stable user-facing domain policy message."""
+    del fallback_domain  # Kept in the signature for backward compatibility.
 
-    hostname = str(
-        classification.get("hostname", "")
-        or fallback_domain
-        or "submitted domain"
-    )
+    if classification.get("valid_url") is False:
+        return "Requested website URL is invalid."
 
-    if label == "invalid":
-        message = "Domain blocked because the submitted URL is invalid."
-    elif label == "foreign":
-        message = (
-            f"Domain blocked: {hostname} is classified as a foreign website."
-        )
-    elif label == "unknown":
-        message = (
-            f"Domain blocked: {hostname} could not be verified as a domestic website."
-        )
-    else:
-        message = (
-            f"Domain blocked: {hostname} is not eligible for processing."
-        )
-
-    reasons = classification.get("reasons", [])
-    if isinstance(reasons, (list, tuple)):
-        clean_reasons = [
-            str(reason).strip()
-            for reason in reasons
-            if str(reason).strip()
-        ]
-
-        if clean_reasons:
-            message = f"{message} Reason: " + "; ".join(clean_reasons)
-
-    return message
+    return "Requested website is not a domestic website."
 
 
 def run_pipeline(
@@ -1051,8 +1019,8 @@ def run_pipeline(
     )
 
     domain_type = str(
-        domain_classification.get("classification", "unknown")
-        or "unknown"
+        domain_classification.get("classification", FOREIGN)
+        or FOREIGN
     )
 
     domain_eligible = bool(

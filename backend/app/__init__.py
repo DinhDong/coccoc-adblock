@@ -13,6 +13,9 @@ try:
         merge_two_rules,
         fetch_report_images,
         test_rules_adhoc,
+        run_playground_test,
+        reconcile_stale_runs,
+        playground_image_path,
         update_ticket_status,
         update_ticket_details,
         get_ticket_status,
@@ -35,6 +38,9 @@ except ImportError:  # pragma: no cover
         merge_two_rules,
         fetch_report_images,
         test_rules_adhoc,
+        run_playground_test,
+        reconcile_stale_runs,
+        playground_image_path,
         update_ticket_status,
         update_ticket_details,
         get_ticket_status,
@@ -52,6 +58,11 @@ except ImportError:  # pragma: no cover
     from app.services.workflow import run_pipeline
 
 try:
+    from .services.jobs import JOBS, JobAlreadyActive
+except ImportError:  # pragma: no cover
+    from app.services.jobs import JOBS, JobAlreadyActive
+
+try:
     from .database import save_rule_decision
 except ImportError:  # pragma: no cover
     from app.database import save_rule_decision
@@ -65,6 +76,16 @@ EDITABLE_FIELDS = {"url", "env", "focus", "targets", "notes", "name"}
 def create_app():
     app = Flask(__name__)
     CORS(app)
+
+    # Nothing is running yet in this process, so any ticket the database still
+    # calls in-progress was stranded by a previous one. Best-effort: a DB that
+    # is not reachable at boot must not stop the app from starting.
+    try:
+        stranded = reconcile_stale_runs()
+        if stranded:
+            app.logger.warning("Reset %d run(s) stranded by a previous process", stranded)
+    except Exception as exc:
+        app.logger.warning("Could not reconcile stale runs: %s", exc)
 
     @app.get("/health")
     def health():
@@ -150,6 +171,31 @@ def create_app():
         except Exception as exc:
             return {"error": "sandbox run failed: %s" % exc}, 500
 
+    @app.post("/api/playground/test")
+    def playground_test():
+        from flask import request
+
+        payload = request.get_json(force=True, silent=True) or {}
+        try:
+            return {"ok": True, "result": run_playground_test(
+                payload.get("url", ""),
+                payload.get("rules") or [],
+                payload.get("environment", "desktop"),
+            )}, 200
+        except ValueError as exc:
+            return {"error": str(exc)}, 400
+        except Exception as exc:
+            return {"error": "sandbox run failed: %s" % exc}, 500
+
+    @app.get("/api/playground/<run_id>/screenshot/<kind>")
+    def playground_screenshot(run_id, kind):
+        from flask import send_file
+
+        path = playground_image_path(run_id, kind)
+        if path is None:
+            return {"error": "not found"}, 404
+        return send_file(str(path.resolve()), mimetype="image/png")
+
     @app.post("/api/rules/bulk-delete")
     def bulk_delete_rules():
         from flask import request
@@ -227,42 +273,64 @@ def create_app():
         if get_ticket_status(report_id) is None:
             return {"error": "ticket not found; create it before starting the pipeline"}, 404
 
+        # Runs in a worker thread. The pipeline writes its own progress to
+        # MySQL as it goes, so the client learns the outcome by polling the
+        # ticket rather than by holding this request open for ~a minute.
+        def _execute():
+            try:
+                result = run_pipeline(
+                    report_id=report_id,
+                    url=url,
+                    environment=environment,
+                    ticket_context=ticket_context,
+                    focus_region=focus_region,
+                    duplicate_choice=duplicate_choice,
+                )
+            except Exception as exc:
+                update_ticket_status(report_id, "failed")
+                record_run_failure(report_id, str(exc))
+                raise
+
+            if result.get("status") in {"review", "validated", "generated", "no_rules", "ok"}:
+                update_ticket_status(report_id, "review")
+            elif result.get("status") == "crawl_failed":
+                update_ticket_status(report_id, "crawl_failed")
+                record_run_failure(
+                    report_id,
+                    "Crawl failed at stage '%s': %s"
+                    % (
+                        result.get("crawl_stage", "unknown"),
+                        result.get("crawl_error", "unknown error"),
+                    ),
+                )
+            else:
+                update_ticket_status(report_id, "failed")
+                record_run_failure(
+                    report_id,
+                    result.get("error") or "Pipeline returned status '%s'" % result.get("status"),
+                )
+
+            return result
+
         update_ticket_status(report_id, "crawling")
 
         try:
-            result = run_pipeline(
-                report_id=report_id,
-                url=url,
-                environment=environment,
-                ticket_context=ticket_context,
-                focus_region=focus_region,
-                duplicate_choice=duplicate_choice,
-            )
-        except Exception as exc:
-            update_ticket_status(report_id, "failed")
-            record_run_failure(report_id, str(exc))
-            return {"ok": False, "error": str(exc)}, 500
+            job = JOBS.submit(report_id, _execute)
+        except JobAlreadyActive as exc:
+            return {"error": str(exc)}, 409
 
-        if result.get("status") in {"review", "validated", "generated", "no_rules", "ok"}:
-            update_ticket_status(report_id, "review")
-        elif result.get("status") == "crawl_failed":
-            update_ticket_status(report_id, "crawl_failed")
-            record_run_failure(
-                report_id,
-                "Crawl failed at stage '%s': %s"
-                % (
-                    result.get("crawl_stage", "unknown"),
-                    result.get("crawl_error", "unknown error"),
-                ),
-            )
-        else:
-            update_ticket_status(report_id, "failed")
-            record_run_failure(
-                report_id,
-                result.get("error") or "Pipeline returned status '%s'" % result.get("status"),
-            )
+        return {"ok": True, "queued": True, "job": job.as_dict()}, 202
 
-        return {"ok": True, "result": result}, 200
+    @app.get("/api/jobs")
+    def list_jobs():
+        return {"jobs": JOBS.all(), "maxWorkers": JOBS.max_workers}, 200
+
+    @app.get("/api/tickets/<report_id>/job")
+    def ticket_job(report_id):
+        job = JOBS.get(report_id)
+        if job is None:
+            return {"job": None}, 200
+        return {"job": job.as_dict()}, 200
 
     def _guard_exists(report_id):
         """

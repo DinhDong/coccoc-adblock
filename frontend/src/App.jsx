@@ -6,24 +6,25 @@ import ReportDetail, { clearReportImageCache } from "./components/ReportDetail.j
 import NewReportModal from "./components/NewReportModal.jsx";
 import DuplicateTargetModal from "./components/DuplicateTargetModal.jsx";
 import Reports from "./pages/Reports.jsx";
-import Dashboard from "./pages/Dashboard.jsx";
 import Trend from "./pages/Trend.jsx";
 import Performance from "./pages/Performance.jsx";
 import RuleLibrary from "./pages/RuleLibrary.jsx";
 import TokenUsage from "./pages/TokenUsage.jsx";
+import Playground from "./pages/Playground.jsx";
 
 export default function App() {
   const [tickets, setTickets] = useState([]);
   const [modal, setModal] = useState(null); // {kind:'ticket',id} | {kind:'new'}
   const [query, setQuery] = useState("");
-  const [view, setView] = useState("reports"); // "reports" | "dashboard" | "trend" | "performance"
+  const [view, setView] = useState("reports"); // "reports" | "library" | "trend" | "performance" | "tokens" | "playground"
   const [tab, setTab] = useState("review");
-  const [userFilter, setUserFilter] = useState("all");
   const [refreshing, setRefreshing] = useState(false);
   const [rules, setRules] = useState([]);
   const [rulesLoading, setRulesLoading] = useState(false);
   const [usage, setUsage] = useState(null);
   const [usageLoading, setUsageLoading] = useState(false);
+  // Rules handed over from the library so the playground can run them on open.
+  const [playgroundSeed, setPlaygroundSeed] = useState(null);
   const [lastSync, setLastSync] = useState(() => new Date());
   const backendUrl = (
     import.meta.env.VITE_BACKEND_URL ||
@@ -166,18 +167,32 @@ export default function App() {
           duplicate_choice: duplicateChoice,
         }),
       });
+
+      // 202 means the run was accepted onto the worker queue and is now
+      // running in the background; the outcome arrives via polling.
       const body = await response.json().catch(() => ({}));
       if (!response.ok || body.ok === false) {
-        throw new Error(body.error || `pipeline request failed ${response.status}`);
+        // 409 means a run for this report is already queued or running. The
+        // ticket really is in progress, so keep showing that and attach a
+        // watcher rather than resetting it to draft.
+        if (response.status === 409) {
+          clearReportImageCache(id);
+          setTab("review");
+          watchRun(id);
+          return;
+        }
+        throw new Error(body.error || `run rejected (${response.status})`);
       }
     } catch (error) {
-      console.error(`Failed to run pipeline for ticket ${id}`, error);
+      console.error(`Failed to queue pipeline for ticket ${id}`, error);
+      // Prefer database truth over guessing: only fall back to draft when the
+      // reload itself failed.
       const latest = await loadTickets();
       if (!latest) {
         setT(id, { state: "draft", stage: null, runStartedAt: null });
       }
       setTab("review");
-      window.alert(`Pipeline failed for ${id}: ${error.message}`);
+      window.alert(`Could not start this run: ${error.message}`);
       return;
     }
 
@@ -186,6 +201,43 @@ export default function App() {
     clearReportImageCache(id);
     await loadTickets();
     setTab("review");
+    watchRun(id);
+  };
+
+  // The run outlives this request now, so follow it by polling the ticket
+  // until the backend moves it out of an in-progress state. Kept in a ref so
+  // a second run on the same report replaces its watcher instead of stacking.
+  const watchers = useRef({});
+
+  const watchRun = (id) => {
+    if (watchers.current[id]) clearInterval(watchers.current[id]);
+
+    const started = Date.now();
+    watchers.current[id] = setInterval(async () => {
+      // Give up after 10 minutes rather than polling a dead backend forever.
+      if (Date.now() - started > 10 * 60 * 1000) {
+        clearInterval(watchers.current[id]);
+        delete watchers.current[id];
+        return;
+      }
+
+      try {
+        const response = await fetch(`${backendUrl}/api/tickets`);
+        if (!response.ok) return;
+        const data = await response.json();
+        const fresh = (data.tickets || []).find((t) => t.id === id);
+        setTickets(data.tickets || []);
+        setLastSync(new Date());
+
+        if (fresh && fresh.state !== "inprocess") {
+          clearInterval(watchers.current[id]);
+          delete watchers.current[id];
+        }
+      } catch (error) {
+        // Transient backend hiccup — keep polling until the timeout.
+        console.debug("run poll failed", error);
+      }
+    }, 4000);
   };
   const cancelRun = async (id) => {
     const updated = await updateTicketStatusInBackend(id, "draft");
@@ -197,6 +249,20 @@ export default function App() {
     setT(id, { state: "draft", stage: null, runStartedAt: null });
     setTab("draft");
   };
+
+  // A run outlives the page, so any ticket the backend still reports as
+  // in-process gets a watcher rather than a simulated stage timer.
+  useEffect(() => {
+    tickets.forEach((t) => {
+      if (t.state === "inprocess" && !watchers.current[t.id]) watchRun(t.id);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tickets]);
+
+  useEffect(() => {
+    const running = watchers.current;
+    return () => Object.values(running).forEach(clearInterval);
+  }, []);
 
   // Load database truth on startup and keep long-running pipeline stages fresh.
   useEffect(() => {
@@ -479,7 +545,6 @@ ${error.message}`);
       tickets
         .filter(
           (t) =>
-            (userFilter === "all" || t.createdBy === userFilter || t.reviewedBy === userFilter) &&
             (!q || t.name.toLowerCase().includes(q) || t.url.toLowerCase().includes(q))
         )
         .sort(
@@ -487,7 +552,7 @@ ${error.message}`);
             b.created.localeCompare(a.created) ||
             parseInt(b.id.slice(1), 10) - parseInt(a.id.slice(1), 10)
         ),
-    [tickets, q, userFilter]
+    [tickets, q]
   );
   const byState = useMemo(() => {
     const m = Object.fromEntries(STATE_ORDER.map((k) => [k, []]));
@@ -501,7 +566,8 @@ ${error.message}`);
   const failures = byState.failed || [];
   const items =
     tab === "all" ? filtered
-    : tab === "review" ? [...failures, ...(byState.review || []), ...ghosts]
+    // Active runs first, then failures needing attention, then the queue.
+    : tab === "review" ? [...ghosts, ...failures, ...(byState.review || [])]
     : byState[tab] || [];
 
   const openTicket = modal?.kind === "ticket" ? tickets.find((t) => t.id === modal.id) : null;
@@ -519,17 +585,12 @@ ${error.message}`);
           setTab={setTab}
           query={query}
           setQuery={setQuery}
-          userFilter={userFilter}
-          setUserFilter={setUserFilter}
           lastSync={lastSync}
           refreshing={refreshing}
           onRefresh={refreshBoard}
           onOpen={(id) => setModal({ kind: "ticket", id })}
           onNew={() => setModal({ kind: "new" })}
         />
-      )}
-      {view === "dashboard" && (
-        <Dashboard tickets={tickets} goReview={() => { setView("reports"); setTab("review"); }} />
       )}
       {view === "trend" && <Trend tickets={tickets} />}
       {view === "performance" && <Performance tickets={tickets} />}
@@ -544,8 +605,11 @@ ${error.message}`);
           onBulkDelete={bulkRemoveRules}
           onMergePreview={(items) => mergeRulePair(items, true)}
           onMergeRules={(items) => mergeRulePair(items, false)}
-          onTestRules={testRules}
+          onSendToPlayground={(seed) => { setPlaygroundSeed(seed); setView("playground"); }}
         />
+      )}
+      {view === "playground" && (
+        <Playground seed={playgroundSeed} onSeedConsumed={() => setPlaygroundSeed(null)} />
       )}
       {view === "tokens" && (
         <TokenUsage usage={usage} loading={usageLoading} onRefresh={loadUsage} />

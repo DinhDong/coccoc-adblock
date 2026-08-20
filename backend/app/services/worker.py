@@ -10,19 +10,17 @@ Run through Docker Compose:
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import logging
 import os
 import re
 import signal
-import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping, Optional, Protocol
+from typing import Any, Dict, Mapping, Optional
 from urllib.parse import urlparse
 
 try:
@@ -70,336 +68,183 @@ class WorkerJob:
     before_screenshot: str = ""
 
 
-class JobSource(Protocol):
-    name: str
-
-    def claim_next(self) -> Optional[WorkerJob]:
-        """Return one unprocessed job and mark it processing."""
-
-    def mark_completed(self, job: WorkerJob, output: Mapping[str, Any]) -> None:
-        """Persist a successful terminal result."""
-
-    def mark_failed(
-        self,
-        job: WorkerJob,
-        error_message: str,
-        output: Mapping[str, Any],
-    ) -> None:
-        """Persist a failed terminal result. Failed jobs are not auto-retried."""
-
-
-class FileJobSource:
-    name = "files"
-
-    def __init__(
-        self,
-        tickets_dir: Path = DEFAULT_TICKETS_DIR,
-        ledger_file: Path = DEFAULT_LEDGER_FILE,
-    ) -> None:
-        self.tickets_dir = tickets_dir
-        self.ledger_file = ledger_file
-        self.ledger = self._load_ledger()
-
-    def claim_next(self) -> Optional[WorkerJob]:
-        for ticket_path in self._ticket_paths():
-            source_key = str(ticket_path.as_posix())
-            record = self.ledger.setdefault("tickets", {}).get(source_key, {})
-            status = str(record.get("status") or "").lower()
-
-            if status in TERMINAL_FILE_STATUSES or status == "processing":
-                continue
-
-            try:
-                job = build_job_from_ticket(ticket_path)
-            except Exception as exc:
-                logger.exception("Invalid ticket %s: %s", ticket_path, exc)
-                self._set_ticket_state(
-                    source_key=source_key,
-                    status="failed",
-                    error_message=str(exc),
-                )
-                self._save_ledger()
-                continue
-
-            self._set_ticket_state(source_key, "processing", job=job)
-            self._save_ledger()
-            return job
-
-        return None
-
-    def mark_completed(self, job: WorkerJob, output: Mapping[str, Any]) -> None:
-        self._set_ticket_state(
-            source_key=job.source_key,
-            status="completed",
-            job=job,
-            output=output,
-        )
-        self._save_ledger()
-
-    def mark_failed(
-        self,
-        job: WorkerJob,
-        error_message: str,
-        output: Mapping[str, Any],
-    ) -> None:
-        self._set_ticket_state(
-            source_key=job.source_key,
-            status="failed",
-            job=job,
-            error_message=error_message,
-            output=output,
-        )
-        self._save_ledger()
-
-    def _ticket_paths(self) -> Iterable[Path]:
-        if not self.tickets_dir.exists():
-            logger.warning("Ticket directory does not exist: %s", self.tickets_dir)
-            return []
-
-        return sorted(self.tickets_dir.glob("*.json"))
-
-    def _set_ticket_state(
-        self,
-        source_key: str,
-        status: str,
-        job: Optional[WorkerJob] = None,
-        error_message: str = "",
-        output: Optional[Mapping[str, Any]] = None,
-    ) -> None:
-        now = utc_now()
-        tickets = self.ledger.setdefault("tickets", {})
-        current = dict(tickets.get(source_key, {}))
-        current["status"] = status
-        current["updated_at"] = now
-
-        if "created_at" not in current:
-            current["created_at"] = now
-
-        if status in TERMINAL_FILE_STATUSES:
-            current["processed_at"] = now
-
-        if error_message:
-            current["error_message"] = error_message
-        elif "error_message" in current:
-            current["error_message"] = ""
-
-        if job is not None:
-            current.update(
-                {
-                    "report_id": job.report_id,
-                    "domain": job.domain,
-                    "jira_ticket_code": job.jira_ticket_code,
-                    "url": job.url,
-                    "environment": job.environment,
-                }
-            )
-
-        if output is not None:
-            current["output"] = make_json_safe(dict(output))
-
-        tickets[source_key] = current
-
-    def _load_ledger(self) -> Dict[str, Any]:
-        if not self.ledger_file.exists():
-            return {"tickets": {}}
-
-        with open(self.ledger_file, "r", encoding="utf-8") as file:
-            ledger = json.load(file)
-
-        if not isinstance(ledger, dict):
-            return {"tickets": {}}
-
-        ledger.setdefault("tickets", {})
-        return ledger
-
-    def _save_ledger(self) -> None:
-        self.ledger_file.parent.mkdir(parents=True, exist_ok=True)
-        tmp_file = self.ledger_file.with_suffix(self.ledger_file.suffix + ".tmp")
-
-        with open(tmp_file, "w", encoding="utf-8") as file:
-            json.dump(make_json_safe(self.ledger), file, indent=2, ensure_ascii=False)
-
-        tmp_file.replace(self.ledger_file)
-
-
 def _dict_to_ns(d: dict) -> Any:
     """Convert a dict row to a SimpleNamespace so getattr() works."""
     from types import SimpleNamespace
     return SimpleNamespace(**d)
 
 
-class DatabaseJobSource:
-    name = "db"
+def claim_next_job() -> Optional[WorkerJob]:
+    """
+    Take the oldest unclaimed request and mark it processing.
 
-    def __init__(self) -> None:
-        from app.database import get_connection, MYSQL_USER, MYSQL_DATABASE
+    Talks to MySQL directly — there is no source abstraction and nothing to
+    configure. FOR UPDATE SKIP LOCKED means several worker containers can run
+    at once without two of them grabbing the same row.
+    """
+    from app.database import get_connection
 
-        if not MYSQL_USER or not MYSQL_DATABASE:
-            raise RuntimeError(
-                "MySQL is not configured. Set MYSQL_USER, MYSQL_PASSWORD, and MYSQL_DATABASE."
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            conn.begin()
+            cur.execute(
+                "SELECT * FROM crawl_inputs "
+                "WHERE status = 'new' "
+                "ORDER BY created_at ASC, id ASC "
+                "LIMIT 1 "
+                "FOR UPDATE SKIP LOCKED"
             )
-        # Verify connectivity at init
-        conn = get_connection()
+            row = cur.fetchone()
+
+            if row is None:
+                conn.commit()
+                return None
+
+            cur.execute(
+                "UPDATE crawl_inputs SET status='processing', error_message='', "
+                "updated_at=NOW() WHERE id=%s",
+                (row["id"],),
+            )
+            conn.commit()
+
+            return build_job_from_crawl_input(_dict_to_ns(row))
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
         conn.close()
 
-    def claim_next(self) -> Optional[WorkerJob]:
-        from app.database import get_connection
 
-        conn = get_connection()
-        try:
-            with conn.cursor() as cur:
-                conn.begin()
-                cur.execute(
-                    "SELECT * FROM crawl_inputs "
-                    "WHERE status = 'new' "
-                    "ORDER BY created_at ASC, id ASC "
-                    "LIMIT 1 "
-                    "FOR UPDATE SKIP LOCKED"
-                )
-                row = cur.fetchone()
+def mark_completed(job: WorkerJob, output: Mapping[str, Any]) -> None:
+    save_job_result(job, input_status="completed", error_message="", output=output)
 
-                if row is None:
-                    conn.commit()
-                    return None
 
-                cur.execute(
-                    "UPDATE crawl_inputs SET status='processing', error_message='', "
-                    "updated_at=NOW() WHERE id=%s",
-                    (row["id"],),
-                )
-                conn.commit()
+def mark_failed(job: WorkerJob, error_message: str, output: Mapping[str, Any]) -> None:
+    save_job_result(
+        job,
+        input_status="failed",
+        error_message=error_message,
+        output=output,
+    )
 
-                return build_job_from_crawl_input(_dict_to_ns(row))
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
 
-    def mark_completed(self, job: WorkerJob, output: Mapping[str, Any]) -> None:
-        self._save_result(job, input_status="completed", error_message="", output=output)
+def save_job_result(
+    job: WorkerJob,
+    input_status: str,
+    error_message: str,
+    output: Mapping[str, Any],
+) -> None:
+    if job.input_id is None:
+        raise RuntimeError("Worker jobs must have input_id.")
 
-    def mark_failed(
-        self,
-        job: WorkerJob,
-        error_message: str,
-        output: Mapping[str, Any],
-    ) -> None:
-        self._save_result(
-            job,
-            input_status="failed",
-            error_message=error_message,
-            output=output,
-        )
+    from app.database import get_connection
 
-    def _save_result(
-        self,
-        job: WorkerJob,
-        input_status: str,
-        error_message: str,
-        output: Mapping[str, Any],
-    ) -> None:
-        if job.input_id is None:
-            raise RuntimeError("Database jobs must have input_id.")
-
-        from app.database import get_connection
-
-        conn = get_connection()
-        try:
-            with conn.cursor() as cur:
-                conn.begin()
-                cur.execute(
-                    "UPDATE crawl_inputs SET status=%s, error_message=%s, "
-                    "crawl_duration_ms=%s, updated_at=NOW() WHERE id=%s",
-                    (
-                        input_status,
-                        error_message,
-                        int(output.get("crawl_duration_ms") or 0),
-                        job.input_id,
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            conn.begin()
+            cur.execute(
+                "UPDATE crawl_inputs SET status=%s, error_message=%s, "
+                "crawl_duration_ms=%s, updated_at=NOW() WHERE id=%s",
+                (
+                    input_status,
+                    error_message,
+                    int(output.get("crawl_duration_ms") or 0),
+                    job.input_id,
+                ),
+            )
+            cur.execute(
+                "INSERT INTO rule_outputs "
+                "(input_id, rules, input_tokens, output_tokens, "
+                "validation_result, after_screenshot, status, error_message) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                (
+                    job.input_id,
+                    json.dumps(output.get("rules", []), ensure_ascii=False),
+                    int(output.get("input_tokens") or 0),
+                    int(output.get("output_tokens") or 0),
+                    json.dumps(
+                        make_json_safe(output.get("validation_result", {})),
+                        ensure_ascii=False,
                     ),
-                )
-                cur.execute(
-                    "INSERT INTO rule_outputs "
-                    "(input_id, rules, input_tokens, output_tokens, "
-                    "validation_result, after_screenshot, status, error_message) "
-                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
-                    (
-                        job.input_id,
-                        json.dumps(output.get("rules", []), ensure_ascii=False),
-                        int(output.get("input_tokens") or 0),
-                        int(output.get("output_tokens") or 0),
-                        json.dumps(
-                            make_json_safe(output.get("validation_result", {})),
-                            ensure_ascii=False,
-                        ),
-                        str(output.get("after_screenshot") or ""),
-                        str(output.get("status") or input_status),
-                        error_message or str(output.get("error_message") or ""),
-                    ),
-                )
-                conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+                    str(output.get("after_screenshot") or ""),
+                    str(output.get("status") or input_status),
+                    error_message or str(output.get("error_message") or ""),
+                ),
+            )
+            conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
 
 
 def run_worker(
-    source: JobSource,
     sleep_seconds: int = DEFAULT_SLEEP_SECONDS,
-    once: bool = False,
     run_validation: bool = True,
     skip_external: bool = False,
     headless: bool = True,
 ) -> int:
+    """
+    Poll the database forever, processing one request at a time.
+
+    Every failure mode is contained to the record that caused it. Claiming,
+    processing and recording a result are each wrapped so that a bad row, a
+    dropped MySQL connection or a crashing pipeline logs and moves on to the
+    next record rather than killing the service. Only a stop signal ends it.
+    """
     processed = 0
+    consecutive_errors = 0
     should_stop = StopFlag()
     should_stop.install()
 
-    logger.info(
-        "Worker started source=%s sleep=%ss once=%s",
-        source.name,
-        sleep_seconds,
-        once,
-    )
+    logger.info("Worker started sleep=%ss (database source)", sleep_seconds)
 
-    try:
-        while not should_stop.value:
-            job = source.claim_next()
+    while not should_stop.value:
+        try:
+            job = claim_next_job()
+        except Exception as exc:
+            # Usually MySQL being unreachable. Back off and try again rather
+            # than exiting, so the container does not need restarting.
+            consecutive_errors += 1
+            logger.exception("Could not claim a request: %s", exc)
+            should_stop.wait(min(sleep_seconds, 30 * consecutive_errors) or 30)
+            continue
 
-            if job is None:
-                if once:
-                    logger.info("No pending requests. Exiting because --once is set.")
-                    return processed
+        consecutive_errors = 0
 
-                logger.info(
-                    "No pending requests, sleeping %ss...",
-                    sleep_seconds,
-                )
+        if job is None:
+            logger.info("No pending requests, sleeping %ss...", sleep_seconds)
+            should_stop.wait(sleep_seconds)
+            continue
 
-                should_stop.wait(sleep_seconds)
-                continue
-
+        try:
             process_job(
-                source=source,
                 job=job,
                 run_validation=run_validation,
                 skip_external=skip_external,
                 headless=headless,
             )
             processed += 1
+        except Exception as exc:
+            # process_job records its own failures; reaching here means even
+            # that bookkeeping failed. The row stays 'processing' and will need
+            # a manual reset, but the worker keeps serving everything else.
+            logger.exception(
+                "Giving up on report_id=%s and continuing: %s",
+                job.report_id,
+                exc,
+            )
 
-            if once:
-                return processed
-    except KeyboardInterrupt:
-        logger.info("Worker interrupted. Exiting after current loop.")
-
+    logger.info("Worker stopped after processing %d request(s).", processed)
     return processed
 
 
+
 def process_job(
-    source: JobSource,
     job: WorkerJob,
     run_validation: bool = True,
     skip_external: bool = False,
@@ -408,8 +253,7 @@ def process_job(
     from app.services.workflow import run_pipeline
 
     logger.info(
-        "Processing job source=%s report_id=%s url=%s env=%s",
-        source.name,
+        "Processing report_id=%s url=%s env=%s",
         job.report_id,
         job.url,
         job.environment,
@@ -434,7 +278,7 @@ def process_job(
         output = build_output_payload(job, result, duration_ms, error_message)
 
         if result.get("status") in SUCCESS_PIPELINE_STATUSES:
-            source.mark_completed(job, output)
+            mark_completed(job, output)
             logger.info(
                 "Completed report_id=%s status=%s rules_passed=%s",
                 job.report_id,
@@ -443,7 +287,7 @@ def process_job(
             )
             return
 
-        source.mark_failed(job, error_message or "Pipeline failed", output)
+        mark_failed(job, error_message or "Pipeline failed", output)
         logger.error(
             "Failed report_id=%s status=%s error=%s",
             job.report_id,
@@ -459,49 +303,9 @@ def process_job(
             duration_ms,
             error_message,
         )
-        source.mark_failed(job, error_message, output)
         logger.exception("Unhandled job failure report_id=%s: %s", job.report_id, exc)
+        mark_failed(job, error_message, output)
 
-
-def build_job_from_ticket(ticket_path: Path) -> WorkerJob:
-    with open(ticket_path, "r", encoding="utf-8") as file:
-        ticket = json.load(file)
-
-    if not isinstance(ticket, Mapping):
-        raise ValueError("Ticket file must contain a JSON object.")
-
-    url = extract_url_from_ticket(ticket)
-
-    if not url:
-        raise ValueError("Ticket does not contain a usable URL.")
-
-    domain = str(ticket.get("domain") or hostname_from_url(url)).strip()
-    jira_ticket_code = str(
-        ticket.get("jira_ticket_code")
-        or ticket.get("ticket_code")
-        or ticket.get("ticket_id")
-        or ticket_path.stem
-    )
-    report_id = safe_report_id(str(ticket.get("report_id") or jira_ticket_code))
-    environment = resolve_environment(ticket, default="desktop")
-
-    return WorkerJob(
-        source_key=str(ticket_path.as_posix()),
-        input_id=None,
-        report_id=report_id,
-        domain=domain,
-        domain_type=str(ticket.get("domain_type") or "test_ticket"),
-        jira_ticket_code=jira_ticket_code,
-        url=url,
-        ad_type=str(ticket.get("ad_type") or ticket.get("problem_type") or ""),
-        ticket_context=make_json_safe(dict(ticket)),
-        environment=environment,
-        before_screenshot=str(
-            ticket.get("before_screenshot")
-            or ticket.get("screenshot_url")
-            or ""
-        ),
-    )
 
 
 def build_job_from_crawl_input(row: Any) -> WorkerJob:
@@ -603,45 +407,6 @@ def pipeline_error_message(result: Mapping[str, Any]) -> str:
         return ""
 
     return str(result.get("error") or result.get("status") or "Pipeline failed")
-
-
-def extract_url_from_ticket(ticket: Mapping[str, Any]) -> str:
-    direct = normalize_url(str(ticket.get("url") or ""))
-
-    if direct:
-        return direct
-
-    for text in iter_ticket_text(ticket):
-        match = URL_RE.search(text)
-
-        if match:
-            return normalize_url(match.group(0))
-
-    for text in iter_ticket_text(ticket):
-        match = DOMAIN_PATH_RE.search(text)
-
-        if match:
-            return normalize_url(f"https://{match.group(1)}{match.group(2) or ''}")
-
-    domain = str(ticket.get("domain") or "").strip()
-    return normalize_url(domain) if domain else ""
-
-
-def iter_ticket_text(ticket: Mapping[str, Any]) -> Iterable[str]:
-    for key in ("request", "description", "actual", "expected", "domain"):
-        value = ticket.get(key)
-
-        if value:
-            yield str(value)
-
-    steps = ticket.get("steps", [])
-
-    if isinstance(steps, list):
-        for step in steps:
-            if step:
-                yield str(step)
-    elif steps:
-        yield str(steps)
 
 
 def normalize_url(value: str) -> str:
@@ -786,98 +551,40 @@ def database_tables_exist() -> bool:
         return False
 
 
-def build_source(args: argparse.Namespace) -> JobSource:
-    if args.source == "files":
-        return FileJobSource(
-            tickets_dir=Path(args.tickets_dir),
-            ledger_file=Path(args.ledger_file),
-        )
+def main() -> int:
+    """
+    Entry point: `python -m app.services.worker`.
 
-    if args.source == "db":
-        return DatabaseJobSource()
-
-    if database_tables_exist():
-        logger.info("MySQL config and worker tables detected; using database mode.")
-        return DatabaseJobSource()
-
-    logger.info("Using file mode.")
-    return FileJobSource(
-        tickets_dir=Path(args.tickets_dir),
-        ledger_file=Path(args.ledger_file),
-    )
-
-
-def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Run the crawl -> generate -> validate worker service.",
-    )
-    parser.add_argument(
-        "--source",
-        choices=["auto", "files", "db"],
-        default=os.getenv("WORKER_SOURCE", "auto"),
-        help="Job source. auto uses DB when MySQL is configured and tables exist; otherwise files.",
-    )
-    parser.add_argument(
-        "--tickets-dir",
-        default=os.getenv("WORKER_TICKETS_DIR", str(DEFAULT_TICKETS_DIR)),
-        help="Ticket JSON directory for file mode.",
-    )
-    parser.add_argument(
-        "--ledger-file",
-        default=os.getenv("WORKER_LEDGER_FILE", str(DEFAULT_LEDGER_FILE)),
-        help="File-mode processed_tickets.json ledger.",
-    )
-    parser.add_argument(
-        "--once",
-        action="store_true",
-        help="Process one job, or exit immediately if none is available.",
-    )
-    parser.add_argument(
-        "--sleep",
-        type=int,
-        default=int(os.getenv("WORKER_SLEEP_SECONDS", str(DEFAULT_SLEEP_SECONDS))),
-        help="Seconds to sleep when no work is available.",
-    )
-    parser.add_argument(
-        "--no-sandbox",
-        action="store_true",
-        help="Skip validation/sandbox checks.",
-    )
-    parser.add_argument(
-        "--no-external",
-        action="store_true",
-        help="Skip external filter-list duplicate checks.",
-    )
-    parser.add_argument(
-        "--no-headless",
-        action="store_true",
-        help="Open a visible browser window during crawl.",
-    )
-    return parser.parse_args(argv)
-
-
-def main(argv: Optional[list[str]] = None) -> int:
-    args = parse_args(argv)
-    log_level = os.getenv("WORKER_LOG_LEVEL", "INFO").upper()
-
+    Takes no arguments. The database is the only source of work, and the few
+    knobs that exist are read from the environment so the same image behaves
+    the same whether it is started by compose or by hand.
+    """
     logging.basicConfig(
-        level=getattr(logging, log_level, logging.INFO),
+        level=os.getenv("WORKER_LOG_LEVEL", "INFO").upper(),
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
 
-    source = build_source(args)
-    processed = run_worker(
-        source=source,
-        sleep_seconds=max(args.sleep, 1),
-        once=args.once,
-        run_validation=not args.no_sandbox,
-        skip_external=args.no_external,
-        headless=not args.no_headless,
+    try:
+        sleep_seconds = max(1, int(os.getenv("WORKER_SLEEP_SECONDS", str(DEFAULT_SLEEP_SECONDS))))
+    except ValueError:
+        sleep_seconds = DEFAULT_SLEEP_SECONDS
+
+    if not database_tables_exist():
+        logger.error(
+            "MySQL is not reachable or crawl_inputs/rule_outputs are missing. "
+            "Start the database and try again."
+        )
+        return 1
+
+    run_worker(
+        sleep_seconds=sleep_seconds,
+        run_validation=os.getenv("WORKER_SKIP_VALIDATION", "").lower() not in {"1", "true", "yes"},
+        skip_external=os.getenv("WORKER_SKIP_EXTERNAL", "").lower() in {"1", "true", "yes"},
+        headless=os.getenv("WORKER_HEADFUL", "").lower() not in {"1", "true", "yes"},
     )
-    logger.info("Worker stopped after processing %s job(s).", processed)
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Plus, Search, RefreshCw, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight } from "lucide-react";
-import { STATE_ORDER, TABS, STATES, USERS } from "../constants.js";
+import { STATE_ORDER, TABS, STATES } from "../constants.js";
 import ReportTable from "../components/ReportTable.jsx";
 
 // which tab each stat card jumps to (in-process rows live inside Review)
@@ -10,21 +10,21 @@ const PAGE_SIZES = [5, 10, 15, 20];
 
 export default function Reports({
   items, byState, filtered, ghosts,
-  tab, setTab, query, setQuery, userFilter, setUserFilter,
+  tab, setTab, query, setQuery,
   lastSync, refreshing, onRefresh, onOpen, onNew,
 }) {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(5);
 
   // jump back to the first page whenever the visible set changes
-  useEffect(() => { setPage(1); }, [tab, query, userFilter, pageSize]);
+  useEffect(() => { setPage(1); }, [tab, query, pageSize]);
 
   const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
   const cur = Math.min(page, totalPages);
   const pageItems = items.slice((cur - 1) * pageSize, cur * pageSize);
 
   const q = query.trim();
-  const emptyText = q || userFilter !== "all" ? "No reports match these filters." : STATES[tab].empty;
+  const emptyText = q ? "No reports match this search." : STATES[tab].empty;
 
   return (
     <div className="ad-content">
@@ -83,17 +83,6 @@ export default function Reports({
                 aria-label="Search reports"
               />
             </span>
-            <select
-              className="ad-select"
-              value={userFilter}
-              onChange={(e) => setUserFilter(e.target.value)}
-              aria-label="Filter by user"
-            >
-              <option value="all">All users</option>
-              {USERS.map((u) => (
-                <option key={u.k} value={u.k}>{u.name}</option>
-              ))}
-            </select>
             <span className="ad-sync">Synced {lastSync.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
             <button
               className="ad-refresh"

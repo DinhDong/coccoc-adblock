@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TICKETS_DIR = Path("app/tests/tickets")
 DEFAULT_LEDGER_FILE = Path("data/service_worker/processed_tickets.json")
-DEFAULT_SLEEP_SECONDS = 300
+DEFAULT_SLEEP_SECONDS = 5
 
 # Must match the set the HTTP API treats as success (app/__init__.py).
 # run_pipeline returns "review" on its main success path; leaving it out

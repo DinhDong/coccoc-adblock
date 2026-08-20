@@ -76,7 +76,7 @@ Configured entirely by environment variables:
 
 | variable | default | purpose |
 |---|---|---|
-| `WORKER_SLEEP_SECONDS` | `300` | idle wait between polls |
+| `WORKER_SLEEP_SECONDS` | `5` | idle wait between polls |
 | `WORKER_LOG_LEVEL` | `INFO` | logging verbosity |
 | `WORKER_SKIP_VALIDATION` | unset | set truthy to skip the sandbox stage |
 | `WORKER_SKIP_EXTERNAL` | unset | set truthy to skip public filter-list checks |

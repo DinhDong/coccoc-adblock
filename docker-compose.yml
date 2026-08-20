@@ -86,7 +86,7 @@ services:
         limits:
           memory: 1G
 
-  # ---- Background worker (poll for "new" tickets every 5 min) ----
+  # ---- Background worker (poll for "new" tickets every 5 seconds) ----
   worker:
     build: ./backend
     env_file: .env.local
@@ -95,7 +95,7 @@ services:
     command: ["python", "-m", "app.services.worker"]
     environment:
       WORKER_LOG_LEVEL: INFO
-      WORKER_SLEEP_SECONDS: "300"
+      WORKER_SLEEP_SECONDS: "5"
     restart: unless-stopped
     volumes:
       - ./backend:/app

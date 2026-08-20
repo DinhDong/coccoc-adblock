@@ -87,7 +87,6 @@ services:
           memory: 1G
 
   # ---- Background worker (poll for "new" tickets every 5 seconds) ----
-  # ---- Background worker (poll for "new" tickets every 5 seconds) ----
   worker:
     build: ./backend
     env_file: .env.local

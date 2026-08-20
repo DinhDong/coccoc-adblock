@@ -28,9 +28,6 @@ from app.services.worker import main  # noqa: E402
 
 
 if __name__ == "__main__":
-    # Default args match what docker-compose.yml used to specify:
-    #   --source=db --sleep=5
-    # If the caller passes explicit CLI args, those take precedence.
-    default_args = ["--source=db", "--sleep=5"]
-    argv = sys.argv[1:] if len(sys.argv) > 1 else default_args
-    sys.exit(main(argv))
+    # main() reads all configuration from environment variables
+    # (WORKER_SLEEP_SECONDS, WORKER_SKIP_VALIDATION, etc.).
+    sys.exit(main())

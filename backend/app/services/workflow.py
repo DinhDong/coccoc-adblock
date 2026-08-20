@@ -1,8 +1,13 @@
 """
 End-to-end pipeline coordinator.
 
-Reads a crawl result, runs AI rule generation, deduplicates candidates,
-validates the remaining candidates, and writes the outputs to data/rule_outputs/.
+Reads a crawl result, enforces domestic-domain eligibility, runs AI rule
+generation, deduplicates candidates, validates the remaining candidates, and
+writes the outputs to data/rule_outputs/.
+
+Domain eligibility is enforced automatically for both fresh crawls and legacy
+reused crawl results. Only sites verified as domestic are allowed to reach rule
+generation and validation.
 
 This workflow supports two processing modes:
 
@@ -729,6 +734,167 @@ def run_crawl(
     return result
 
 
+def _load_saved_html_for_domain_check(
+    crawl_result: Mapping[str, Any],
+    report_id: str,
+) -> tuple[str, str]:
+    """
+    Load saved crawl HTML for domain classification of older legacy reports.
+
+    New crawl results already contain domain_classification. This helper exists
+    for reports created before the domain filter was introduced.
+
+    Returns:
+        (html, source)
+    """
+    candidates: List[Path] = []
+
+    files = crawl_result.get("files", {})
+    if isinstance(files, Mapping):
+        stored_html_path = str(files.get("html", "") or "").strip()
+
+        if stored_html_path and not stored_html_path.startswith(
+            ("s3://", "http://", "https://")
+        ):
+            candidates.append(Path(stored_html_path))
+
+    fallback_path = Path("data/crawl_outputs/html") / f"{report_id}.html"
+    if fallback_path not in candidates:
+        candidates.append(fallback_path)
+
+    for path in candidates:
+        try:
+            if not path.is_file():
+                continue
+
+            return (
+                path.read_text(
+                    encoding="utf-8",
+                    errors="replace",
+                ),
+                str(path),
+            )
+        except OSError as exc:
+            logger.warning(
+                "Domain gate: could not read saved HTML %s: %s",
+                path,
+                exc,
+            )
+
+    return "", ""
+
+
+def _classify_crawl_result_domain(
+    crawl_result: Mapping[str, Any],
+    report_id: str,
+) -> tuple[Dict[str, Any], str]:
+    """
+    Resolve domain eligibility for both fresh and legacy crawl results.
+
+    Priority:
+        1. Reuse a valid classification already written by CrawlService.
+        2. Classify from the URL alone when that is decisive.
+        3. For unresolved non-.vn legacy results, inspect saved crawl HTML.
+
+    The workflow is fail-closed: UNKNOWN, FOREIGN, and INVALID are blocked.
+    """
+    from app.services.domain_classifier import (
+        DOMESTIC,
+        FOREIGN,
+        INVALID,
+        UNKNOWN,
+        classify_domain,
+    )
+
+    valid_labels = {
+        DOMESTIC,
+        FOREIGN,
+        UNKNOWN,
+        INVALID,
+    }
+
+    stored = crawl_result.get("domain_classification")
+    if isinstance(stored, Mapping):
+        stored_label = str(
+            stored.get("classification", "") or ""
+        ).strip().lower()
+
+        if (
+            stored_label in valid_labels
+            and isinstance(stored.get("eligible"), bool)
+        ):
+            return dict(stored), "stored_classification"
+
+    page_url = str(crawl_result.get("url", "") or "").strip()
+    preclassification = classify_domain(page_url)
+
+    if (
+        preclassification.eligible
+        or preclassification.classification in {FOREIGN, INVALID}
+    ):
+        return preclassification.to_dict(), "url"
+
+    html, html_source = _load_saved_html_for_domain_check(
+        crawl_result,
+        report_id,
+    )
+
+    classification = classify_domain(
+        page_url,
+        html,
+    )
+
+    return (
+        classification.to_dict(),
+        html_source or "url_without_saved_html",
+    )
+
+
+def _domain_block_message(
+    classification: Mapping[str, Any],
+    fallback_domain: str,
+) -> str:
+    """Build a user-facing explanation for a domain policy block."""
+    label = str(
+        classification.get("classification", "unknown")
+        or "unknown"
+    ).strip().lower()
+
+    hostname = str(
+        classification.get("hostname", "")
+        or fallback_domain
+        or "submitted domain"
+    )
+
+    if label == "invalid":
+        message = "Domain blocked because the submitted URL is invalid."
+    elif label == "foreign":
+        message = (
+            f"Domain blocked: {hostname} is classified as a foreign website."
+        )
+    elif label == "unknown":
+        message = (
+            f"Domain blocked: {hostname} could not be verified as a domestic website."
+        )
+    else:
+        message = (
+            f"Domain blocked: {hostname} is not eligible for processing."
+        )
+
+    reasons = classification.get("reasons", [])
+    if isinstance(reasons, (list, tuple)):
+        clean_reasons = [
+            str(reason).strip()
+            for reason in reasons
+            if str(reason).strip()
+        ]
+
+        if clean_reasons:
+            message = f"{message} Reason: " + "; ".join(clean_reasons)
+
+    return message
+
+
 def run_pipeline(
     report_id: str,
     verbose: bool = False,
@@ -747,6 +913,7 @@ def run_pipeline(
         optional crawl
         → load crawl result
         → normalize ticket context
+        → enforce domestic-domain eligibility
         → generate rules
         → optionally validate
         → return summary
@@ -767,7 +934,10 @@ def run_pipeline(
         ticket_context: Ticket metadata forwarded to the crawl when url is
                         provided.
         focus_region:   Optional region scope forwarded to the crawl.
-        interactive:    If False, keep existing rules without prompting.
+        duplicate_choice:
+                        Optional duplicate-rule decision from the API/UI.
+                        Use "discard" to replace existing rules; otherwise
+                        existing rules are kept and only new rules are added.
         **render_kwargs: Extra render options forwarded to the crawler.
     """
     from app.services.rule_registry import (
@@ -841,9 +1011,11 @@ def run_pipeline(
             f"{report_id} --url <url> --env desktop"
         )
 
+    # utf-8-sig accepts both normal UTF-8 JSON and UTF-8 files that include
+    # a BOM (common when legacy artifacts were written by Windows tools).
     with open(
         crawl_path,
-        encoding="utf-8",
+        encoding="utf-8-sig",
     ) as file:
         crawl_result = json.load(file)
 
@@ -851,6 +1023,148 @@ def run_pipeline(
 
     env = crawl_result.get("environment", "desktop")
     page_url = crawl_result.get("url", "unknown")
+    crawl_elapsed_ms = _extract_crawl_elapsed_ms(crawl_result)
+
+    # Global domain gate.
+    #
+    # Fresh crawls already contain domain_classification from CrawlService.
+    # Legacy mode can reuse a crawl result created before that field existed, so
+    # the workflow classifies it here from the URL and saved HTML before Stage 1.
+    # There is intentionally no CLI flag for this policy: every workflow path is
+    # protected automatically.
+    domain_classification, domain_classification_source = (
+        _classify_crawl_result_domain(
+            crawl_result,
+            report_id,
+        )
+    )
+
+    crawl_result["domain_classification"] = domain_classification
+
+    # Backfill older legacy JSON files so future runs can reuse the decision and
+    # the CMS can explain the domain decision without re-reading HTML.
+    _update_json_mapping(
+        crawl_path,
+        {
+            "domain_classification": domain_classification,
+        },
+    )
+
+    domain_type = str(
+        domain_classification.get("classification", "unknown")
+        or "unknown"
+    )
+
+    domain_eligible = bool(
+        domain_classification.get("eligible", False)
+    )
+
+    if not domain_eligible:
+        normalized_ticket_context = crawl_result.get(
+            "ticket_context",
+            {},
+        )
+
+        block_message = _domain_block_message(
+            domain_classification,
+            get_domain(page_url),
+        )
+
+        logger.warning(
+            "Workflow domain gate blocked %s | classification=%s | "
+            "source=%s | score=%s",
+            page_url,
+            domain_type,
+            domain_classification_source,
+            domain_classification.get("score", 0),
+        )
+
+        try:
+            update_ticket_status(report_id, "crawl_failed")
+        except Exception:
+            logger.warning(
+                "Pipeline: could not set crawl_failed status for blocked report %s",
+                report_id,
+            )
+
+        try:
+            save_crawl_input(
+                report_id=report_id,
+                domain=get_domain(page_url),
+                domain_type=domain_type,
+                url=page_url,
+                ticket_context=normalized_ticket_context,
+                status="failed",
+                error_message=block_message,
+                crawl_duration_ms=crawl_elapsed_ms,
+                before_screenshot=(
+                    crawl_result.get("files", {}).get(
+                        "screenshot",
+                        "",
+                    )
+                ),
+            )
+        except Exception:
+            logger.warning(
+                "Pipeline: could not save blocked legacy crawl result to DB for %s",
+                report_id,
+            )
+
+        return {
+            "report_id": report_id,
+            "url": page_url,
+            "environment": env,
+            "ticket_context": normalized_ticket_context,
+            "problem_type": _get_problem_type(
+                normalized_ticket_context
+            ),
+            "resolution_strategy": _get_resolution_strategy(
+                normalized_ticket_context
+            ),
+            "processing_mode": _get_processing_mode(
+                normalized_ticket_context
+            ),
+            "crawl_elapsed_ms": crawl_elapsed_ms,
+            "generation_elapsed_ms": None,
+            "validation_elapsed_ms": None,
+            "workflow_elapsed_ms": None,
+            "rules_generated": 0,
+            "rules_passed": 0,
+            "rules_failed": 0,
+            "passing_rules": [],
+            "status": "crawl_failed",
+            "crawl_stage": "domain_classification",
+            "crawl_error": block_message,
+            "blocked": True,
+            "domain_classification": domain_classification,
+            "domain_classification_source": domain_classification_source,
+        }
+
+    logger.info(
+        "Workflow domain gate passed %s | classification=%s | "
+        "source=%s | score=%s",
+        page_url,
+        domain_type,
+        domain_classification_source,
+        domain_classification.get("score", 0),
+    )
+
+    try:
+        save_crawl_input(
+            report_id=report_id,
+            domain=get_domain(page_url),
+            domain_type=domain_type,
+            url=page_url,
+            ticket_context=crawl_result.get("ticket_context", {}),
+            status="success",
+            crawl_duration_ms=crawl_elapsed_ms,
+            before_screenshot=crawl_result.get("files", {}).get("screenshot", ""),
+        )
+    except Exception:
+        logger.warning(
+            "Pipeline: could not save existing crawl result to DB for %s",
+            report_id,
+        )
     normalized_ticket_context = crawl_result.get(
         "ticket_context",
         {},
@@ -902,6 +1216,7 @@ def run_pipeline(
         save_crawl_input(
             report_id=report_id,
             domain=get_domain(page_url),
+            domain_type=domain_type,
             url=page_url,
             ticket_context=normalized_ticket_context,
             status="generating",
@@ -1004,6 +1319,7 @@ def run_pipeline(
             save_crawl_input(
                 report_id=report_id,
                 domain=get_domain(page_url),
+                domain_type=domain_type,
                 url=page_url,
                 ticket_context=normalized_ticket_context,
                 status="review",
@@ -1128,6 +1444,7 @@ def run_pipeline(
         save_crawl_input(
             report_id=report_id,
             domain=get_domain(page_url),
+            domain_type=domain_type,
             url=page_url,
             ticket_context=normalized_ticket_context,
             status="validating",
@@ -1394,9 +1711,11 @@ def _load_json_mapping(path: Path) -> Dict[str, Any]:
         return {}
 
     try:
+        # utf-8-sig is backward-compatible with ordinary UTF-8 while also
+        # accepting JSON files that start with a UTF-8 BOM.
         with open(
             path,
-            encoding="utf-8",
+            encoding="utf-8-sig",
         ) as file:
             value = json.load(file)
     except (OSError, json.JSONDecodeError) as exc:
@@ -2276,7 +2595,17 @@ if __name__ == "__main__":
         )
         sys.exit(1)
 
-    if args.no_sandbox:
+    if result.get("blocked"):
+        classification = result.get("domain_classification", {}) or {}
+
+        _separator(
+            "Blocked — domain eligibility check | "
+            f"classification: {classification.get('classification', 'unknown')}"
+        )
+
+        print(result.get("crawl_error", "Domain is not eligible for processing."))
+
+    elif args.no_sandbox:
         _separator(
             f"Done — {result['rules_generated']} "
             "rules generated | "

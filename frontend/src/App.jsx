@@ -6,7 +6,6 @@ import ReportDetail, { clearReportImageCache } from "./components/ReportDetail.j
 import NewReportModal from "./components/NewReportModal.jsx";
 import DuplicateTargetModal from "./components/DuplicateTargetModal.jsx";
 import Reports from "./pages/Reports.jsx";
-import Trend from "./pages/Trend.jsx";
 import Performance from "./pages/Performance.jsx";
 import RuleLibrary from "./pages/RuleLibrary.jsx";
 import TokenUsage from "./pages/TokenUsage.jsx";
@@ -592,8 +591,9 @@ ${error.message}`);
           onNew={() => setModal({ kind: "new" })}
         />
       )}
-      {view === "trend" && <Trend tickets={tickets} />}
-      {view === "performance" && <Performance tickets={tickets} />}
+      {view === "performance" && (
+        <Performance tickets={tickets} onRefresh={refreshBoard} refreshing={refreshing} />
+      )}
       {view === "library" && (
         <RuleLibrary
           rules={rules}

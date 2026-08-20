@@ -39,7 +39,6 @@ Copy `.env.example` and fill it in. Only the first two groups are required.
 | `S3_ENABLED`, `AWS_ENDPOINT`, `AWS_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` | no | Ceph screenshot upload; off when `S3_ENABLED=false` |
 | `PRESIGNED_URL_EXPIRES_SECONDS` | no | default 900; the UI caches image URLs for less than this |
 | `PIPELINE_MAX_WORKERS` | no | concurrent in-process runs, default 2 — each drives a real browser |
-| `TOKEN_BUDGET` | no | ceiling the Token usage page tracks against; unset means no limit |
 | `CRAWL_PROXY_SERVER` / `_USERNAME` / `_PASSWORD` / `_BYPASS` | no | routes only the crawler's browser, e.g. `socks5://127.0.0.1:1080` |
 
 **Which MySQL host?** `.env.local` keeps two blocks, exactly one uncommented —
@@ -234,7 +233,7 @@ coccoc-adblock/
         │   ├── Reports.jsx             # the moderation queue
         │   ├── RuleLibrary.jsx         # every rule, filter/edit/merge/delete
         │   ├── Playground.jsx          # try rules on any URL, no report needed
-        │   ├── TokenUsage.jsx          # LLM spend + optional budget
+        │   ├── TokenUsage.jsx          # LLM spend per model and per report
         │   ├── Trend.jsx
         │   └── Performance.jsx
         │

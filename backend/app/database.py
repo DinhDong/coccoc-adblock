@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -38,6 +39,7 @@ import pymysql
 from pymysql.cursors import DictCursor
 
 _db_schema_initialized = False
+_schema_lock = threading.Lock()
 
 MYSQL_HOST = os.getenv("MYSQL_HOST", "127.0.0.1")
 MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
@@ -79,6 +81,19 @@ def _ensure_schema() -> None:
     global _db_schema_initialized
     if _db_schema_initialized:
         return
+
+    # Double-checked locking. Pipeline runs execute on a worker pool now, so
+    # two threads can reach this together: both would pass the _column_exists
+    # check and both would issue the same ALTER, and the second fails with
+    # "duplicate column". The flag alone never guarded that window.
+    with _schema_lock:
+        if _db_schema_initialized:
+            return
+        _ensure_schema_locked()
+
+
+def _ensure_schema_locked() -> None:
+    global _db_schema_initialized
 
     with get_connection() as conn:
         with conn.cursor() as cur:

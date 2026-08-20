@@ -11,7 +11,9 @@ yet — swap this for a `rules` table lookup once database/schema.sql lands.
 
 import json
 import logging
+import os
 import re
+import threading
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 from urllib.parse import urlparse
@@ -164,6 +166,14 @@ def merge_rule_texts(first: str, second: str) -> Tuple[Optional[str], Optional[s
     return f"{pattern_a}${','.join(merged_options)}", None
 
 
+# Every mutation below is a read-modify-write of one JSON file. Pipeline runs
+# used to be serialised by the HTTP request that started them; now that they
+# execute on a worker pool, two finishing at once would interleave and one
+# domain's rules would be silently lost. RLock because some callers already
+# hold it when they call another registry function.
+_REGISTRY_LOCK = threading.RLock()
+
+
 def _load_registry() -> Dict[str, List[str]]:
     if not REGISTRY_PATH.exists():
         return {}
@@ -177,8 +187,13 @@ def _load_registry() -> Dict[str, List[str]]:
 
 def _save_registry(registry: Dict[str, List[str]]) -> None:
     REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(REGISTRY_PATH, "w", encoding="utf-8") as f:
+    # Write to a sibling file and replace, so a crash mid-write cannot leave
+    # truncated JSON behind — the loader would silently treat that as empty
+    # and every known rule would look new again.
+    tmp_path = REGISTRY_PATH.with_suffix(".json.tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(registry, f, indent=2, ensure_ascii=False, sort_keys=True)
+    os.replace(tmp_path, REGISTRY_PATH)
 
 
 def get_existing_rules(domain: str) -> Set[str]:
@@ -190,11 +205,12 @@ def register_rules(domain: str, normalized_rules: List[str]) -> None:
     """Add newly-generated normalized rules to the domain's registry entry."""
     if not normalized_rules:
         return
-    registry = _load_registry()
-    existing = set(registry.get(domain, []))
-    existing.update(normalized_rules)
-    registry[domain] = sorted(existing)
-    _save_registry(registry)
+    with _REGISTRY_LOCK:
+        registry = _load_registry()
+        existing = set(registry.get(domain, []))
+        existing.update(normalized_rules)
+        registry[domain] = sorted(existing)
+        _save_registry(registry)
 
 
 def unregister_rule(domain: str, rule_text: str) -> bool:
@@ -205,22 +221,23 @@ def unregister_rule(domain: str, rule_text: str) -> bool:
     registry would keep treating it as already-known and dedupe it out of
     every future run, so the rule could never be proposed again.
     """
-    registry = _load_registry()
-    existing = registry.get(domain)
-    if not existing:
-        return False
+    with _REGISTRY_LOCK:
+        registry = _load_registry()
+        existing = registry.get(domain)
+        if not existing:
+            return False
 
-    key = normalize_rule(rule_text)
-    remaining = [r for r in existing if r != key]
-    if len(remaining) == len(existing):
-        return False
+        key = normalize_rule(rule_text)
+        remaining = [r for r in existing if r != key]
+        if len(remaining) == len(existing):
+            return False
 
-    if remaining:
-        registry[domain] = remaining
-    else:
-        registry.pop(domain, None)
+        if remaining:
+            registry[domain] = remaining
+        else:
+            registry.pop(domain, None)
 
-    _save_registry(registry)
+        _save_registry(registry)
     logger.info("Unregistered rule for %s: %s", domain, key)
     return True
 
@@ -234,32 +251,37 @@ def unregister_rule_anywhere(rule_text: str) -> List[str]:
     entry is stranded under the old domain and a domain-scoped removal misses
     it, leaving the rule permanently deduped out of future runs.
     """
-    registry = _load_registry()
     key = normalize_rule(rule_text)
-
     touched: List[str] = []
-    for domain, rules in list(registry.items()):
-        if key not in rules:
-            continue
-        remaining = [r for r in rules if r != key]
-        if remaining:
-            registry[domain] = remaining
-        else:
-            registry.pop(domain, None)
-        touched.append(domain)
+
+    with _REGISTRY_LOCK:
+        registry = _load_registry()
+        for domain, rules in list(registry.items()):
+            if key not in rules:
+                continue
+            remaining = [r for r in rules if r != key]
+            if remaining:
+                registry[domain] = remaining
+            else:
+                registry.pop(domain, None)
+            touched.append(domain)
+
+        if touched:
+            _save_registry(registry)
 
     if touched:
-        _save_registry(registry)
         logger.info("Unregistered rule %s from %s", key, ", ".join(touched))
     return touched
 
 
 def clear_rules(domain: str) -> int:
     """Remove all known rules for a domain. Returns the count of removed rules."""
-    registry = _load_registry()
-    removed = len(registry.pop(domain, []))
+    with _REGISTRY_LOCK:
+        registry = _load_registry()
+        removed = len(registry.pop(domain, []))
+        if removed:
+            _save_registry(registry)
     if removed:
-        _save_registry(registry)
         logger.info("Cleared %d rule(s) from registry for %s", removed, domain)
     return removed
 

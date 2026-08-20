@@ -641,3 +641,23 @@ tr.rulefail .ad-ruletext { color: var(--text-mute); }
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+/* rule playground */
+.ad-rulesbox { font-family: var(--mono); font-size: 12.5px; line-height: 1.6; }
+
+/* Playground screenshots: tall enough to judge a page at a glance, and
+   drag-resizable from the corner the way a textarea is. */
+.ad-shots.ad-shots-tall {
+  min-height: 420px;
+  height: 460px;
+  resize: vertical;
+  overflow: auto;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--bg);
+}
+.ad-shots-tall .ad-shot { display: flex; flex-direction: column; min-width: 220px; }
+.ad-shots-tall .ad-shotbtn { flex: 1; min-height: 0; }
+.ad-shots-tall .ad-shot img { height: 100%; min-height: 0; }

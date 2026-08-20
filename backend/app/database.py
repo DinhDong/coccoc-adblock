@@ -610,32 +610,50 @@ def save_rule_decision(
     """
     Record (or clear, when decision is None) one reviewer decision.
 
-    Merges into the existing map so concurrent decisions on different rules
-    of the same report do not clobber each other.
+    The whole read-modify-write happens inside one transaction holding a row
+    lock. The previous version read the map on one connection and wrote it back
+    on another, so two clicks a few hundred milliseconds apart could both read
+    the same starting value and the slower write would silently erase the
+    faster one — the UI would show a decision the database never kept.
     """
     _ensure_schema()
     input_id = _get_crawl_input_id(report_id)
     if input_id is None:
         raise RuntimeError(f"No crawl_inputs row found for report_id={report_id}")
 
-    decisions = get_rule_decisions(report_id)
-
-    if decision is None:
-        decisions.pop(rule, None)
-    else:
-        decisions[rule] = {
-            "decision": decision,
-            "by": decided_by,
-            "at": datetime.now(timezone.utc).isoformat(),
-        }
-
-    with get_connection() as conn:
+    conn = get_connection()
+    try:
         with conn.cursor() as cur:
+            conn.begin()
+
             cur.execute(
-                "SELECT id FROM rule_outputs WHERE input_id=%s",
+                "SELECT id, decisions FROM rule_outputs WHERE input_id=%s FOR UPDATE",
                 (input_id,),
             )
-            if cur.fetchone():
+            row = cur.fetchone()
+
+            stored = row.get("decisions") if row else None
+            if isinstance(stored, dict):
+                decisions = dict(stored)
+            elif stored:
+                try:
+                    parsed = json.loads(stored)
+                    decisions = dict(parsed) if isinstance(parsed, dict) else {}
+                except Exception:
+                    decisions = {}
+            else:
+                decisions = {}
+
+            if decision is None:
+                decisions.pop(rule, None)
+            else:
+                decisions[rule] = {
+                    "decision": decision,
+                    "by": decided_by,
+                    "at": datetime.now(timezone.utc).isoformat(),
+                }
+
+            if row:
                 cur.execute(
                     "UPDATE rule_outputs SET decisions=%s, updated_at=NOW() WHERE input_id=%s",
                     (_json_value(decisions), input_id),
@@ -646,7 +664,13 @@ def save_rule_decision(
                     (input_id, _json_value(decisions)),
                 )
 
-    return decisions
+            conn.commit()
+            return decisions
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def save_rule_validation(

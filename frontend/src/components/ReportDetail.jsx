@@ -442,8 +442,8 @@ function RuleRow({ r, index, state, selected, onToggle, onDecide, onEditRule, on
             be approved. */}
         {state === "review" && r.status !== "failed" && (
           <span className="ad-decide">
-            <button className={"ad-tgl" + (r.decision === "approve" ? " onA" : "")} onClick={() => onDecide(index, "approve")}>Approve</button>
-            <button className={"ad-tgl" + (r.decision === "reject" ? " onR" : "")} onClick={() => onDecide(index, "reject")}>Reject</button>
+            <button className={"ad-tgl" + (r.decision === "approve" ? " onA" : "")} onClick={() => onDecide(r.text, "approve")}>Approve</button>
+            <button className={"ad-tgl" + (r.decision === "reject" ? " onR" : "")} onClick={() => onDecide(r.text, "reject")}>Reject</button>
           </span>
         )}
         {/* A closed report can still hold rules nobody ruled on. Reporting

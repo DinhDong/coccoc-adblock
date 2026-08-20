@@ -1,5 +1,5 @@
 import {
-  ClipboardList, FileCode2, FlaskConical, Settings,
+  ClipboardList, FileCode2, FlaskConical, Radio, Settings,
   Gauge, HelpCircle, Coins, LogIn,
 } from "lucide-react";
 import { VIEW_TITLES } from "../constants.js";
@@ -21,6 +21,7 @@ export default function Layout({ view, setView, lastSync, children }) {
           <div className="ad-navlabel">Reports</div>
           <button className={"ad-navitem" + (view === "reports" ? " on" : "")} onClick={() => setView("reports")}><ClipboardList /> List</button>
           <div className="ad-navlabel">Rules</div>
+          <button className={"ad-navitem" + (view === "live" ? " on" : "")} onClick={() => setView("live")}><Radio /> Live rules</button>
           <button className={"ad-navitem" + (view === "library" ? " on" : "")} onClick={() => setView("library")}><FileCode2 /> Rule library</button>
           <button className={"ad-navitem" + (view === "playground" ? " on" : "")} onClick={() => setView("playground")}><FlaskConical /> Rule playground</button>
           <div className="ad-navlabel">Analytics</div>

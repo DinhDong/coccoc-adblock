@@ -503,7 +503,10 @@ class RenderResult:
     url: str
     status: str
     environment: str = "desktop"
+    # html may be focus-scoped for downstream extraction/detection.
     html: str = ""
+    # full_html always keeps the complete rendered page for domain classification.
+    full_html: str = ""
     screenshot_bytes: bytes = b""
     screenshot_path: str = ""
     error: str = ""
@@ -804,11 +807,13 @@ def render_url(
 ) -> RenderResult:
     """Render a URL in Playwright and return the rendered page data.
 
-    When focus_region is provided, the returned HTML, screenshot, and
+    When focus_region is provided, result.html, the screenshot, and
     fixed_elements are scoped to the matching page region so downstream
     extraction, detection, and rule generation all operate on that region.
-    Network capture is never scoped — network rules are domain-scoped, not
-    region-scoped, so third-party request analysis stays whole-page.
+    result.full_html always keeps the complete rendered page for domain
+    classification. Network capture is never scoped — network rules are
+    domain-scoped, not region-scoped, so third-party request analysis stays
+    whole-page.
     """
     sync_playwright, PlaywrightError, PlaywrightTimeoutError = _import_playwright()
     start_time = time.perf_counter()
@@ -897,7 +902,11 @@ def render_url(
                 page.evaluate("window.scrollTo(0, 0)")
                 time.sleep(0.3)
 
-            html = page.content()
+            # Keep the full rendered page before focus scoping. The crawler uses
+            # this copy for domain classification so a narrow focus region cannot
+            # accidentally hide Vietnamese-language evidence.
+            full_html = page.content()
+            html = full_html
 
             # Resolve the focus region (if any) against the live page so the
             # screenshot, HTML, and overlay scan can all be scoped to it.
@@ -966,6 +975,7 @@ def render_url(
                 result.screenshot_path = str(screenshot_file)
 
             result.html = html
+            result.full_html = full_html
             result.screenshot_bytes = screenshot_bytes
             result.status = "success"
 

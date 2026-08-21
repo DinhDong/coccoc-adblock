@@ -5,8 +5,9 @@
 # - Accept ticket_context from CMS/API/CLI.
 # - Persist ticket_context into crawl result JSON so AI rule generation can
 #   generate a ticket-aware rule patch later.
-# - Keep crawler focused on crawling only; it does not classify or solve ticket
-#   logic here.
+# - Enforce domestic-domain eligibility before extraction/detection/AI stages.
+# - Use full rendered HTML for non-.vn domain classification, while preserving
+#   focus-scoped HTML for the normal crawler pipeline.
 
 import json
 import logging
@@ -15,6 +16,11 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 from urllib.parse import urlparse
 
+from app.services.domain_classifier import (
+    FOREIGN,
+    DomainClassification,
+    classify_domain,
+)
 from ..crawler.browser import render_url
 from ..crawler.extractor import PageExtractor
 from ..crawler.detector import detect_ads
@@ -26,10 +32,13 @@ logger = logging.getLogger(__name__)
 class CrawlService:
     """
     Orchestrates the complete crawler pipeline:
-    1. Render page with browser (+ capture network requests)
-    2. Extract ad-relevant data from HTML
-    3. Detect ad candidates from extracted data + network requests
-    4. Save clean results
+    1. Pre-check domain eligibility from the submitted URL.
+    2. Render page with browser (+ capture network requests).
+    3. For non-.vn domains, classify using full rendered HTML.
+    4. Stop foreign or invalid requests before extraction and AI stages.
+    5. Extract ad-relevant data from focus-scoped HTML.
+    6. Detect ad candidates from extracted data + network requests.
+    7. Save clean results.
 
     ticket_context:
         Optional user/CMS ticket metadata. The crawler does not interpret it
@@ -112,6 +121,33 @@ class CrawlService:
             effective_focus or "none",
         )
 
+        # Domain gate, phase 1:
+        # - invalid URLs can be rejected immediately
+        # - explicit foreign overrides can be rejected immediately
+        # - .vn / domestic overrides are accepted immediately
+        # - other domains request rendered page evidence before a final decision
+        domain_classification = classify_domain(url)
+
+        logger.info(
+            "Domain pre-classification | host=%s | classification=%s | "
+            "eligible=%s | score=%s",
+            domain_classification.hostname,
+            domain_classification.classification,
+            domain_classification.eligible,
+            domain_classification.score,
+        )
+
+        if (
+            not domain_classification.valid_url
+            or domain_classification.classification == FOREIGN
+        ):
+            return self._domain_block_response(
+                url=url,
+                report_id=report_id,
+                ticket_context=safe_ticket_context,
+                classification=domain_classification,
+            )
+
         # Step 1: Render the page with network request capture. When a focus
         # region is set, render_url scopes the HTML, screenshot, and overlay
         # scan to that region so every downstream stage follows the focus.
@@ -170,6 +206,40 @@ class CrawlService:
                 extra={
                     "elapsed_ms": render_result.elapsed_ms,
                 },
+            )
+
+        # Domain gate, phase 2:
+        # Non-.vn domains need page evidence. Use the complete rendered page,
+        # never focus-scoped HTML, otherwise a small focus region could produce
+        # a false foreign decision.
+        if domain_classification.requires_page_evidence:
+            classification_html = (
+                getattr(render_result, "full_html", "")
+                or render_result.html
+                or ""
+            )
+            domain_classification = classify_domain(
+                url,
+                classification_html,
+            )
+
+            logger.info(
+                "Domain content classification | host=%s | classification=%s | "
+                "eligible=%s | score=%s | reasons=%s",
+                domain_classification.hostname,
+                domain_classification.classification,
+                domain_classification.eligible,
+                domain_classification.score,
+                "; ".join(domain_classification.reasons),
+            )
+
+        if not domain_classification.eligible:
+            return self._domain_block_response(
+                url=url,
+                report_id=report_id,
+                ticket_context=safe_ticket_context,
+                classification=domain_classification,
+                crawl_duration_ms=render_result.elapsed_ms,
             )
 
         # Focus scoping happens inside render_url (Step 1) so the HTML,
@@ -285,10 +355,16 @@ class CrawlService:
                 "timestamp": self.storage._current_timestamp(),
                 "environment": getattr(render_result, "environment", "desktop"),
                 "ticket_context": safe_ticket_context,
+                "domain_classification": domain_classification.to_dict(),
                 "render": {
                     "status": render_result.status,
                     "elapsed_ms": render_result.elapsed_ms,
                     "html_length": len(render_result.html or ""),
+                    "full_html_length": len(
+                        getattr(render_result, "full_html", "")
+                        or render_result.html
+                        or ""
+                    ),
                 },
                 "focus_region": {
                     "requested": focus_meta.get("requested", effective_focus),
@@ -337,6 +413,67 @@ class CrawlService:
             result_data.get("environment"),
         )
         return result_data
+
+    def _domain_block_response(
+        self,
+        url: str,
+        report_id: str,
+        ticket_context: Dict[str, Any],
+        classification: DomainClassification,
+        crawl_duration_ms: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        Stop the crawler when a submitted site is not eligible.
+
+        The response deliberately uses status="failed" because the existing
+        workflow already stops all downstream generation/validation whenever
+        crawler status is not "success". The separate stage="domain_classification"
+        and blocked=True fields let the API/frontend distinguish an intentional
+        policy block from a technical crawler failure.
+        """
+        if not classification.valid_url:
+            message = "Requested website URL is invalid."
+        else:
+            message = "Requested website is not a domestic website."
+
+        # Keep detailed classifier evidence in logs/structured metadata for
+        # debugging, but do not expose implementation details as the user-facing
+        # block reason.
+        logger.warning(
+            "%s | classification=%s | score=%s | reasons=%s",
+            message,
+            classification.classification,
+            classification.score,
+            "; ".join(classification.reasons),
+        )
+
+        error_path = self.storage.save_error(
+            report_id=report_id,
+            url=url,
+            error_message=message,
+            extra_info={
+                "stage": "domain_classification",
+                "blocked": True,
+                "domain_classification": classification.to_dict(),
+                "ticket_context": ticket_context,
+            },
+        )
+
+        return _failure_response(
+            url=url,
+            report_id=report_id,
+            stage="domain_classification",
+            error=message,
+            error_file=error_path,
+            ticket_context=ticket_context,
+            extra={
+                "blocked": True,
+                "domain_classification": classification.to_dict(),
+                "render": {
+                    "elapsed_ms": crawl_duration_ms,
+                },
+            },
+        )
 
 
 def _normalise_ticket_context(

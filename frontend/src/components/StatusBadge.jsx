@@ -1,4 +1,4 @@
-import { Loader2, AlertTriangle } from "lucide-react";
+import { Loader2, AlertTriangle, Clock } from "lucide-react";
 import { STAGES } from "../constants.js";
 
 export default function StatusBadge({ t }) {
@@ -11,12 +11,23 @@ export default function StatusBadge({ t }) {
       </span>
     );
   }
+  // Queued is deliberately not a spinner: nothing is happening to this report
+  // yet. The position tells the moderator how many runs are ahead of theirs.
+  if (t.state === "queued") {
+    const pos = t.queuePosition;
+    return (
+      <span className="ad-badge b-queued">
+        <Clock aria-hidden="true" />
+        Queued{pos ? ` · ${pos} of ${t.queueLength}` : ""}
+      </span>
+    );
+  }
   if (t.state === "inprocess") {
     const stage = STAGES.find((s) => s.k === t.stage);
     return (
       <span className="ad-badge b-inprocess">
         <Loader2 className="ad-spin" aria-hidden="true" />
-        Processing · {stage ? stage.label : "Queued"}
+        Running · {stage ? stage.label : "starting"}
       </span>
     );
   }

@@ -322,11 +322,11 @@ def _normalize_ticket_state(status: str) -> tuple[str, str | None]:
     # "processing" is set by the standalone service worker
     # (app/services/worker.py) when it claims a row; without it here a ticket
     # that worker is actively running would render as a Draft.
-    # "new" is queued-but-not-yet-claimed. It reads as in-progress so pressing
-    # Run gives immediate feedback instead of the ticket sitting in Draft until
-    # the worker's next poll.
+    # Queued is its own state, not a flavour of in-progress. With several
+    # people submitting at once the difference matters: one report is actually
+    # being crawled, the rest are waiting behind it.
     if status == "new":
-        return "inprocess", None
+        return "queued", None
 
     if status in {"crawling", "generating", "validating", "inprocess", "processing"}:
         stage = {
@@ -423,6 +423,16 @@ ORDER BY ci.created_at DESC
             "afterScreenshot": row.get("after_screenshot"),
         }
         tickets.append(ticket)
+
+    # The worker takes the oldest "new" row first (created_at ASC, id ASC), so
+    # position is that ordering. 1 = next to run.
+    queued = sorted(
+        (t for t in tickets if t["state"] == "queued"),
+        key=lambda t: (t.get("created") or "", t["id"]),
+    )
+    for position, ticket in enumerate(queued, start=1):
+        ticket["queuePosition"] = position
+        ticket["queueLength"] = len(queued)
 
     return tickets
 

@@ -5,6 +5,7 @@ import StatusBadge from "./StatusBadge.jsx";
 
 function rulesSummary(t) {
   if (t.state === "draft") return <span className="ad-mute">—</span>;
+  if (t.state === "queued") return <span className="ad-mute">Waiting for the worker</span>;
   if (t.state === "inprocess") return <span className="ad-mute">Generating…</span>;
   if (t.state === "failed") return <span className="ad-failtext">Run failed — no rules produced</span>;
   if (t.state === "review") {
@@ -41,7 +42,7 @@ export default function ReportTable({ items, emptyText, onOpen }) {
           {items.map((t) => (
             <tr
               key={t.id}
-              className={"ad-row" + (t.state === "inprocess" ? " ghost" : "")}
+              className={"ad-row" + (t.state === "inprocess" || t.state === "queued" ? " ghost" : "")}
               tabIndex={0}
               onClick={() => onOpen(t.id)}
               onKeyDown={(e) => {

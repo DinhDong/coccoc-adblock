@@ -4,28 +4,52 @@ AI-assisted pipeline that crawls reported domestic websites, extracts ad signals
 
 ---
 
-## Docker quickstart
+## Running everything in Docker
+
+Compose runs the whole system — database, API, worker, and UI. Nothing needs to
+be installed on the host except Docker itself.
 
 ### Prerequisites
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows / macOS) or Docker Engine + Docker Compose (Linux)
+- Docker Desktop (Compose v2)
+- An OpenAI API key
 
 ### Setup
 
 ```bash
-# 1. Clone the repo
 git clone <repo-url> && cd coccoc-adblock
-
-# 2. Create your environment file from the template
 cp .env.example .env.local
-# Edit .env.local — set your OPENAI_API_KEY and change the MySQL passwords
-
-# 3. Build and start all services (MySQL + worker)
-docker compose up --build -d
-
-# 4. Verify services
-docker compose ps   # db should show "healthy"; backend may exit after idle cycles
 ```
+
+Edit `.env.local`:
+
+- set `OPENAI_API_KEY`
+- set `MYSQL_HOST=db` and `MYSQL_PORT=3306` (see Configuration below — this is
+  the one setting people get wrong)
+
+Then:
+
+```bash
+docker compose up --build -d
+docker compose ps
+```
+
+### What is running
+
+| service | port | what it is |
+|---|---|---|
+| `frontend` | 5173 | the moderation UI (Vite dev server, hot reload) |
+| `backend` | 5000 | Flask API — tickets, rules, playground, jobs |
+| `api` | 8000 | FastAPI image-upload service (Ceph) |
+| `worker` | — | polling daemon; claims `status='new'` rows |
+| `db` | 6446 | MySQL 8 (container port 3306) |
+
+Open **http://localhost:5173**. The UI talks to the backend on port 5000, which
+compose publishes, so it works from your browser without extra configuration.
+
+`backend` and `frontend` bind-mount their source directories, so edits on the
+host reload inside the container. Everything under `backend/data/` (screenshots,
+HTML, crawl JSON, the rule registry) is mounted too and survives `down`.
 
 ### Configuration (`.env.local`)
 
@@ -41,14 +65,17 @@ Copy `.env.example` and fill it in. Only the first two groups are required.
 | `PIPELINE_MAX_WORKERS` | no | concurrent in-process runs, default 2 — each drives a real browser |
 | `CRAWL_PROXY_SERVER` / `_USERNAME` / `_PASSWORD` / `_BYPASS` | no | routes only the crawler's browser, e.g. `socks5://127.0.0.1:1080` |
 
-**Which MySQL host?** `.env.local` keeps two blocks, exactly one uncommented —
-python-dotenv takes the *last* definition of a key, so leaving both active makes
-the values silently resolve to whichever came second.
+**Which MySQL host?** `.env.local` is shared by the containers and by anything
+you run on the host, and python-dotenv takes the *last* definition of a key —
+so keep exactly one MySQL block uncommented.
 
-- Running the backend **on your machine** against the compose database:
-  `MYSQL_HOST=127.0.0.1` and `MYSQL_PORT=6446` (compose maps `6446 -> 3306`).
-- Running the backend **inside compose**: `MYSQL_HOST=db`, `MYSQL_PORT=3306`.
-- Shared team server: whatever host/port that server uses.
+- **All in Docker (the normal case):** `MYSQL_HOST=db`, `MYSQL_PORT=3306`.
+  `db` is the compose service name, resolved on the compose network.
+- **Backend on the host, database in Docker:** `MYSQL_HOST=127.0.0.1`,
+  `MYSQL_PORT=6446` — compose publishes 6446 on the host, mapped to 3306 inside.
+  Use `127.0.0.1`, not `localhost`: on Windows `localhost` resolves to `::1`
+  first and MySQL is only listening on IPv4.
+- **Shared team server:** whatever host and port that server uses.
 
 The schema creates and migrates itself on first request, so a fresh database
 needs no manual SQL.
@@ -105,32 +132,32 @@ should not wait for the next poll.
 
 ```bash
 # Crawl a website AND generate rules for it in one command
-docker compose run --rm backend app.services.workflow <report_id> --url <url> --env desktop
+docker compose run --rm backend python -m app.services.workflow <report_id> --url <url> --env desktop
 
 # Run the full workflow for an already-crawled report
-docker compose run --rm backend app.services.workflow <report_id>
+docker compose run --rm backend python -m app.services.workflow <report_id>
 
 # Run the crawler only
-docker compose run --rm backend app.services.crawler <url> <report_id> --env desktop
+docker compose run --rm backend python -m app.services.crawler <url> <report_id> --env desktop
 
 # Run the crawler with focus on a specific page region
-docker compose run --rm backend app.services.crawler <url> <report_id> --focus "header"
-docker compose run --rm backend app.services.crawler <url> <report_id> --focus "right sidebar"
-docker compose run --rm backend app.services.crawler <url> <report_id> --focus "top banner area"
+docker compose run --rm backend python -m app.services.crawler <url> <report_id> --focus "header"
+docker compose run --rm backend python -m app.services.crawler <url> <report_id> --focus "right sidebar"
+docker compose run --rm backend python -m app.services.crawler <url> <report_id> --focus "top banner area"
 
 # Run the crawler with ticket context (scopes rules to specific problems)
-docker compose run --rm backend app.services.crawler <url> <report_id> --env desktop --ticket-context-file <ticket_file>
+docker compose run --rm backend python -m app.services.crawler <url> <report_id> --env desktop --ticket-context-file <ticket_file>
 # Then run the workflow for that crawl
-docker compose run --rm backend app.services.workflow <report_id>
+docker compose run --rm backend python -m app.services.workflow <report_id>
 
 # Preview a single rule — saves before.png (targets highlighted) + after.png (rule applied)
-docker compose run --rm backend app.validator.rule_preview <url> "<rule>"
+docker compose run --rm backend python -m app.validator.rule_preview <url> "<rule>"
 
 # Preview multiple rules from a file, android viewport
-docker compose run --rm backend app.validator.rule_preview <url> --rules-file rules.txt --env android
+docker compose run --rm backend python -m app.validator.rule_preview <url> --rules-file rules.txt --env android
 
 # Custom output dir
-docker compose run --rm backend app.validator.rule_preview <url> "<rule>" --out data/previews/motp
+docker compose run --rm backend python -m app.validator.rule_preview <url> "<rule>" --out data/previews/motp
 
 # Run tests
 docker compose run --rm backend pytest app/tests/ -v
@@ -139,25 +166,57 @@ docker compose run --rm backend pytest app/tests/ -v
 ### Useful commands
 
 ```bash
-# View logs
+# Follow a service
 docker compose logs -f backend
+docker compose logs -f worker
 
-# Connect to MySQL
+# Run the test suite (pytest ships in the image; it is not in the local venv)
+docker compose run --rm backend pytest app/tests/ -v
+
+# Just the worker tests
+docker compose run --rm backend python -m unittest app.tests.test_worker -v
+
+# A shell inside the backend container
+docker compose exec backend bash
+
+# MySQL client
 docker compose exec db mysql -u adblock -p adblock
 
-# Stop services (data preserved)
+# Queue a job for the polling worker (it only claims status='new')
+docker compose exec db mysql -u adblock -p adblock -e   "UPDATE crawl_inputs SET status='new' WHERE report_id='RPT-...';"
+
+# Restart one service after changing its code
+docker compose restart backend
+
+# Rebuild after changing requirements.txt or a Dockerfile
+docker compose up --build -d backend
+
+# Stop (data preserved) / stop and wipe the database
 docker compose down
-
-# Stop and delete MySQL data
 docker compose down -v
-
-# Rebuild after code changes
-docker compose build backend
 ```
 
-> **Note:** Crawl outputs (screenshots, HTML, JSON results) are stored in `backend/data/` which is mounted as a volume — files persist on your host machine across container restarts.
+> Crawl outputs (screenshots, HTML, JSON) live in `backend/data/`, bind-mounted
+> from the host, so they persist across restarts and rebuilds.
 
----
+### Running without Docker
+
+Only needed if you are debugging something container-specific. You will need
+Python 3.11+, Node 20+, and Playwright's browsers installed locally:
+
+```bash
+cd backend
+python -m venv .venv && .venv/Scripts/activate      # Linux/macOS: source .venv/bin/activate
+pip install -r requirements.txt
+python -m playwright install chromium webkit
+python -m flask --app app --debug run --host 0.0.0.0 --port 5000
+
+cd ../frontend && npm install && npm run dev
+```
+
+Bind the backend to `0.0.0.0`, not the Flask default. It otherwise listens on
+IPv4 only while browsers resolve `localhost` to `::1` first, which makes
+requests fail intermittently.
 
 ## Project structure
 
@@ -227,15 +286,14 @@ coccoc-adblock/
     └── src/
         ├── App.jsx                     # state, API calls, run/poll orchestration
         ├── constants.js                # states, envs, view titles
-        ├── analytics.js                # metrics derived for Trend/Performance
         │
         ├── pages/
         │   ├── Reports.jsx             # the moderation queue
+        │   ├── LiveRules.jsx           # approved + deployed rules, grouped by site
         │   ├── RuleLibrary.jsx         # every rule, filter/edit/merge/delete
         │   ├── Playground.jsx          # try rules on any URL, no report needed
         │   ├── TokenUsage.jsx          # LLM spend per model and per report
-        │   ├── Trend.jsx
-        │   └── Performance.jsx
+        │   └── Performance.jsx         # stage timings, rule outcomes, per-site
         │
         ├── components/
         │   ├── Layout.jsx              # sidebar + topbar
@@ -386,25 +444,3 @@ validate_rules(rules: list[str], page_url: str) -> ValidationReport
 ```
 
 Returns a `ValidationReport` with per-rule results from all three stages and an overall `passed: bool`. Only rules that pass all three stages are forwarded to the moderator queue. Failed rules are logged with their failure reason for audit trail.
-
----
-
-## Team responsibilities
-
-### Crawler (current phase)
-
-| Person | Task | Files |
-|---|---|---|
-| 1 | Browser control | `crawler/browser.py`, `services/crawler.py` |
-| 2 | Data extraction | `crawler/extractor.py` |
-| 3 | Ad signal detection | `crawler/detector.py` |
-| 4 | Storage, testing, docs | `crawler/storage.py`, `tests/` |
-
-### AI rule generator + tester (next phase)
-
-| Person | Task | Files |
-|---|---|---|
-| 1 | LLM integration | `ai/llm_client.py`, `ai/prompt_builder.py` |
-| 2 | Rule parsing + generator service | `ai/rule_parser.py`, `services/rule_generator.py` |
-| 3 | Static validation (no browser) | `validator/abp_syntax.py`, `validator/rule_scope.py` |
-| 4 | Sandbox test + validator service | `validator/sandbox_check.py`, `services/rule_validator.py` |

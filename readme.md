@@ -327,11 +327,9 @@ Because queueing is just a status change, a run survives the API restarting,
 and several worker containers can run side by side without two of them taking
 the same row.
 
-**Making every draft run automatically.** By default the worker only claims
-`new`, so a draft sits untouched until someone presses Run. Set
-`WORKER_CLAIM_DRAFTS=true` and it also claims `draft`/`submitted`, so a ticket
-starts crawling as soon as it is created — at the cost of never being able to
-park a half-written draft.
+**Drafts are never claimed.** The worker only ever takes `new`. A draft is
+someone still writing the ticket, and crawling it would spend a real page load
+and an LLM call on a URL they had not finished choosing.
 
 **Stranded runs.** If the worker dies mid-run its row stays `processing`. The
 worker requeues those at startup: it is the only thing that runs pipelines, so
@@ -342,12 +340,20 @@ Status vocabulary:
 | status | who sets it | shown in the UI as |
 |---|---|---|
 | `draft`, `submitted` | ticket created | Draft |
-| `new` | pressing Run | Processing (queued) |
-| `processing` | worker claims it | Processing |
-| `crawling`, `generating`, `validating` | the pipeline, as it goes | Processing |
+| `new` | pressing Run | Queued (with its position in the queue) |
+| `processing` | worker claims it | Running |
+| `crawling`, `generating`, `validating` | the pipeline, as it goes | Running, named by stage |
 | `completed`, `review`, `no_rules` | run finished | Awaiting review |
 | `failed`, `crawl_failed` | run failed | Run failed |
 | `done` | review finished | Done |
+
+`new` and `processing` are deliberately distinct in the UI. Only one report is
+ever *running* — the worker claims a single row at a time — so everything else
+that has been submitted shows as **Queued** with its place in line ("Queued ·
+2 of 3"). Positions are computed per request in `fetch_all_tickets()`, ordered
+by creation time, and exclude whatever is already running. When several
+moderators submit at once, each of them can see whose run is in flight and how
+many are ahead of their own.
 
 ## HTTP API (Flask, port 5000)
 

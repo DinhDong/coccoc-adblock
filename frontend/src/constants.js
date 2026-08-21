@@ -1,10 +1,9 @@
 /* ------------------------------------------------------------------ */
 /*  Ad-block Rule CMS — shared constants                              */
-/*  Lifecycle: Draft → In-process (ghost rows in Review) → Review → Done */
+/*  Lifecycle: Draft → In-process → Review → Done (or Failed)          */
 /* ------------------------------------------------------------------ */
 
-export const STATE_ORDER = ["draft", "inprocess", "review", "failed", "done"];
-export const TABS = ["review", "draft", "done", "all"]; // in-process and failed rows surface inside Review
+export const STATE_ORDER = ["draft", "queued", "inprocess", "review", "failed", "done"];
 
 export const STATES = {
   all: {
@@ -19,10 +18,16 @@ export const STATES = {
     sub: "Created — not yet run",
     empty: "No draft reports. Create one to get started.",
   },
+  queued: {
+    label: "Queued",
+    card: "Queued",
+    sub: "Waiting for the worker to pick it up",
+    empty: "Nothing is waiting in the queue.",
+  },
   inprocess: {
-    label: "Processing",
-    card: "Processing",
-    sub: "Running through the pipeline",
+    label: "Running",
+    card: "Running now",
+    sub: "The worker is crawling this report",
     empty: "",
   },
   review: {

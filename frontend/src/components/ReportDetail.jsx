@@ -616,7 +616,7 @@ export default function ReportDetail({
         {/* StepList marks every stage complete when `current` is null, so a
             failed run must not render it — the failure box below says what
             actually happened. */}
-        {t.state !== "draft" && t.state !== "failed" && (
+        {t.state !== "draft" && t.state !== "failed" && t.state !== "queued" && (
           <>
             <div className="ad-msection">
               <h3>Pipeline</h3>
@@ -705,6 +705,16 @@ export default function ReportDetail({
             <button className="ad-btn ad-btn-danger" onClick={onDelete}>Delete draft</button>
             <EditTicketButton onEdit={onEdit} />
             <button className="ad-btn ad-btn-primary" onClick={onRun}>Send to pipeline</button>
+          </>
+        )}
+        {t.state === "queued" && (
+          <>
+            <span className="ad-tally">
+              Waiting for the worker
+              {t.queuePosition ? ` — ${t.queuePosition} of ${t.queueLength} in the queue` : ""}.
+              Runs happen one at a time.
+            </span>
+            <button className="ad-btn ad-btn-ghost" onClick={onCancelRun}>Remove from queue</button>
           </>
         )}
         {t.state === "inprocess" && (

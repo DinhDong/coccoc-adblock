@@ -17,7 +17,7 @@ export default function App() {
   const [modal, setModal] = useState(null); // {kind:'ticket',id} | {kind:'new'}
   const [query, setQuery] = useState("");
   const [view, setView] = useState("reports"); // "reports" | "library" | "trend" | "performance" | "tokens" | "playground"
-  const [tab, setTab] = useState("review");
+  const [statusFilter, setStatusFilter] = useState("all");
   const [refreshing, setRefreshing] = useState(false);
   const [rules, setRules] = useState([]);
   const [rulesLoading, setRulesLoading] = useState(false);
@@ -145,8 +145,8 @@ export default function App() {
   // re-render, so the `tickets` captured by this closure is still the
   // pre-create list and the lookup below would miss.
   const runPipeline = async (id, ticketOverride, duplicateChoice) => {
-    setT(id, { runStartedAt: nowISO(), state: "inprocess", stage: "crawl" });
-    setTab("review");
+    // Optimistically queued, not running — the worker has not claimed it yet.
+    setT(id, { runStartedAt: nowISO(), state: "queued", stage: null });
 
     const ticket = ticketOverride || tickets.find((t) => t.id === id);
     if (!ticket) {
@@ -183,7 +183,6 @@ export default function App() {
         // watcher rather than resetting it to draft.
         if (response.status === 409) {
           clearReportImageCache(id);
-          setTab("review");
           watchRun(id);
           return;
         }
@@ -197,7 +196,6 @@ export default function App() {
       if (!latest) {
         setT(id, { state: "draft", stage: null, runStartedAt: null });
       }
-      setTab("review");
       window.alert(`Could not start this run: ${error.message}`);
       return;
     }
@@ -206,7 +204,6 @@ export default function App() {
     // for this report before the modal is opened again.
     clearReportImageCache(id);
     await loadTickets();
-    setTab("review");
     watchRun(id);
   };
 
@@ -235,7 +232,8 @@ export default function App() {
         setTickets(data.tickets || []);
         setLastSync(new Date());
 
-        if (fresh && fresh.state !== "inprocess") {
+        // Keep polling while the report is queued as well as running.
+        if (fresh && fresh.state !== "inprocess" && fresh.state !== "queued") {
           clearInterval(watchers.current[id]);
           delete watchers.current[id];
         }
@@ -253,14 +251,13 @@ export default function App() {
       return;
     }
     setT(id, { state: "draft", stage: null, runStartedAt: null });
-    setTab("draft");
   };
 
   // A run outlives the page, so any ticket the backend still reports as
   // in-process gets a watcher rather than a simulated stage timer.
   useEffect(() => {
     tickets.forEach((t) => {
-      if (t.state === "inprocess" && !watchers.current[t.id]) watchRun(t.id);
+      if ((t.state === "inprocess" || t.state === "queued") && !watchers.current[t.id]) watchRun(t.id);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tickets]);
@@ -433,7 +430,6 @@ export default function App() {
 
     setT(id, { state: "done", doneAt: todayISO(), reviewedAt: nowISO(), reviewedBy: CURRENT_USER.k });
     setModal(null);
-    setTab("done");
   };
 
   const saveTicketEdits = async (id, data) => {
@@ -617,7 +613,6 @@ ${error.message}`);
 
     setTickets((ts) => [ticketPayload, ...ts.filter((t) => t.id !== id)]);
     setModal(null);
-    setTab("draft");
 
     if (runNow) {
       // Hand the payload straight to runPipeline — it cannot look the ticket
@@ -628,35 +623,25 @@ ${error.message}`);
   };
 
   const q = query.trim().toLowerCase();
+
+  // Ordering is purely newest-first by creation time. It used to fall back to
+  // parsing digits out of the report id, which is not a timestamp and put
+  // reports in an order nobody could predict.
   const filtered = useMemo(
     () =>
       tickets
-        .filter(
-          (t) =>
-            (!q || t.name.toLowerCase().includes(q) || t.url.toLowerCase().includes(q))
-        )
-        .sort(
-          (a, b) =>
-            b.created.localeCompare(a.created) ||
-            parseInt(b.id.slice(1), 10) - parseInt(a.id.slice(1), 10)
-        ),
-    [tickets, q]
+        .filter((t) => !q || t.name.toLowerCase().includes(q) || t.url.toLowerCase().includes(q))
+        .filter((t) => statusFilter === "all" || t.state === statusFilter)
+        .sort((a, b) => new Date(b.created || 0) - new Date(a.created || 0)),
+    [tickets, q, statusFilter]
   );
+
+  // Kept for the stat cards, which count every state regardless of the filter.
   const byState = useMemo(() => {
     const m = Object.fromEntries(STATE_ORDER.map((k) => [k, []]));
-    filtered.forEach((t) => m[t.state] && m[t.state].push(t));
+    tickets.forEach((t) => m[t.state] && m[t.state].push(t));
     return m;
-  }, [filtered]);
-
-  const ghosts = byState.inprocess || [];
-  // Failed runs need a moderator to look at them, so they surface in Review
-  // alongside in-process rows rather than getting a tab of their own.
-  const failures = byState.failed || [];
-  const items =
-    tab === "all" ? filtered
-    // Active runs first, then failures needing attention, then the queue.
-    : tab === "review" ? [...ghosts, ...failures, ...(byState.review || [])]
-    : byState[tab] || [];
+  }, [tickets]);
 
   const openTicket = modal?.kind === "ticket" ? tickets.find((t) => t.id === modal.id) : null;
   const editTicket = modal?.kind === "edit" ? tickets.find((t) => t.id === modal.id) : null;
@@ -665,12 +650,10 @@ ${error.message}`);
     <Layout view={view} setView={setView} lastSync={lastSync}>
       {view === "reports" && (
         <Reports
-          items={items}
+          items={filtered}
           byState={byState}
-          filtered={filtered}
-          ghosts={ghosts}
-          tab={tab}
-          setTab={setTab}
+          statusFilter={statusFilter}
+          setStatusFilter={setStatusFilter}
           query={query}
           setQuery={setQuery}
           lastSync={lastSync}

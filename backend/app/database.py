@@ -228,6 +228,29 @@ def save_crawl_input(
     }
 
     existing_id = _get_crawl_input_id(report_id)
+
+    # Merge rather than replace. The pipeline calls this with its own
+    # normalised context on every stage transition; replacing wiped the fields
+    # the UI owns (env, focus, targets, createdBy), so after one run every
+    # report displayed as Desktop with no targets no matter how it was created.
+    if existing_id and ticket_context is not None:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT ticket_context FROM crawl_inputs WHERE id=%s",
+                    (existing_id,),
+                )
+                row = cur.fetchone()
+        if row and row.get("ticket_context"):
+            try:
+                previous = json.loads(row["ticket_context"])
+                if isinstance(previous, dict):
+                    merged = dict(previous)
+                    merged.update(ticket_context)
+                    record["ticket_context"] = _json_value(merged)
+            except Exception:
+                pass
+
     with get_connection() as conn:
         with conn.cursor() as cur:
             if _column_exists(cur, "crawl_inputs", "report_id"):

@@ -815,3 +815,7 @@ tr.rulefail .ad-ruletext { color: var(--text-mute); }
   background: var(--orange-tint); border: 1px solid #F7C6A8; color: var(--orange-dark);
 }
 .ad-sitebody { padding: 4px 16px 16px; }
+
+/* queued: waiting for the worker, distinct from actively running */
+.ad-badge.b-queued { background: #EEF1F6; color: #4A5568; border-color: #D3DAE5; }
+.ad-stat.s-queued { border-left-color: #8B9AAF; }

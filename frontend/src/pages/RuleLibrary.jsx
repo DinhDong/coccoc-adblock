@@ -4,6 +4,7 @@ import {
 } from "lucide-react";
 import { fmtDate } from "../utils.js";
 import { PreTestCell, RuleActions, RuleEditor } from "../components/ReportDetail.jsx";
+import { usePersistentState, parsePageSize } from "../usePersistentState.js";
 
 const PAGE_SIZES = [10, 20, 50, 100];
 
@@ -116,7 +117,7 @@ export default function RuleLibrary({
   const [decision, setDecision] = useState("all");
   const [domain, setDomain] = useState("all");
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  const [pageSize, setPageSize] = usePersistentState("library.pageSize", 20, parsePageSize);
 
   useEffect(() => { setPage(1); }, [query, type, status, decision, domain, pageSize]);
 

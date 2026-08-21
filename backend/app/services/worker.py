@@ -44,13 +44,10 @@ DEFAULT_LEDGER_FILE = Path("data/service_worker/processed_tickets.json")
 DEFAULT_SLEEP_SECONDS = 5
 
 
-# Statuses the worker will pick up. "new" is what the API sets when someone
-# presses Run. Set WORKER_CLAIM_DRAFTS=true to also sweep up drafts, so a
-# ticket starts crawling as soon as it is created and pressing Run is optional.
-def claimable_statuses() -> tuple:
-    if os.getenv("WORKER_CLAIM_DRAFTS", "").strip().lower() in {"1", "true", "yes", "on"}:
-        return ("new", "draft", "submitted")
-    return ("new",)
+# The only status the worker claims. Drafts are deliberately never picked up:
+# a draft is someone still writing the ticket, and crawling it would spend a
+# real page load and LLM call on a URL they had not finished choosing.
+CLAIMABLE_STATUS = "new"
 
 
 # A row in one of these was mid-run when a previous worker died. The worker is
@@ -131,15 +128,13 @@ def claim_next_job() -> Optional[WorkerJob]:
     try:
         with conn.cursor() as cur:
             conn.begin()
-            statuses = claimable_statuses()
-            placeholders = ",".join(["%s"] * len(statuses))
             cur.execute(
                 "SELECT * FROM crawl_inputs "
-                f"WHERE status IN ({placeholders}) "
+                "WHERE status = %s "
                 "ORDER BY created_at ASC, id ASC "
                 "LIMIT 1 "
                 "FOR UPDATE SKIP LOCKED",
-                statuses,
+                (CLAIMABLE_STATUS,),
             )
             row = cur.fetchone()
 
@@ -499,10 +494,17 @@ def hostname_from_url(url: str) -> str:
 
 
 def resolve_environment(context: Mapping[str, Any], default: str) -> str:
-    platform = str(context.get("platform") or "").strip().lower()
+    """
+    Pick the crawl environment out of a ticket context.
 
-    if platform in {"desktop", "android", "ios"}:
-        return platform
+    The UI stores it as "env"; the pipeline's normalised context calls the same
+    thing "platform". Only "platform" was checked, so a ticket created as
+    Android or iOS silently ran as desktop.
+    """
+    for key in ("platform", "env", "environment"):
+        value = str(context.get(key) or "").strip().lower()
+        if value in {"desktop", "android", "ios"}:
+            return value
 
     return default
 
@@ -649,7 +651,7 @@ def main() -> int:
     except Exception as exc:
         logger.warning("Could not requeue stranded runs: %s", exc)
 
-    logger.info("Claiming statuses: %s", ", ".join(claimable_statuses()))
+    logger.info("Claiming status: %s", CLAIMABLE_STATUS)
 
     run_worker(
         sleep_seconds=sleep_seconds,

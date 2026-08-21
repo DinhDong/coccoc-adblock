@@ -43,6 +43,21 @@ DEFAULT_TICKETS_DIR = Path("app/tests/tickets")
 DEFAULT_LEDGER_FILE = Path("data/service_worker/processed_tickets.json")
 DEFAULT_SLEEP_SECONDS = 5
 
+
+# Statuses the worker will pick up. "new" is what the API sets when someone
+# presses Run. Set WORKER_CLAIM_DRAFTS=true to also sweep up drafts, so a
+# ticket starts crawling as soon as it is created and pressing Run is optional.
+def claimable_statuses() -> tuple:
+    if os.getenv("WORKER_CLAIM_DRAFTS", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return ("new", "draft", "submitted")
+    return ("new",)
+
+
+# A row in one of these was mid-run when a previous worker died. The worker is
+# the only thing that runs the pipeline, so at startup nothing can legitimately
+# be in progress and these are safe to requeue.
+STRANDED_STATUSES = ("processing", "crawling", "generating", "validating", "inprocess")
+
 # Must match the set the HTTP API treats as success (app/__init__.py).
 # run_pipeline returns "review" on its main success path; leaving it out
 # marked every completed run as failed.
@@ -77,6 +92,31 @@ def _dict_to_ns(d: dict) -> Any:
     return SimpleNamespace(**d)
 
 
+def requeue_stranded() -> int:
+    """
+    Put rows left mid-run by a dead worker back in the queue.
+
+    Safe because this process is the only thing that runs the pipeline: if the
+    worker has just started, nothing can genuinely be in progress. Previously
+    the API did this at boot, which was wrong once the worker moved to its own
+    container — it could reset a run that was actively happening elsewhere.
+    """
+    from app.database import get_connection
+
+    placeholders = ",".join(["%s"] * len(STRANDED_STATUSES))
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE crawl_inputs SET status='new', updated_at=NOW() "
+                f"WHERE status IN ({placeholders})",
+                STRANDED_STATUSES,
+            )
+            return cur.rowcount
+    finally:
+        conn.close()
+
+
 def claim_next_job() -> Optional[WorkerJob]:
     """
     Take the oldest unclaimed request and mark it processing.
@@ -91,12 +131,15 @@ def claim_next_job() -> Optional[WorkerJob]:
     try:
         with conn.cursor() as cur:
             conn.begin()
+            statuses = claimable_statuses()
+            placeholders = ",".join(["%s"] * len(statuses))
             cur.execute(
                 "SELECT * FROM crawl_inputs "
-                "WHERE status = 'new' "
+                f"WHERE status IN ({placeholders}) "
                 "ORDER BY created_at ASC, id ASC "
                 "LIMIT 1 "
-                "FOR UPDATE SKIP LOCKED"
+                "FOR UPDATE SKIP LOCKED",
+                statuses,
             )
             row = cur.fetchone()
 
@@ -598,6 +641,15 @@ def main() -> int:
             "Start the database and try again."
         )
         return 1
+
+    try:
+        requeued = requeue_stranded()
+        if requeued:
+            logger.warning("Requeued %d run(s) stranded by a previous worker", requeued)
+    except Exception as exc:
+        logger.warning("Could not requeue stranded runs: %s", exc)
+
+    logger.info("Claiming statuses: %s", ", ".join(claimable_statuses()))
 
     run_worker(
         sleep_seconds=sleep_seconds,

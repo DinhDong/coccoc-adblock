@@ -14,7 +14,6 @@ try:
         fetch_report_images,
         test_rules_adhoc,
         run_playground_test,
-        reconcile_stale_runs,
         playground_image_path,
         update_ticket_status,
         update_ticket_details,
@@ -39,7 +38,6 @@ except ImportError:  # pragma: no cover
         fetch_report_images,
         test_rules_adhoc,
         run_playground_test,
-        reconcile_stale_runs,
         playground_image_path,
         update_ticket_status,
         update_ticket_details,
@@ -58,11 +56,6 @@ except ImportError:  # pragma: no cover
     from app.services.workflow import run_pipeline
 
 try:
-    from .services.jobs import JOBS, JobAlreadyActive
-except ImportError:  # pragma: no cover
-    from app.services.jobs import JOBS, JobAlreadyActive
-
-try:
     from .database import save_rule_decision
 except ImportError:  # pragma: no cover
     from app.database import save_rule_decision
@@ -72,20 +65,20 @@ except ImportError:  # pragma: no cover
 # rule, crawl artefact and decision is filed under it.
 EDITABLE_FIELDS = {"url", "env", "focus", "targets", "notes", "name"}
 
+# The status the polling worker claims. Queueing is just a status change: the
+# API marks the row and app/services/worker.py picks it up.
+QUEUED_STATUS = "new"
+
+# Re-queueing one of these would give the worker a second copy of a run it is
+# already doing.
+ALREADY_QUEUED_STATUSES = {
+    "new", "processing", "crawling", "generating", "validating", "inprocess",
+}
+
 
 def create_app():
     app = Flask(__name__)
     CORS(app)
-
-    # Nothing is running yet in this process, so any ticket the database still
-    # calls in-progress was stranded by a previous one. Best-effort: a DB that
-    # is not reachable at boot must not stop the app from starting.
-    try:
-        stranded = reconcile_stale_runs()
-        if stranded:
-            app.logger.warning("Reset %d run(s) stranded by a previous process", stranded)
-    except Exception as exc:
-        app.logger.warning("Could not reconcile stale runs: %s", exc)
 
     @app.get("/health")
     def health():
@@ -252,85 +245,39 @@ def create_app():
 
     @app.post("/api/tickets/<report_id>/run")
     def run_ticket(report_id):
+        """
+        Queue a report for the pipeline.
+
+        The API no longer executes runs itself: it hands the ticket to the
+        polling worker by marking it QUEUED_STATUS and returns immediately.
+        One runner means one place where a run can be in flight, and the run
+        survives the API restarting.
+        """
         from flask import request
 
         payload = request.get_json(force=True, silent=True) or {}
         url = payload.get("url")
-        environment = payload.get("environment", "desktop")
-        ticket_context = payload.get("ticket_context", {})
-        focus_region = payload.get("focus_region")
-        # "discard" clears the domain's registry so known rules are proposed
-        # again; "keep" (the default) dedupes against it as usual. Aborting is
-        # handled by the caller simply not starting the run.
         duplicate_choice = payload.get("duplicate_choice")
 
         if not url:
             return {"error": "url is required"}, 400
-
         if duplicate_choice not in {None, "discard", "keep"}:
             return {"error": "duplicate_choice must be 'discard' or 'keep'"}, 400
 
-        if get_ticket_status(report_id) is None:
+        current = get_ticket_status(report_id)
+        if current is None:
             return {"error": "ticket not found; create it before starting the pipeline"}, 404
 
-        # Runs in a worker thread. The pipeline writes its own progress to
-        # MySQL as it goes, so the client learns the outcome by polling the
-        # ticket rather than by holding this request open for ~a minute.
-        def _execute():
-            try:
-                result = run_pipeline(
-                    report_id=report_id,
-                    url=url,
-                    environment=environment,
-                    ticket_context=ticket_context,
-                    focus_region=focus_region,
-                    duplicate_choice=duplicate_choice,
-                )
-            except Exception as exc:
-                update_ticket_status(report_id, "failed")
-                record_run_failure(report_id, str(exc))
-                raise
+        if (current or "").lower() in ALREADY_QUEUED_STATUSES:
+            return {"error": f"{report_id} is already {current}"}, 409
 
-            if result.get("status") in {"review", "validated", "generated", "no_rules", "ok"}:
-                update_ticket_status(report_id, "review")
-            elif result.get("status") == "crawl_failed":
-                update_ticket_status(report_id, "crawl_failed")
-                record_run_failure(
-                    report_id,
-                    "Crawl failed at stage '%s': %s"
-                    % (
-                        result.get("crawl_stage", "unknown"),
-                        result.get("crawl_error", "unknown error"),
-                    ),
-                )
-            else:
-                update_ticket_status(report_id, "failed")
-                record_run_failure(
-                    report_id,
-                    result.get("error") or "Pipeline returned status '%s'" % result.get("status"),
-                )
+        # Any field edits the caller sent were saved through PATCH already; the
+        # worker reads url/environment/context straight from the row.
+        updated = update_ticket_status(report_id, QUEUED_STATUS)
+        if updated == 0:
+            return {"error": "ticket not found"}, 404
 
-            return result
-
-        update_ticket_status(report_id, "crawling")
-
-        try:
-            job = JOBS.submit(report_id, _execute)
-        except JobAlreadyActive as exc:
-            return {"error": str(exc)}, 409
-
-        return {"ok": True, "queued": True, "job": job.as_dict()}, 202
-
-    @app.get("/api/jobs")
-    def list_jobs():
-        return {"jobs": JOBS.all(), "maxWorkers": JOBS.max_workers}, 200
-
-    @app.get("/api/tickets/<report_id>/job")
-    def ticket_job(report_id):
-        job = JOBS.get(report_id)
-        if job is None:
-            return {"job": None}, 200
-        return {"job": job.as_dict()}, 200
+        return {"ok": True, "queued": True, "status": QUEUED_STATUS}, 202
 
     def _guard_exists(report_id):
         """

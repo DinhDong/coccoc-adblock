@@ -322,6 +322,12 @@ def _normalize_ticket_state(status: str) -> tuple[str, str | None]:
     # "processing" is set by the standalone service worker
     # (app/services/worker.py) when it claims a row; without it here a ticket
     # that worker is actively running would render as a Draft.
+    # "new" is queued-but-not-yet-claimed. It reads as in-progress so pressing
+    # Run gives immediate feedback instead of the ticket sitting in Draft until
+    # the worker's next poll.
+    if status == "new":
+        return "inprocess", None
+
     if status in {"crawling", "generating", "validating", "inprocess", "processing"}:
         stage = {
             "crawling": "crawl",
@@ -332,7 +338,9 @@ def _normalize_ticket_state(status: str) -> tuple[str, str | None]:
         }[status]
         return "inprocess", stage
 
-    if status in {"review", "generated", "validated", "no_rules"}:
+    # "completed" is what the worker writes on success; without it here a
+    # worker-finished report fell through to the catch-all and showed as Draft.
+    if status in {"review", "completed", "generated", "validated", "no_rules"}:
         return "review", None
 
     if status == "done":
@@ -342,7 +350,7 @@ def _normalize_ticket_state(status: str) -> tuple[str, str | None]:
         # Distinct from "draft": the run happened and did not complete.
         return "failed", None
 
-    if status in {"draft", "submitted", "new"}:
+    if status in {"draft", "submitted"}:
         return "draft", None
 
     return "draft", None
@@ -920,53 +928,6 @@ ORDER BY ci.created_at DESC
 EDITABLE_TICKET_STATES = {"draft", "submitted", "review", "failed", "crawl_failed",
                           "generated", "validated", "no_rules", "crawling",
                           "generating", "validating", "inprocess"}
-
-
-RUNNING_STATUSES = ("crawling", "generating", "validating", "inprocess")
-
-
-def _db_is_private() -> bool:
-    """
-    True when MySQL is this machine's own instance.
-
-    Reconciling stale runs means writing to rows this process does not own. On
-    the shared team server another developer's run could legitimately be in
-    flight, and resetting it would destroy their work. Against a local
-    container there is no other writer, so it is safe.
-    """
-    host = (os.getenv("MYSQL_HOST") or "127.0.0.1").strip().lower()
-    return host in {"127.0.0.1", "localhost", "::1", "db"}
-
-
-def reconcile_stale_runs() -> int:
-    """
-    Fail any ticket left mid-run by a previous process.
-
-    The job registry lives in memory, so when the backend restarts nothing is
-    actually running any more — but the ticket still says 'crawling' and the
-    UI waits forever. Called once at startup.
-    """
-    if not _db_is_private():
-        return 0
-
-    placeholders = ",".join(["%s"] * len(RUNNING_STATUSES))
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                f"SELECT report_id FROM crawl_inputs WHERE status IN ({placeholders})",
-                RUNNING_STATUSES,
-            )
-            stranded = [r["report_id"] for r in cur.fetchall() if r.get("report_id")]
-
-    for report_id in stranded:
-        update_ticket_status(report_id, "failed")
-        record_run_failure(
-            report_id,
-            "The backend restarted while this run was in progress, so it was "
-            "abandoned. Nothing was saved — run the report again.",
-        )
-
-    return len(stranded)
 
 
 def get_ticket_status(report_id: str) -> Optional[str]:

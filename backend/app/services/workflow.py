@@ -1018,6 +1018,11 @@ def run_pipeline(
         },
     )
 
+    # FOREIGN is imported inside _resolve_domain_classification, not at module
+    # scope, so it is unbound here — every run reaching this point died with
+    # NameError: name 'FOREIGN' is not defined.
+    from app.services.domain_classifier import FOREIGN
+
     domain_type = str(
         domain_classification.get("classification", FOREIGN)
         or FOREIGN

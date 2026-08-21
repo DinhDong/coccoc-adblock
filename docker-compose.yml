@@ -94,6 +94,9 @@ services:
     environment:
       WORKER_LOG_LEVEL: INFO
       WORKER_SLEEP_SECONDS: "5"
+      # Set to "true" to also claim drafts, so a ticket runs as soon as it is
+      # created and pressing Run becomes optional.
+      WORKER_CLAIM_DRAFTS: "false"
     restart: unless-stopped
     volumes:
       - ./backend:/app

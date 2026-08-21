@@ -124,9 +124,9 @@ A record left `processing` means the worker died mid-run; reset it to `new` to
 have it picked up again. Failed records stay `failed` until an admin sets them
 back to `new`.
 
-Note this is the *unattended* path. The Run button in the UI goes through the
-in-process queue instead (see "The two workers" below), because a moderator
-should not wait for the next poll.
+This is the only runner. The Run button in the UI does not execute anything —
+it marks the ticket `new` and this worker picks it up (see "How a run happens"
+below).
 
 ### Running the pipeline manually
 
@@ -240,7 +240,6 @@ coccoc-adblock/
 │       ├── services/
 │       │   ├── workflow.py             # run_pipeline: crawl -> generate -> validate
 │       │   ├── worker.py               # standalone polling daemon (file or db source)
-│       │   ├── jobs.py                 # in-process queue behind POST /run
 │       │   ├── crawler.py              # crawl stage entry point
 │       │   ├── rule_generator.py       # prompt build -> LLM -> parsed rules
 │       │   ├── rule_validator.py       # syntax + scope + policy + sandbox
@@ -309,36 +308,46 @@ coccoc-adblock/
 
 ---
 
-## The two workers
+## How a run happens
 
-They are not duplicates and both are wired up in `docker-compose.yml`.
+There is one runner: `app/services/worker.py`, its own container. The API never
+executes a pipeline itself — it only changes a status.
 
-**`services/worker.py` — standalone polling daemon.** Runs as its own container
-(`python -m app.services.worker`, no arguments). Claims rows with
-`status='new'` using `FOR UPDATE SKIP LOCKED`, so several copies can run safely.
-This is the unattended/batch path: nothing needs to be watching, and a failing
-record never stops the loop.
+```
+UI "Send to pipeline"  ->  POST /api/tickets/<id>/run   (returns 202 instantly)
+                             sets status = "new"
+worker polls           ->  claims the oldest "new" row (FOR UPDATE SKIP LOCKED)
+                             status = "processing"
+                             crawl -> generate -> validate
+                             status = "completed" or "failed"
+UI polls /api/tickets  ->  shows the report ready for review
+```
 
-**`services/jobs.py` — in-process queue.** Lives inside the Flask app and exists
-only so `POST /api/tickets/<id>/run` can return `202` immediately instead of
-holding the HTTP connection open for the 30-90s a run takes. Daemon threads
-bounded by a semaphore (`PIPELINE_MAX_WORKERS`, default 2). This is the
-interactive path: a moderator clicked Run and wants to see progress now, not at
-the next poll.
+Because queueing is just a status change, a run survives the API restarting,
+and several worker containers can run side by side without two of them taking
+the same row.
 
-Both call the same `run_pipeline()`, and they never claim each other's rows —
-the daemon only takes `new`, the in-process queue only handles what the API
-hands it. Status vocabulary across both:
+**Making every draft run automatically.** By default the worker only claims
+`new`, so a draft sits untouched until someone presses Run. Set
+`WORKER_CLAIM_DRAFTS=true` and it also claims `draft`/`submitted`, so a ticket
+starts crawling as soon as it is created — at the cost of never being able to
+park a half-written draft.
 
-| status | shown in the UI as |
-|---|---|
-| `new`, `draft`, `submitted` | Draft |
-| `processing` (daemon), `crawling`/`generating`/`validating` (API) | Processing |
-| `review`, `generated`, `validated`, `no_rules` | Awaiting review |
-| `failed`, `crawl_failed` | Run failed |
-| `done` | Done |
+**Stranded runs.** If the worker dies mid-run its row stays `processing`. The
+worker requeues those at startup: it is the only thing that runs pipelines, so
+when it boots nothing can legitimately be in progress.
 
----
+Status vocabulary:
+
+| status | who sets it | shown in the UI as |
+|---|---|---|
+| `draft`, `submitted` | ticket created | Draft |
+| `new` | pressing Run | Processing (queued) |
+| `processing` | worker claims it | Processing |
+| `crawling`, `generating`, `validating` | the pipeline, as it goes | Processing |
+| `completed`, `review`, `no_rules` | run finished | Awaiting review |
+| `failed`, `crawl_failed` | run failed | Run failed |
+| `done` | review finished | Done |
 
 ## HTTP API (Flask, port 5000)
 
@@ -348,9 +357,7 @@ hands it. Status vocabulary across both:
 | POST | `/api/tickets` | create a ticket |
 | PATCH | `/api/tickets/<id>` | edit fields, or change status |
 | DELETE | `/api/tickets/<id>` | delete a report and its rules/images |
-| POST | `/api/tickets/<id>/run` | queue a pipeline run, returns `202` |
-| GET | `/api/tickets/<id>/job` | job status for that report |
-| GET | `/api/jobs` | every job this process knows about |
+| POST | `/api/tickets/<id>/run` | queue the report for the worker, returns `202` |
 | GET | `/api/tickets/duplicates?url=` | other reports on the same link |
 | GET | `/api/tickets/<id>/images` | presigned URLs for the 3 screenshots |
 | POST | `/api/tickets/<id>/decisions` | approve/reject one rule |

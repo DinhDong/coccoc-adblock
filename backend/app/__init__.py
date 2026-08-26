@@ -4,6 +4,8 @@ from flask_cors import CORS
 try:
     from .tickets import (
         persist_ticket_to_db,
+        create_ticket as create_ticket_record,
+        allocate_report_id,
         fetch_all_tickets,
         fetch_all_rules,
         fetch_token_usage,
@@ -28,6 +30,8 @@ try:
 except ImportError:  # pragma: no cover
     from app.tickets import (
         persist_ticket_to_db,
+        create_ticket as create_ticket_record,
+        allocate_report_id,
         fetch_all_tickets,
         fetch_all_rules,
         fetch_token_usage,
@@ -84,6 +88,11 @@ def create_app():
     def health():
         return {"ok": True}
 
+    @app.get("/api/tickets/next-id")
+    def next_ticket_id():
+        """The id a new report would get, so the form can show it up front."""
+        return {"id": allocate_report_id()}, 200
+
     @app.post("/api/tickets")
     def create_ticket():
         from flask import request
@@ -92,8 +101,19 @@ def create_app():
         if not payload:
             return {"error": "empty payload"}, 400
 
-        record_id = persist_ticket_to_db(payload)
-        return {"ok": True, "record_id": record_id}, 201
+        # Ids are assigned here, not in the browser. A client-side counter
+        # reset on every page load and handed out ids that already existed,
+        # and save_crawl_input updates in place when report_id is taken — so
+        # a "new" report quietly overwrote an old one instead of being
+        # created. create_ticket_record picks a free id and reports whether
+        # the requested one had to be replaced.
+        result = create_ticket_record(payload)
+        return {
+            "ok": True,
+            "record_id": result["record_id"],
+            "id": result["id"],
+            "renamed": result["renamed"],
+        }, 201
 
     @app.get("/api/tickets")
     def list_tickets():

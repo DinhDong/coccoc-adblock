@@ -1,6 +1,13 @@
 import { useMemo, useState } from "react";
 import { RefreshCw, ChevronRight, Copy, Check, Search } from "lucide-react";
+import { ENVS } from "../constants.js";
 import { fmtDate } from "../utils.js";
+
+// Rules are registered per (domain, environment), so the same selector can
+// legitimately appear under Desktop and Android for one site. Without the
+// platform shown that reads as an accidental duplicate.
+const envOf = (rule) => rule.env || "desktop";
+const envLabel = (key) => ENVS.find((e) => e.k === key)?.label || key;
 
 // A rule counts as live once a moderator approved it AND the report it came
 // from was closed. Approved rules on a still-open report are shown separately
@@ -9,6 +16,9 @@ export default function LiveRules({ rules, loading, onRefresh, onOpenReport }) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(() => new Set());
   const [copied, setCopied] = useState("");
+  // Per-site platform filter, keyed by site so expanding two sites does not
+  // make them share one selection.
+  const [envTab, setEnvTab] = useState({});
 
   const { sites, liveCount, pendingCount } = useMemo(() => {
     const live = rules.filter((r) => r.deployed);
@@ -29,7 +39,11 @@ export default function LiveRules({ rules, loading, onRefresh, onOpenReport }) {
     }
 
     const list = Object.values(grouped)
-      .map((s) => ({ ...s, shown: s.live.filter(match) }))
+      .map((s) => {
+        const byEnv = {};
+        for (const r of s.live) (byEnv[envOf(r)] ||= []).push(r);
+        return { ...s, shown: s.live.filter(match), byEnv };
+      })
       .filter((s) => (q ? s.shown.length > 0 || s.site.toLowerCase().includes(q) : true))
       .sort((a, b) => b.live.length - a.live.length || a.site.localeCompare(b.site));
 
@@ -124,6 +138,12 @@ export default function LiveRules({ rules, loading, onRefresh, onOpenReport }) {
           <div className="ad-sites">
             {sites.map((s) => {
               const isOpen = open.has(s.site);
+              const envKeys = ENVS.map((e) => e.k).filter((k) => (s.byEnv[k] || []).length > 0);
+              const activeEnv = envTab[s.site] || "all";
+              const base = query ? s.shown : s.live;
+              const visible =
+                activeEnv === "all" ? base : base.filter((r) => envOf(r) === activeEnv);
+              const copyLabel = activeEnv === "all" ? s.site : `${s.site} · ${envLabel(activeEnv)}`;
               return (
                 <div className={"ad-site" + (isOpen ? " open" : "")} key={s.site}>
                   <button
@@ -152,14 +172,53 @@ export default function LiveRules({ rules, loading, onRefresh, onOpenReport }) {
                         </div>
                       ) : (
                         <>
+                          {envKeys.length > 1 ? (
+                            <div className="ad-siteenvtabs" role="tablist" aria-label={`Platforms for ${s.site}`}>
+                              <button
+                                role="tab"
+                                aria-selected={activeEnv === "all"}
+                                className={"ad-siteenvtab" + (activeEnv === "all" ? " on" : "")}
+                                onClick={() => setEnvTab((p) => ({ ...p, [s.site]: "all" }))}
+                              >
+                                All <span className="ad-siteenvnum">{s.live.length}</span>
+                              </button>
+                              {envKeys.map((k) => (
+                                <button
+                                  key={k}
+                                  role="tab"
+                                  aria-selected={activeEnv === k}
+                                  className={"ad-siteenvtab" + (activeEnv === k ? " on" : "")}
+                                  onClick={() => setEnvTab((p) => ({ ...p, [s.site]: k }))}
+                                >
+                                  {envLabel(k)} <span className="ad-siteenvnum">{s.byEnv[k].length}</span>
+                                </button>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="ad-panelabel">
+                              All {s.live.length} live rule{s.live.length === 1 ? "" : "s"} here are{" "}
+                              {envLabel(envKeys[0] || "desktop")}.
+                            </div>
+                          )}
+
                           <table className="ad-minitable">
                             <thead>
-                              <tr><th>Rule</th><th>Type</th><th>From</th><th>Since</th></tr>
+                              <tr><th>Rule</th><th>Env</th><th>Type</th><th>From</th><th>Since</th></tr>
                             </thead>
                             <tbody>
-                              {(query ? s.shown : s.live).map((r, i) => (
+                              {visible.length === 0 && (
+                                <tr>
+                                  <td colSpan={5}>
+                                    <div className="ad-panelabel">
+                                      No live rules for {envLabel(activeEnv)} on this site.
+                                    </div>
+                                  </td>
+                                </tr>
+                              )}
+                              {visible.map((r, i) => (
                                 <tr key={`${r.reportId}-${r.text}-${i}`}>
                                   <td><span className="ad-ruletext">{r.text}</span></td>
+                                  <td><span className="ad-envtag">{envLabel(envOf(r))}</span></td>
                                   <td><span className="ad-chip">{r.rule_type}</span></td>
                                   <td>
                                     <button className="ad-linkbtn" onClick={() => onOpenReport(r.reportId)}>
@@ -174,9 +233,10 @@ export default function LiveRules({ rules, loading, onRefresh, onOpenReport }) {
                           <button
                             className="ad-btn ad-btn-ghost"
                             style={{ marginTop: 10 }}
-                            onClick={() => copy(s.site, s.live.map((r) => r.text).join("\n"))}
+                            onClick={() => copy(copyLabel, visible.map((r) => r.text).join("\n"))}
+                            disabled={visible.length === 0}
                           >
-                            {copied === s.site ? <Check /> : <Copy />} Copy {s.site} rules
+                            {copied === copyLabel ? <Check /> : <Copy />} Copy {copyLabel} rules
                           </button>
                         </>
                       )}

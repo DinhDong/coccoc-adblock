@@ -149,6 +149,16 @@ CREATE TABLE IF NOT EXISTS rule_outputs (
                     "ALTER TABLE rule_outputs ADD COLUMN images JSON AFTER after_screenshot"
                 )
 
+            # When the worker claimed this report. updated_at cannot stand in
+            # for it: every stage transition touches updated_at, so it tracks
+            # the last sign of progress, not the start. Without a real start
+            # the UI could only count elapsed time for a run it queued itself,
+            # and a page reload mid-run reset the clock to zero.
+            if not _column_exists(cur, "crawl_inputs", "run_started_at"):
+                cur.execute(
+                    "ALTER TABLE crawl_inputs ADD COLUMN run_started_at TIMESTAMP NULL"
+                )
+
             if not _column_exists(cur, "crawl_inputs", "report_id"):
                 cur.execute(
                     "ALTER TABLE crawl_inputs ADD COLUMN report_id VARCHAR(255) UNIQUE AFTER id"

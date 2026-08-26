@@ -50,8 +50,3 @@ htmlcov/
 
 # Docker
 docker-compose.override.yml
-
-# Graphify knowledge graph outputs
-graphify-out/
-.graphify_*.json
-.graphify_*.txt

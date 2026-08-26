@@ -35,6 +35,18 @@ services:
     command: ["python", "-m", "flask", "--debug", "run", "--host=0.0.0.0", "--port=5000"]
     environment:
       FLASK_APP: app
+    # The shared team database is unreachable, so these point at the local
+    # `db` service above instead of the MYSQL_* values in .env.local
+    # (compose `environment:` wins over `env_file:`). To go back to the shared
+    # server, delete these five lines from backend, api and worker.
+      MYSQL_HOST: db
+      MYSQL_PORT: "3306"
+      MYSQL_USER: adblock
+      MYSQL_PASSWORD: adblock_pass
+      MYSQL_DATABASE: adblock
+    depends_on:
+      db:
+        condition: service_healthy
     ports:
       - "5000:5000"
     restart: unless-stopped
@@ -54,6 +66,19 @@ services:
     env_file: .env.local
     entrypoint: ["uvicorn"]
     command: ["app.api:app", "--host=0.0.0.0", "--port=8000"]
+    environment:
+    # The shared team database is unreachable, so these point at the local
+    # `db` service above instead of the MYSQL_* values in .env.local
+    # (compose `environment:` wins over `env_file:`). To go back to the shared
+    # server, delete these five lines from backend, api and worker.
+      MYSQL_HOST: db
+      MYSQL_PORT: "3306"
+      MYSQL_USER: adblock
+      MYSQL_PASSWORD: adblock_pass
+      MYSQL_DATABASE: adblock
+    depends_on:
+      db:
+        condition: service_healthy
     ports:
       - "8000:8000"
     restart: unless-stopped
@@ -94,6 +119,18 @@ services:
     environment:
       WORKER_LOG_LEVEL: INFO
       WORKER_SLEEP_SECONDS: "5"
+    # The shared team database is unreachable, so these point at the local
+    # `db` service above instead of the MYSQL_* values in .env.local
+    # (compose `environment:` wins over `env_file:`). To go back to the shared
+    # server, delete these five lines from backend, api and worker.
+      MYSQL_HOST: db
+      MYSQL_PORT: "3306"
+      MYSQL_USER: adblock
+      MYSQL_PASSWORD: adblock_pass
+      MYSQL_DATABASE: adblock
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
     volumes:
       - ./backend:/app

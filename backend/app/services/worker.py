@@ -142,9 +142,12 @@ def claim_next_job() -> Optional[WorkerJob]:
                 conn.commit()
                 return None
 
+            # run_started_at is stamped once, here, and not touched again for
+            # the rest of the run — it is what the UI counts elapsed time from
+            # while the pipeline is in flight.
             cur.execute(
                 "UPDATE crawl_inputs SET status='processing', error_message='', "
-                "updated_at=NOW() WHERE id=%s",
+                "run_started_at=NOW(), updated_at=NOW() WHERE id=%s",
                 (row["id"],),
             )
             conn.commit()
@@ -168,6 +171,23 @@ def mark_failed(job: WorkerJob, error_message: str, output: Mapping[str, Any]) -
         error_message=error_message,
         output=output,
     )
+
+
+def _rules_column_value(output: Mapping[str, Any]) -> Any:
+    """
+    Decide what belongs in rule_outputs.rules.
+
+    run_rule_generation already stores the full generation record there. This
+    used to overwrite it with the flattened list from select_output_rules,
+    which threw away duplicates_skipped — the only record of *why* a run has
+    nothing to review. A report whose every generated rule was already in the
+    registry then reached the UI as an empty ticket with no explanation.
+    Prefer the record; fall back to the flat list when there is no record.
+    """
+    record = output.get("rules_record")
+    if isinstance(record, Mapping) and record:
+        return record
+    return output.get("rules", [])
 
 
 def save_job_result(
@@ -216,7 +236,10 @@ def save_job_result(
                     "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)"
                 ),
                 (
-                    json.dumps(output.get("rules", []), ensure_ascii=False),
+                    json.dumps(
+                        make_json_safe(_rules_column_value(output)),
+                        ensure_ascii=False,
+                    ),
                     int(output.get("input_tokens") or 0),
                     int(output.get("output_tokens") or 0),
                     json.dumps(
@@ -417,6 +440,13 @@ def build_output_payload(
         "report_id": job.report_id,
         "url": job.url,
         "rules": rules,
+        # The generation record exactly as run_rule_generation wrote it. It
+        # carries duplicates_skipped, the model, and per-rule types; `rules`
+        # above is only the flattened rule text. tickets._duplicates_for_ui
+        # reads this record to explain a run that produced nothing because
+        # every rule it generated was already known — a bare list leaves it
+        # with nothing to report and the ticket looks broken instead.
+        "rules_record": rules_artifact if isinstance(rules_artifact, Mapping) and rules_artifact else None,
         "input_tokens": int(token_usage.get("prompt_tokens") or 0),
         "output_tokens": int(token_usage.get("completion_tokens") or 0),
         "validation_result": validation_artifact

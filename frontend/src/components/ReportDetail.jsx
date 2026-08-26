@@ -7,28 +7,130 @@ import StatusBadge from "./StatusBadge.jsx";
 
 const STAGE_MS = { crawl: "crawlMs", generate: "generationMs", validate: "validationMs" };
 
-function StepList({ current, metrics }) {
+/**
+ * How long the current run has been going, ticking every second.
+ *
+ * `baseMs` is measured by the database, not derived from a timestamp here:
+ * MySQL runs on UTC and serialises without an offset, so parsing it locally
+ * in UTC+7 made a run that started seconds ago look seven hours old. Each
+ * poll re-anchors the counter, so it stays honest and cannot drift.
+ *
+ * Its own component so the one-second interval re-renders this line rather
+ * than the whole report modal.
+ */
+function ElapsedTime({ baseMs }) {
+  const [sinceAnchor, setSinceAnchor] = useState(0);
+  const anchor = useRef({ base: baseMs, at: Date.now() });
+
+  useEffect(() => {
+    anchor.current = { base: baseMs, at: Date.now() };
+    setSinceAnchor(0);
+  }, [baseMs]);
+
+  useEffect(() => {
+    const t = setInterval(() => setSinceAnchor(Date.now() - anchor.current.at), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  if (typeof baseMs !== "number") return null;
+  return (
+    <span className="ad-steptime ad-steplive">
+      {fmtDur(Math.max(0, anchor.current.base + sinceAnchor))}
+    </span>
+  );
+}
+
+function StepList({ current, metrics, estimates, runElapsedMs }) {
   const idx = STAGES.findIndex((s) => s.k === current);
+  const running = idx !== -1;
   return (
     <div>
       {STAGES.map((s, i) => {
         const done = idx > i || idx === -1;
         const cur = idx === i;
         const ms = metrics?.[STAGE_MS[s.k]];
+        // Estimates come from how long this stage has actually taken on past
+        // runs, so they only appear once there is history to average.
+        const eta = cur ? estimates?.[s.k] : null;
         return (
           <div className={"ad-step" + (done ? " donestep" : cur ? " current" : " pending")} key={s.k}>
             <span className="ad-stepdot" />
             <span className="ad-steplabel">{s.label}{cur ? "…" : done ? " — completed" : ""}</span>
-            {typeof ms === "number" && <span className="ad-steptime">{fmtDur(ms)}</span>}
+            {typeof ms === "number" ? (
+              <span className="ad-steptime">{fmtDur(ms)}</span>
+            ) : (
+              typeof eta === "number" && (
+                <span className="ad-steptime ad-stepeta" title="Average of previous runs">
+                  ~{fmtDur(eta)}
+                </span>
+              )
+            )}
           </div>
         );
       })}
-      {typeof metrics?.totalMs === "number" && (
+      {/* Keyed on whether the run is in flight, not on totalMs being present:
+          the stage blobs fill in as the pipeline goes, so mid-run totalMs is a
+          real number — just a partial one — and showing it would freeze the
+          clock at however far the run had got. */}
+      {running ? (
         <div className="ad-step ad-steptotal">
           <span className="ad-stepdot" />
-          <span className="ad-steplabel">Total pipeline time</span>
-          <span className="ad-steptime">{fmtDur(metrics.totalMs)}</span>
+          <span className="ad-steplabel">
+            Running for
+            {typeof estimates?.total === "number" && (
+              <span className="ad-stepest">
+                {" "}· {fmtDur(estimates.total)} typical
+              </span>
+            )}
+          </span>
+          {typeof runElapsedMs === "number" ? (
+            <ElapsedTime baseMs={runElapsedMs} />
+          ) : (
+            <span className="ad-steptime ad-stepeta">—</span>
+          )}
         </div>
+      ) : (
+        typeof metrics?.totalMs === "number" && (
+          <div className="ad-step ad-steptotal">
+            <span className="ad-stepdot" />
+            <span className="ad-steplabel">Total pipeline time</span>
+            <span className="ad-steptime">{fmtDur(metrics.totalMs)}</span>
+          </div>
+        )
+      )}
+    </div>
+  );
+}
+
+/**
+ * How many rules this run produced, and what happened to the rest.
+ *
+ * A run whose every candidate was already registered finishes with an empty
+ * rule list. Without this the ticket looked broken; the counts say plainly
+ * that the generator did its job and dedup took the output.
+ */
+function RuleYield({ t }) {
+  const kept = (t.rules || []).length;
+  const generated = typeof t.generatedCount === "number" ? t.generatedCount : kept;
+  const dupes = t.duplicates?.total || 0;
+  if (!generated && !dupes) return null;
+
+  // Reports run before duplicates became reviewable had them removed from the
+  // list, so the two cases have to read differently — otherwise an old report
+  // would claim it kept rules it does not actually contain.
+  const wereDropped = t.duplicates?.dropped;
+
+  return (
+    <div className="ad-yield">
+      <span className="ad-yieldmain">
+        <b>{generated}</b> rule{generated === 1 ? "" : "s"} generated
+      </span>
+      {dupes > 0 && (
+        <span className="ad-yieldnote">
+          {wereDropped
+            ? `${kept} kept · ${dupes} dropped as already known`
+            : `${dupes} flagged as duplicate — still yours to approve or reject`}
+        </span>
       )}
     </div>
   );
@@ -256,42 +358,6 @@ function ReportImages({ reportId, backendUrl }) {
   );
 }
 
-function DuplicateWarning({ dupes, ruleCount }) {
-  const total = dupes?.total || 0;
-  if (!total) return null;
-
-  const parts = [];
-  if (dupes.internal) parts.push(`${dupes.internal} already in the rule registry for this domain`);
-  if (dupes.external) parts.push(`${dupes.external} already covered by a public filter list`);
-
-  return (
-    <div className="ad-warnbox">
-      <AlertTriangle className="ad-warnicon" />
-      <div>
-        <div className="ad-warntitle">
-          {total} duplicate rule{total === 1 ? "" : "s"} skipped
-          {ruleCount === 0 && " — nothing left to review"}
-        </div>
-        <div className="ad-warnbody">
-          The model proposed {total + ruleCount} rule{total + ruleCount === 1 ? "" : "s"}, but{" "}
-          {parts.join(" and ")}. Duplicates are dropped before validation.
-          {ruleCount === 0 && " Clear this domain from the rule registry to re-propose them."}
-        </div>
-        {dupes.rules?.length > 0 && (
-          <details className="ad-warndetails">
-            <summary>Show skipped rules</summary>
-            <ul>
-              {dupes.rules.map((r, i) => (
-                <li key={i}>{r}</li>
-              ))}
-            </ul>
-          </details>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function EditTicketButton({ onEdit }) {
   return (
     <button className="ad-btn ad-btn-ghost" onClick={onEdit}>
@@ -423,7 +489,19 @@ function RuleRow({ r, index, state, selected, onToggle, onDecide, onEditRule, on
             <div className="ad-ruletext">
               {r.text}
               {r.source === "edited" && <span className="ad-srcchip">edited</span>}
+              {r.duplicate && (
+                <span className="ad-dupchip" title={r.duplicate.source}>
+                  <AlertTriangle aria-hidden="true" /> duplicate
+                </span>
+              )}
             </div>
+            {/* A warning, not a verdict — the approve/reject buttons below stay
+                enabled so a moderator can deploy it anyway. */}
+            {r.duplicate && (
+              <div className="ad-rulewarn">
+                {r.duplicate.source.charAt(0).toUpperCase() + r.duplicate.source.slice(1)}.
+              </div>
+            )}
             {r.status === "failed" && r.reason && (
               <div className="ad-rulereason">Auto-rejected — {r.reason}</div>
             )}
@@ -511,7 +589,7 @@ function MiniSandbox() {
 export default function ReportDetail({
   t, onClose, onRun, onCancelRun, onDelete, onDecide, onFinish,
   onEdit, onAddRule, onEditRule, onDeleteRule, onMergeRules, onMergePreview,
-  backendUrl,
+  backendUrl, estimates,
 }) {
   const [selected, setSelected] = useState(() => new Set());
 
@@ -620,7 +698,13 @@ export default function ReportDetail({
           <>
             <div className="ad-msection">
               <h3>Pipeline</h3>
-              <StepList current={t.state === "inprocess" ? t.stage : null} metrics={t.metrics} />
+              <StepList
+                current={t.state === "inprocess" ? t.stage : null}
+                metrics={t.metrics}
+                estimates={estimates}
+                runElapsedMs={t.runElapsedMs}
+              />
+              <RuleYield t={t} />
             </div>
             <TokenUsage metrics={t.metrics} />
           </>
@@ -651,7 +735,6 @@ export default function ReportDetail({
 
             <div className="ad-msection">
               <h3>{t.state === "review" ? "Candidate rules — decide each one" : "Rules"}</h3>
-              <DuplicateWarning dupes={t.duplicates} ruleCount={(t.rules || []).length} />
               {selected.size > 0 && (
                 <div className="ad-bulkbar" style={{ margin: "8px 0" }}>
                   <b>{selected.size} selected</b>

@@ -4,7 +4,6 @@ import { nowISO, todayISO } from "./utils.js";
 import Layout from "./components/Layout.jsx";
 import ReportDetail, { clearReportImageCache } from "./components/ReportDetail.jsx";
 import NewReportModal from "./components/NewReportModal.jsx";
-import DuplicateTargetModal from "./components/DuplicateTargetModal.jsx";
 import Reports from "./pages/Reports.jsx";
 import Performance from "./pages/Performance.jsx";
 import RuleLibrary from "./pages/RuleLibrary.jsx";
@@ -37,7 +36,10 @@ export default function App() {
     `${window.location.protocol}//${backendHost}:5000`
   ).replace(/\/$/, "");
   const [, setNowTick] = useState(0);
-  const nextRpt = useRef(148);
+  // The id a new report will get. Fetched from the backend when the form
+  // opens rather than counted locally: a local counter restarted at 148 on
+  // every page load and handed out ids that already existed.
+  const [nextId, setNextId] = useState("");
 
   const makeTicketId = () =>
     window.crypto?.randomUUID?.() ?? `u${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -106,35 +108,15 @@ export default function App() {
     }
   };
 
-  // Ask the backend whether this link has been run before, so the choice can
-  // be put to the user before anything is crawled or any tokens are spent.
-  const findDuplicates = async (id, url) => {
-    const query = new URLSearchParams({ url, exclude: id });
-    const response = await fetch(`${backendUrl}/api/tickets/duplicates?${query}`);
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(data.error || `duplicate check failed ${response.status}`);
-    }
-    return data.duplicates || [];
-  };
-
+  // Runs start immediately. There used to be a prompt here when the same site
+  // had been crawled before, asking whether to keep or discard its rules —
+  // but duplicate rules are no longer dropped, they are generated, flagged
+  // and put to the moderator on the review screen. Asking up front made
+  // people decide before they could see what the duplicates actually were.
   const startRun = async (id, ticketOverride) => {
     const ticket = ticketOverride || tickets.find((t) => t.id === id);
     if (!ticket) {
       console.error(`Cannot run pipeline: ticket ${id} not found`);
-      return;
-    }
-
-    let duplicates;
-    try {
-      duplicates = await findDuplicates(id, ticket.url);
-    } catch (error) {
-      console.error("Duplicate check failed", error);
-      window.alert(`Could not start ${id}: ${error.message}`);
-      return;
-    }
-    if (duplicates.length > 0) {
-      setModal({ kind: "duplicate", id, ticket, duplicates });
       return;
     }
     await runPipeline(id, ticket);
@@ -582,12 +564,12 @@ ${error.message}`);
   };
 
   const createTicket = async (data, runNow) => {
-    // Use the user-provided name as the stable report id when available,
-    // otherwise fall back to a generated id. This prevents the report from
-    // being later replaced by a UUID identifier.
-    const id = (data && data.name && data.name.trim()) ? data.name.trim() : makeTicketId();
-    nextRpt.current++;
-    const ticketPayload = {
+    // The requested name is only a request. The backend owns report ids: it
+    // allocates the next free one and tells us what the report is actually
+    // called, so two people (or one person after a reload) can no longer be
+    // handed the same id and silently overwrite each other's report.
+    let id = (data && data.name && data.name.trim()) ? data.name.trim() : makeTicketId();
+    let ticketPayload = {
       id,
       state: "draft",
       created: todayISO(),
@@ -605,6 +587,15 @@ ${error.message}`);
       if (!response.ok) {
         throw new Error(body.error || `ticket save failed ${response.status}`);
       }
+      if (body.id && body.id !== id) {
+        // The requested name was taken. Adopt the id the backend assigned,
+        // otherwise the local row would point at a report that is not there.
+        if (body.renamed) {
+          window.alert(`${id} already exists, so this report was filed as ${body.id}.`);
+        }
+        id = body.id;
+        ticketPayload = { ...ticketPayload, id, name: body.id };
+      }
     } catch (error) {
       console.error("Failed to save ticket to backend", error);
       window.alert(`Could not create ${id}: ${error.message}`);
@@ -621,6 +612,27 @@ ${error.message}`);
       await startRun(id, ticketPayload);
     }
   };
+
+  // Ask for the next free id whenever the create form opens, so the name it
+  // suggests is one the backend will actually accept.
+  useEffect(() => {
+    if (modal?.kind !== "new") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch(`${backendUrl}/api/tickets/next-id`);
+        if (!response.ok) return;
+        const data = await response.json();
+        if (!cancelled && data.id) setNextId(data.id);
+      } catch (error) {
+        // Non-fatal: the field just opens blank and the backend still
+        // assigns a free id on submit.
+        console.debug("next-id lookup failed", error);
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modal?.kind]);
 
   const q = query.trim().toLowerCase();
 
@@ -641,6 +653,34 @@ ${error.message}`);
     const m = Object.fromEntries(STATE_ORDER.map((k) => [k, []]));
     tickets.forEach((t) => m[t.state] && m[t.state].push(t));
     return m;
+  }, [tickets]);
+
+  // How long a run is likely to take, averaged over the runs already on
+  // record. Shown against the stage in flight so a moderator watching a
+  // pipeline knows whether to wait or come back. Purely local: every number
+  // needed is already on the tickets the list fetched.
+  const estimates = useMemo(() => {
+    // Median, not mean. Run times are long-tailed — one site that took six
+    // minutes to crawl drags a mean far above anything you would actually
+    // wait, while the median stays on a run that really happened.
+    const median = (key) => {
+      const values = tickets
+        .map((t) => t.metrics?.[key])
+        .filter((v) => typeof v === "number" && v > 0)
+        .sort((a, b) => a - b);
+      if (!values.length) return null;
+      const mid = Math.floor(values.length / 2);
+      return values.length % 2 ? values[mid] : (values[mid - 1] + values[mid]) / 2;
+    };
+    const total = median("totalMs");
+    if (total === null) return null;
+    return {
+      crawl: median("crawlMs"),
+      generate: median("generationMs"),
+      validate: median("validationMs"),
+      total,
+      sample: tickets.filter((t) => typeof t.metrics?.totalMs === "number").length,
+    };
   }, [tickets]);
 
   const openTicket = modal?.kind === "ticket" ? tickets.find((t) => t.id === modal.id) : null;
@@ -700,19 +740,8 @@ ${error.message}`);
         <div className="ad-overlay" onMouseDown={() => setModal(null)}>
           {modal.kind === "new" && (
             <NewReportModal
-              nextName={`RPT-2026-0${nextRpt.current}`}
+              nextName={nextId}
               onCreate={createTicket}
-              onClose={() => setModal(null)}
-            />
-          )}
-          {modal.kind === "duplicate" && (
-            <DuplicateTargetModal
-              url={modal.ticket.url}
-              duplicates={modal.duplicates}
-              onChoose={(choice) => {
-                setModal(null);
-                runPipeline(modal.id, modal.ticket, choice);
-              }}
               onClose={() => setModal(null)}
             />
           )}
@@ -727,6 +756,7 @@ ${error.message}`);
             <ReportDetail
               t={openTicket}
               backendUrl={backendUrl}
+              estimates={estimates}
               onClose={() => setModal(null)}
               onRun={() => startRun(openTicket.id)}
               onCancelRun={() => cancelRun(openTicket.id)}

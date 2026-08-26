@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { ENVS, CURRENT_USER } from "../constants.js";
 
@@ -13,6 +13,16 @@ export default function NewReportModal({ nextName, ticket, onCreate, onSave, onC
   const [notes, setNotes] = useState(ticket?.notes ?? "");
   const [runNow, setRunNow] = useState(true);
   const [err, setErr] = useState("");
+
+  // The suggested id is fetched from the backend, so it usually arrives a
+  // moment after this form mounts and the initial useState above has already
+  // run with an empty string. Adopt it when it lands, unless the moderator
+  // has started typing a name of their own.
+  const typed = useRef(false);
+  useEffect(() => {
+    if (editing || typed.current || !nextName) return;
+    setName(nextName);
+  }, [nextName, editing]);
 
   const submit = () => {
     if (!name.trim()) { setErr("Give the report a name."); return; }
@@ -51,7 +61,7 @@ export default function NewReportModal({ nextName, ticket, onCreate, onSave, onC
           <label htmlFor="nr-name">Report name</label>
           <input
             id="nr-name" className="ad-input" value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => { typed.current = true; setName(e.target.value); }}
             disabled={editing}
           />
           {editing && (

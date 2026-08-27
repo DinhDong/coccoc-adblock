@@ -26,14 +26,44 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 
 class S3Storage:
-    """Ceph object storage accessed through its S3-compatible API."""
+    """
+    Ceph object storage accessed through its S3-compatible API.
+
+    Also drives MinIO unchanged for local development: both are addressed
+    path-style and signed with s3v4, which is what the config below asks for.
+    """
 
     def __init__(self) -> None:
         self.bucket = _required_env("AWS_BUCKET")
 
-        self.client = boto3.client(
+        endpoint = _required_env("AWS_ENDPOINT")
+        self.client = self._build_client(endpoint)
+
+        # Presigned URLs are handed to the browser, so they have to name a
+        # host the browser can actually reach. Under compose the backend
+        # talks to storage over the container network — http://minio:9000 —
+        # which resolves to nothing on the developer's machine, so every
+        # screenshot in the UI would fail to load. Setting AWS_PUBLIC_ENDPOINT
+        # signs the URLs against that host instead while uploads keep using
+        # the internal one.
+        #
+        # The two cannot be collapsed into one client: an s3v4 signature
+        # covers the Host header, so a URL signed for `minio` is rejected when
+        # fetched from `localhost` and vice versa. Against Ceph, where one
+        # address serves both sides, leave AWS_PUBLIC_ENDPOINT unset and this
+        # is the same client twice.
+        public_endpoint = os.getenv("AWS_PUBLIC_ENDPOINT", "").strip()
+        self.presign_client = (
+            self._build_client(public_endpoint)
+            if public_endpoint and public_endpoint != endpoint
+            else self.client
+        )
+
+    @staticmethod
+    def _build_client(endpoint_url: str):
+        return boto3.client(
             "s3",
-            endpoint_url=_required_env("AWS_ENDPOINT"),
+            endpoint_url=endpoint_url,
             aws_access_key_id=_required_env("S3_ACCESS_KEY"),
             aws_secret_access_key=_required_env("S3_SECRET_KEY"),
             region_name=os.getenv(
@@ -106,7 +136,7 @@ class S3Storage:
         if not object_key.strip():
             raise ValueError("object_key must not be empty")
 
-        return self.client.generate_presigned_url(
+        return self.presign_client.generate_presigned_url(
             ClientMethod="get_object",
             Params={
                 "Bucket": self.bucket,

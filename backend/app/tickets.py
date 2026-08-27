@@ -197,11 +197,17 @@ def _derive_confidence(outcome: Dict[str, Any]) -> float:
     summarises the syntax / scope / policy / sandbox verdicts that
     rule_validator already produced.
     """
+    # `or {}` rather than a get() default: the validator writes these keys
+    # with an explicit null when it short-circuits — an exception rule that
+    # fails an early gate is stored as {"scope": null, "policy": null,
+    # "sandbox": null}. A default only applies to a *missing* key, so
+    # .get("scope", {}) hands back that None and the .get() below raises,
+    # 500-ing /api/tickets and blanking the whole report list.
     gates = (
-        bool(outcome.get("syntax", {}).get("valid")),
-        bool(outcome.get("scope", {}).get("safe")),
-        bool(outcome.get("policy", {}).get("valid")),
-        bool(outcome.get("sandbox", {}).get("passed")),
+        bool((outcome.get("syntax") or {}).get("valid")),
+        bool((outcome.get("scope") or {}).get("safe")),
+        bool((outcome.get("policy") or {}).get("valid")),
+        bool((outcome.get("sandbox") or {}).get("passed")),
     )
     cleared = sum(gates)
     if cleared == 0:

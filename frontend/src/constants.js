@@ -5,11 +5,31 @@
 
 export const STATE_ORDER = ["draft", "queued", "inprocess", "review", "failed", "done"];
 
+// What the stat cards show, in order. Not the same list as STATE_ORDER: a card
+// can stand for more than one state, and "all" is a card but not a state.
+//   - "all" leads, as a running total of the whole queue.
+//   - "active" replaces the old separate Queued and Running cards. Splitting
+//     them made a moderator read two numbers to answer one question ("is
+//     anything in flight?"), and a report crosses between the two on its own
+//     within seconds of being picked up, so the split was never stable enough
+//     to act on.
+export const CARD_ORDER = ["all", "draft", "active", "review", "failed", "done"];
+
+// Which ticket states each card counts and filters to.
+export const CARD_STATES = {
+  all: STATE_ORDER,
+  draft: ["draft"],
+  active: ["queued", "inprocess"],
+  review: ["review"],
+  failed: ["failed"],
+  done: ["done"],
+};
+
 export const STATES = {
   all: {
     label: "All",
-    card: "All reports",
-    sub: "Every report, newest first",
+    card: "Total",
+    sub: "Every report, whatever its state",
     empty: "No reports yet. Create one to get started.",
   },
   draft: {
@@ -17,6 +37,12 @@ export const STATES = {
     card: "Drafts",
     sub: "Created — not yet run",
     empty: "No draft reports. Create one to get started.",
+  },
+  active: {
+    label: "In progress",
+    card: "In progress",
+    sub: "Queued or being crawled right now",
+    empty: "Nothing is queued or running.",
   },
   queued: {
     label: "Queued",
@@ -44,7 +70,7 @@ export const STATES = {
   },
   done: {
     label: "Done",
-    card: "Completed",
+    card: "Done",
     sub: "Review complete",
     empty: "No completed reports yet.",
   },
@@ -61,14 +87,5 @@ export const STAGES = [
   { k: "generate", label: "Generating rules" },
   { k: "validate", label: "Sandbox validation" },
 ];
-
-export const USERS = [
-  { k: "anh.dao", name: "Anh Dao", initials: "AD", bg: "#88C646", ink: "#1D3829" },
-  { k: "duy.le", name: "Duy Le", initials: "DL", bg: "#1D3829", ink: "#D9EFBD" },
-  { k: "hien.khuong", name: "Hien Khuong", initials: "HK", bg: "#FF7439", ink: "#3D1A07" },
-  { k: "dong.tran", name: "Dong Tran", initials: "DT", bg: "#C4E3A3", ink: "#1D3829" },
-];
-export const CURRENT_USER = USERS[0]; // stub for the signed-in admin
-export const userOf = (k) => USERS.find((u) => u.k === k);
 
 export const VIEW_TITLES = { reports: "Reports", performance: "Performance", live: "Live rules", library: "Rule library", playground: "Rule playground", tokens: "Token usage" };

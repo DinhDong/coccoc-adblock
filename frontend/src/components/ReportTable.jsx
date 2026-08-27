@@ -1,5 +1,5 @@
 import { ENVS } from "../constants.js";
-import { hostname, fmtDate, passedRules, approvedRules } from "../utils.js";
+import { hostname, fmtDate, fmtTime, passedRules, approvedRules } from "../utils.js";
 import StatusBadge from "./StatusBadge.jsx";
 
 function rulesSummary(t) {
@@ -24,10 +24,10 @@ export default function ReportTable({ items, emptyText, onOpen }) {
             cells contain. Status is the widest because it has to hold
             "Running · Sandbox validation" without the row reflowing. */}
         <colgroup>
-          <col style={{ width: "24%" }} />
+          <col style={{ width: "23%" }} />
           <col style={{ width: "10%" }} />
-          <col style={{ width: "13%" }} />
-          <col style={{ width: "25%" }} />
+          <col style={{ width: "15%" }} />
+          <col style={{ width: "24%" }} />
           <col style={{ width: "28%" }} />
         </colgroup>
         <thead>
@@ -66,7 +66,10 @@ export default function ReportTable({ items, emptyText, onOpen }) {
                 <div className="ad-rowurl">{hostname(t.url)}</div>
               </td>
               <td><span className="ad-envtag">{ENVS.find((e) => e.k === t.env)?.label || t.env}</span></td>
-              <td className="ad-mute">{fmtDate(t.created)}</td>
+              <td className="ad-mute">
+                <div>{fmtDate(t.created)}</div>
+                {fmtTime(t.created) && <div className="ad-rowtime">{fmtTime(t.created)}</div>}
+              </td>
               <td>{rulesSummary(t)}</td>
               <td><StatusBadge t={t} /></td>
             </tr>

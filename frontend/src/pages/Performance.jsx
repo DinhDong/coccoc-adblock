@@ -16,10 +16,10 @@ const n = (v) => (typeof v === "number" ? v.toLocaleString() : "—");
 const avg = (xs) => (xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : 0);
 
 export default function Performance({ tickets, onRefresh, refreshing }) {
-  // Everything here comes from values the backend persists. The previous
-  // version relied on reviewedAt / runStartedAt / doneAt, which only ever
-  // existed in React state and vanished on reload, so the panels rendered
-  // zeros against real data.
+  // Everything here comes from values the backend persists. An earlier
+  // version read per-review timestamps that only ever existed in React
+  // state and vanished on reload, so the panels rendered zeros against
+  // real data.
   const m = useMemo(() => {
     const ran = tickets.filter((t) => t.metrics && t.metrics.totalMs);
     const allRules = tickets.flatMap((t) => t.rules || []);

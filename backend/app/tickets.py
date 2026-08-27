@@ -2,7 +2,7 @@ import json
 import os
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
@@ -161,7 +161,6 @@ def persist_ticket_to_db(ticket: Dict[str, Any]) -> int:
         "focus": ticket.get("focus"),
         "targets": ticket.get("targets", []),
         "notes": ticket.get("notes"),
-        "createdBy": ticket.get("createdBy"),
         "state": ticket.get("state"),
         "created": ticket.get("created"),
     }
@@ -175,6 +174,27 @@ def persist_ticket_to_db(ticket: Dict[str, Any]) -> int:
         crawl_duration_ms=None,
         before_screenshot=None,
     )
+
+
+def _iso_utc(value: Any) -> Optional[str]:
+    """
+    Serialise a database timestamp as an ISO string that carries its offset.
+
+    MySQL runs on UTC here and its TIMESTAMP columns come back naive, so
+    .isoformat() produced e.g. "2026-08-27T10:41:52" with nothing to say which
+    zone that is. Javascript's Date parses an ISO string with no offset as
+    *local* time, so a moderator in UTC+7 read every timestamp seven hours
+    early — a report created moments ago showed as this morning. Stamping the
+    offset makes the browser convert instead of guess.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, datetime):
+        aware = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return aware.isoformat()
+    return str(value)
 
 
 def _parse_json_blob(value: Any) -> Any:
@@ -720,19 +740,20 @@ ORDER BY ci.created_at DESC
             "focus": ticket_context.get("focus", ""),
             "targets": ticket_context.get("targets", []),
             "notes": ticket_context.get("notes", ""),
-            "createdBy": ticket_context.get("createdBy", "unknown"),
             "state": state,
             "stage": stage,
-            "created": ticket_context.get("created") or (row.get("created_at").isoformat() if row.get("created_at") else None),
-            "updatedAt": row.get("updated_at").isoformat() if row.get("updated_at") else None,
+            # created_at first, ticket_context.created only as a fallback.
+            # The order used to be the other way round, and the UI stamps
+            # ticket_context.created with a date-only string (todayISO), so
+            # that coarse value shadowed the precise column: every report in
+            # a batch created seconds apart reported the same "27 Aug 2026"
+            # and nothing downstream could tell them apart.
+            "created": _iso_utc(row.get("created_at")) or ticket_context.get("created"),
+            "updatedAt": _iso_utc(row.get("updated_at")),
             # Stamped when the worker claimed the report. The UI counts up
             # from this while the run is in flight, so the elapsed time is
             # correct even for someone who opened the page mid-run.
-            "runStartedAt": (
-                row.get("run_started_at").isoformat()
-                if row.get("run_started_at")
-                else None
-            ),
+            "runStartedAt": _iso_utc(row.get("run_started_at")),
             # Seconds the current run has been going, straight from the
             # database clock. The UI ticks upward from this and re-anchors on
             # every poll, so it never drifts and never depends on the
@@ -841,7 +862,7 @@ ORDER BY ro.updated_at DESC
                         rule.get("decision") == "approve"
                         and report_state == "done"
                     ),
-                    "updatedAt": updated_at.isoformat() if updated_at else None,
+                    "updatedAt": _iso_utc(updated_at),
                 }
             )
 
@@ -906,7 +927,7 @@ ORDER BY ci.created_at DESC
                 "url": row.get("url"),
                 "domain": row.get("domain"),
                 "state": state,
-                "createdAt": created.isoformat() if created else None,
+                "createdAt": _iso_utc(created),
                 "ruleCount": len(
                     _rules_for_ui(
                         row.get("rule_blob"),
@@ -1257,7 +1278,7 @@ ORDER BY ci.created_at DESC
                 "domain": row.get("domain"),
                 "url": row.get("url"),
                 "state": state,
-                "createdAt": created.isoformat() if created else None,
+                "createdAt": _iso_utc(created),
                 "promptTokens": metrics["promptTokens"],
                 "completionTokens": metrics["completionTokens"],
                 "totalTokens": metrics["totalTokens"],
@@ -1325,7 +1346,7 @@ def update_ticket_details(report_id: str, fields: Dict[str, Any]) -> Dict[str, A
     context = _parse_ticket_context(row.get("ticket_context"))
     url = (fields.get("url") or row.get("url") or "").strip()
 
-    for key in ("name", "env", "focus", "notes", "createdBy", "created", "state"):
+    for key in ("name", "env", "focus", "notes", "created", "state"):
         if key in fields:
             context[key] = fields[key]
 

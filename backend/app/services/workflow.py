@@ -304,6 +304,14 @@ def run_rule_generation(
 
     # Why each flagged rule is a duplicate, keyed by its text so the per-rule
     # records below can carry the note through to the review screen.
+    #
+    # Only the external note survives to the UI. The review screen ignores the
+    # "internal" one and recomputes it per read against rules that are actually
+    # *approved* (see tickets._approved_rule_index) — this one is written from
+    # the registry, which lists everything ever proposed for the domain, and is
+    # frozen at generation time. It is kept here because the pipeline log and
+    # the duplicates_flagged tallies below describe what dedup did during this
+    # run, which is a different question from what the moderator should see.
     duplicate_notes: Dict[str, Dict[str, str]] = {}
     for rule in internal_dupes:
         duplicate_notes[_coerce_rule(rule)] = {

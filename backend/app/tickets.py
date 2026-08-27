@@ -27,6 +27,19 @@ except ImportError:  # pragma: no cover
         update_crawl_input_fields,
     )
 
+try:
+    from .services.rule_registry import (
+        DEFAULT_ENVIRONMENT,
+        get_domain,
+        normalize_rule,
+    )
+except ImportError:  # pragma: no cover
+    from app.services.rule_registry import (
+        DEFAULT_ENVIRONMENT,
+        get_domain,
+        normalize_rule,
+    )
+
 
 def record_run_failure(report_id: str, message: str) -> None:
     """
@@ -198,14 +211,124 @@ def _derive_confidence(outcome: Dict[str, Any]) -> float:
     return round(cleared / len(gates) * 0.95, 2)
 
 
-def _duplicates_for_ui(rules_blob: Any) -> Dict[str, Any]:
+def _rule_candidates(rules_blob: Any) -> list:
     """
-    Summarise the rules the generator produced that already existed elsewhere.
+    The raw rule entries stored for a report.
 
-    'internal' rules were already in this domain+environment's rule_registry
-    entry; 'external' ones matched a public filter list. They are kept in the
-    rule list and flagged so a moderator can still approve them; `dropped`
-    marks the older rows where they were removed before validation instead.
+    save_rule_output writes the full generation blob ({"rules": [...]}) once
+    rules exist, but a bare list when the run produced none.
+    """
+    rules_data = _parse_json_blob(rules_blob)
+    if isinstance(rules_data, dict):
+        candidates = rules_data.get("rules") or []
+    elif isinstance(rules_data, list):
+        candidates = rules_data
+    else:
+        candidates = []
+    return candidates if isinstance(candidates, list) else []
+
+
+def _entry_text(entry: Any) -> str:
+    """The rule text of one stored entry, whichever shape it was written in."""
+    if isinstance(entry, str):
+        return entry
+    if isinstance(entry, dict):
+        return entry.get("rule") or entry.get("raw") or ""
+    return ""
+
+
+def _scope_key(row: Dict[str, Any]) -> tuple[str, str]:
+    """
+    The (domain, environment) a report's rules belong to.
+
+    Duplicate detection is scoped to this pair, matching how rule_registry
+    scopes generation-time dedup: the same selector approved for a different
+    site, or for a different platform, is deliberate coverage rather than a
+    duplicate. `domain` is denormalised onto crawl_inputs but is empty on some
+    older rows, so fall back to deriving it from the URL.
+    """
+    domain = (row.get("domain") or "").strip().lower()
+    if not domain:
+        domain = get_domain(row.get("url") or "")
+    env = _context_environment(row.get("ticket_context")) or DEFAULT_ENVIRONMENT
+    return domain, env
+
+
+def _approved_rule_index(rows: list) -> Dict[tuple, list]:
+    """
+    Which reports have each rule *approved*, keyed by (domain, env, rule).
+
+    Duplicate warnings used to be computed once, during generation, against
+    rule_registry.json — a record of every rule ever proposed for a domain,
+    approved or not. That was wrong in both directions: a rule was flagged
+    because some other report had merely *suggested* the same thing, and
+    because the flag was frozen into the stored blob it never changed
+    afterwards. Approving the other copy, or rejecting it, left the warning
+    exactly as generation-time had written it.
+
+    Rules are now matched against approved ones only, and the match is
+    recomputed on every read from these same rows, so approving a rule makes
+    its twins elsewhere start warning on the next poll with no re-run.
+
+    Only decisions whose rule still exists in the report's blob count. Deletes
+    and edits drop the decision alongside the rule, so this is belt-and-braces
+    against a stale entry resurrecting a rule nobody can see.
+    """
+    index: Dict[tuple, list] = {}
+
+    for row in rows:
+        decisions = _parse_json_blob(row.get("decisions_blob"))
+        if not isinstance(decisions, dict) or not decisions:
+            continue
+
+        present = {
+            text
+            for text in (_entry_text(e) for e in _rule_candidates(row.get("rule_blob")))
+            if text
+        }
+        if not present:
+            continue
+
+        report_id = row.get("report_id") or ""
+        domain, env = _scope_key(row)
+
+        for text, entry in decisions.items():
+            decision = entry.get("decision") if isinstance(entry, dict) else entry
+            if decision != "approve" or text not in present:
+                continue
+            bucket = index.setdefault((domain, env, normalize_rule(text)), [])
+            if report_id and report_id not in bucket:
+                bucket.append(report_id)
+
+    return index
+
+
+def _approved_duplicate_source(report_ids: list) -> str:
+    """Human-readable 'where has this already been approved' note."""
+    head = report_ids[0]
+    if len(report_ids) == 1:
+        return f"already approved on {head}"
+    return f"already approved on {head} and {len(report_ids) - 1} more"
+
+
+def _duplicates_for_ui(
+    rules_blob: Any,
+    rows: Optional[list] = None,
+) -> Dict[str, Any]:
+    """
+    Summarise the rules in this report that duplicate something else.
+
+    'internal' means the same rule is already approved on another report for
+    this domain+environment; 'external' means it matched a public filter list.
+    Both stay in the rule list and are flagged so a moderator can still
+    approve them; `dropped` marks the older rows where they were removed
+    before validation instead.
+
+    Counted off `rows` — the same live per-rule flags _rules_for_ui just
+    produced — rather than off the generation-time tallies in the blob.
+    Reading the blob would put a headline count next to rules that no longer
+    carry a chip, so the summary would claim duplicates the table does not
+    show (and would miss the ones approved since the run).
     """
     empty = {"total": 0, "internal": 0, "external": 0, "rules": [], "dropped": False}
 
@@ -223,6 +346,21 @@ def _duplicates_for_ui(rules_blob: Any) -> Dict[str, Any]:
         dropped = True
     if not isinstance(skipped, dict):
         return empty
+
+    # Those pre-change rows are the one case that still has to come from the
+    # blob: the duplicates were dropped before the list was stored, so there
+    # is no row to recount them from.
+    if not dropped and rows is not None:
+        flagged = [r for r in rows if r.get("duplicate")]
+        internal = [r for r in flagged if r["duplicate"].get("kind") == "internal"]
+        external = [r for r in flagged if r["duplicate"].get("kind") == "external"]
+        return {
+            "total": len(flagged),
+            "internal": len(internal),
+            "external": len(external),
+            "rules": [r["text"] for r in internal + external],
+            "dropped": False,
+        }
 
     internal_rules = [
         r for r in (skipped.get("internal_rules") or []) if isinstance(r, str)
@@ -275,25 +413,25 @@ def _rules_for_ui(
     rules_blob: Any,
     validation_blob: Any,
     decisions_blob: Any = None,
+    *,
+    approved_index: Optional[Dict[tuple, list]] = None,
+    report_id: Optional[str] = None,
+    scope: Optional[tuple] = None,
 ) -> list[Dict[str, Any]]:
     """
     Shape persisted rule output into the row format ReportDetail renders:
     {text, status, conf, rule_type, reason, decision}.
+
+    Pass `approved_index` (from _approved_rule_index), the report's own id and
+    its (domain, environment) `scope` to get live duplicate warnings. Without
+    them the rows carry only whatever external-list coverage generation
+    recorded — which is all callers that just count rows need.
     """
     decisions = _parse_json_blob(decisions_blob)
     if not isinstance(decisions, dict):
         decisions = {}
-    rules_data = _parse_json_blob(rules_blob)
     validation = _parse_json_blob(validation_blob)
-
-    # save_rule_output writes the full generation blob ({"rules": [...]}) once
-    # rules exist, but a bare list when the run produced none.
-    if isinstance(rules_data, dict):
-        candidates = rules_data.get("rules") or []
-    elif isinstance(rules_data, list):
-        candidates = rules_data
-    else:
-        candidates = []
+    candidates = _rule_candidates(rules_blob)
 
     outcomes = {}
     if isinstance(validation, dict):
@@ -313,13 +451,16 @@ def _rules_for_ui(
             text = entry.get("rule") or entry.get("raw") or ""
             rule_type = entry.get("rule_type") or "unknown"
             source = entry.get("source") or ""
-            # Set when this rule already exists somewhere. It is a warning
-            # attached to an ordinary rule, not a verdict: the row stays
-            # reviewable and approvable exactly like any other.
+            # Only the external-list half of the generation-time note is still
+            # trusted. Being in EasyList is a fact about a published list with
+            # no approval state to wait on, so it cannot go stale. The
+            # "internal" half is deliberately ignored and recomputed below:
+            # as written it flagged rules against merely-proposed twins and
+            # never changed once stored.
             dup = entry.get("duplicate")
-            if isinstance(dup, dict):
+            if isinstance(dup, dict) and str(dup.get("kind") or "") == "external":
                 duplicate = {
-                    "kind": str(dup.get("kind") or ""),
+                    "kind": "external",
                     "source": str(dup.get("source") or ""),
                 }
         else:
@@ -327,6 +468,26 @@ def _rules_for_ui(
 
         if not text:
             continue
+
+        # A rule already approved elsewhere for this same domain+environment.
+        # Computed here rather than read from the blob so that approving one
+        # copy starts warning on its twins immediately, and un-approving it
+        # stops the warning again. External coverage wins when both apply —
+        # the row shows one warning either way, and "already in EasyList" is
+        # the more final of the two.
+        if duplicate is None and approved_index is not None and scope:
+            elsewhere = [
+                rid
+                for rid in approved_index.get(
+                    (scope[0], scope[1], normalize_rule(text)), ()
+                )
+                if rid != report_id
+            ]
+            if elsewhere:
+                duplicate = {
+                    "kind": "internal",
+                    "source": _approved_duplicate_source(elsewhere),
+                }
 
         decision_entry = decisions.get(text) or {}
         decision = (
@@ -527,6 +688,11 @@ ORDER BY ci.created_at DESC
             )
             rows = cur.fetchall()
 
+    # Built once from the rows already in hand, not per ticket: every report
+    # needs to be matched against every other report's approved rules, and a
+    # second query per ticket would turn one page load into hundreds.
+    approved = _approved_rule_index(rows)
+
     tickets: list[Dict[str, Any]] = []
     for row in rows:
         ticket_context = _parse_ticket_context(row.get("ticket_context"))
@@ -535,8 +701,11 @@ ORDER BY ci.created_at DESC
             row.get("rule_blob"),
             row.get("validation_blob"),
             row.get("decisions_blob"),
+            approved_index=approved,
+            report_id=row.get("report_id"),
+            scope=_scope_key(row),
         )
-        duplicates = _duplicates_for_ui(row.get("rule_blob"))
+        duplicates = _duplicates_for_ui(row.get("rule_blob"), rules)
         ticket = {
             "id": row.get("report_id") or ticket_context.get("name") or f"db-{row.get('created_at')}",
             "name": ticket_context.get("name") or row.get("report_id"),
@@ -627,6 +796,8 @@ ORDER BY ro.updated_at DESC
             )
             rows = cur.fetchall()
 
+    approved = _approved_rule_index(rows)
+
     library: list[Dict[str, Any]] = []
     for row in rows:
         report_state, _ = _normalize_ticket_state(row.get("ticket_status") or "")
@@ -641,6 +812,9 @@ ORDER BY ro.updated_at DESC
             row.get("rule_blob"),
             row.get("validation_blob"),
             row.get("decisions_blob"),
+            approved_index=approved,
+            report_id=row.get("report_id"),
+            scope=_scope_key(row),
         ):
             library.append(
                 {

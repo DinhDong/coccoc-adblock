@@ -77,6 +77,20 @@ def _column_exists(cursor, table_name: str, column_name: str) -> bool:
     return cursor.fetchone() is not None
 
 
+def ensure_schema() -> None:
+    """
+    Apply pending schema migrations. Safe to call repeatedly.
+
+    Public because migrations used to be reachable only from the write paths
+    in this module. Reads in tickets.py open their own connection and SELECT
+    columns declared here, so against a database that had not been written to
+    since a column was added, every read failed with "Unknown column" until
+    something happened to save a row. Callers that serve reads (the Flask app,
+    the worker) run this at startup instead of relying on that.
+    """
+    _ensure_schema()
+
+
 def _ensure_schema() -> None:
     global _db_schema_initialized
     if _db_schema_initialized:

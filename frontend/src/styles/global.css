@@ -222,6 +222,15 @@ body { margin: 0; }
 /* ---------- table ---------- */
 .ad-tablewrap { overflow-x: auto; }
 table.ad-table { width: 100%; border-collapse: collapse; min-width: 860px; }
+/* Column widths come from the colgroup, not from the content, so the grid
+   never re-measures. Under the default `auto` layout the Status column swung
+   about 100px between "Awaiting review" (109px) and "Running · Sandbox
+   validation" (202px), and every other column shifted to absorb it each time
+   a run started or finished. At 860px the 28% Status share is 241px, which
+   still clears the 202px worst-case badge; below that the wrapper scrolls, as
+   it always has. Scoped to this table because .ad-table is shared with the
+   rule library, which has a different set of columns. */
+table.ad-table.ad-table-fixed { table-layout: fixed; min-width: 860px; }
 .ad-table th {
   text-align: left; font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase;
   color: var(--text-mute); font-weight: bold;

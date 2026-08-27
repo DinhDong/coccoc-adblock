@@ -2,6 +2,7 @@ from flask import Flask
 from flask_cors import CORS
 
 try:
+    from .database import ensure_schema
     from .tickets import (
         persist_ticket_to_db,
         create_ticket as create_ticket_record,
@@ -28,6 +29,7 @@ try:
         _normalize_ticket_state as normalize_ticket_state,
     )
 except ImportError:  # pragma: no cover
+    from app.database import ensure_schema
     from app.tickets import (
         persist_ticket_to_db,
         create_ticket as create_ticket_record,
@@ -83,6 +85,19 @@ ALREADY_QUEUED_STATUSES = {
 def create_app():
     app = Flask(__name__)
     CORS(app)
+
+    # Bring the schema up to date before serving anything. Read endpoints
+    # SELECT columns that database.py declares, but only its write paths used
+    # to run migrations — so a database nobody had written to since a column
+    # was added answered every read with "Unknown column". That is exactly
+    # what happened switching back to the shared server after run_started_at
+    # was added against a local one. Best-effort: a database that is simply
+    # unreachable should surface on the request that needs it, with its own
+    # error, rather than stopping the app from starting.
+    try:
+        ensure_schema()
+    except Exception as exc:  # pragma: no cover - startup diagnostics only
+        app.logger.warning("Schema check skipped at startup: %s", exc)
 
     @app.get("/health")
     def health():

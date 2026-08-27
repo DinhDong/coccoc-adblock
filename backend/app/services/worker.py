@@ -280,6 +280,18 @@ def run_worker(
     should_stop = StopFlag()
     should_stop.install()
 
+    # The claim query below reads columns declared in database.py, but only
+    # that module's write paths ran migrations — so against a database with a
+    # column still missing the worker would fail every claim without ever
+    # reaching the write that would have added it. Failures here are logged
+    # and tolerated: the retry loop already handles an unreachable database.
+    try:
+        from app.database import ensure_schema
+
+        ensure_schema()
+    except Exception as exc:
+        logger.warning("Schema check skipped at startup: %s", exc)
+
     logger.info("Worker started sleep=%ss (database source)", sleep_seconds)
 
     while not should_stop.value:

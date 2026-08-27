@@ -1,6 +1,5 @@
 import { ENVS } from "../constants.js";
 import { hostname, fmtDate, passedRules, approvedRules } from "../utils.js";
-import { Person } from "./Avatar.jsx";
 import StatusBadge from "./StatusBadge.jsx";
 
 function rulesSummary(t) {
@@ -19,22 +18,31 @@ function rulesSummary(t) {
 export default function ReportTable({ items, emptyText, onOpen }) {
   return (
     <div className="ad-tablewrap">
-      <table className="ad-table">
+      <table className="ad-table ad-table-fixed">
+        {/* Percentages rather than pixels so the table still fills its
+            container, while each column's share stays constant whatever the
+            cells contain. Status is the widest because it has to hold
+            "Running · Sandbox validation" without the row reflowing. */}
+        <colgroup>
+          <col style={{ width: "24%" }} />
+          <col style={{ width: "10%" }} />
+          <col style={{ width: "13%" }} />
+          <col style={{ width: "25%" }} />
+          <col style={{ width: "28%" }} />
+        </colgroup>
         <thead>
           <tr>
             <th>Report</th>
             <th>Env</th>
-            <th>Created by</th>
             <th>Created</th>
             <th>Rules</th>
             <th>Status</th>
-            <th>Reviewed by</th>
           </tr>
         </thead>
         <tbody>
           {items.length === 0 && (
             <tr>
-              <td colSpan={7}>
+              <td colSpan={5}>
                 <div className="ad-empty">{emptyText}</div>
               </td>
             </tr>
@@ -58,11 +66,9 @@ export default function ReportTable({ items, emptyText, onOpen }) {
                 <div className="ad-rowurl">{hostname(t.url)}</div>
               </td>
               <td><span className="ad-envtag">{ENVS.find((e) => e.k === t.env)?.label || t.env}</span></td>
-              <td><Person uk={t.createdBy} /></td>
               <td className="ad-mute">{fmtDate(t.created)}</td>
               <td>{rulesSummary(t)}</td>
               <td><StatusBadge t={t} /></td>
-              <td>{t.reviewedBy ? <Person uk={t.reviewedBy} /> : <span className="ad-mute">—</span>}</td>
             </tr>
           ))}
         </tbody>

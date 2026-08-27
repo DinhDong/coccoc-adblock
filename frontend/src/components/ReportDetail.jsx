@@ -1,8 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { X, ExternalLink, CheckCircle2, XCircle, AlertTriangle, Pencil, Trash2, Plus, Check, Combine, ZoomIn, ZoomOut, RotateCcw } from "lucide-react";
-import { STAGES, ENVS, CURRENT_USER, userOf } from "../constants.js";
+import { STAGES, ENVS } from "../constants.js";
 import { fmtDate, fmtDur } from "../utils.js";
-import { Person } from "./Avatar.jsx";
 import StatusBadge from "./StatusBadge.jsx";
 
 const STAGE_MS = { crawl: "crawlMs", generate: "generationMs", validate: "validationMs" };
@@ -692,14 +691,6 @@ export default function ReportDetail({
             <div className="ad-defval">{ENVS.find((e) => e.k === t.env)?.label || t.env}</div>
           </div>
           <div className="ad-def">
-            <label>Created by</label>
-            <div className="ad-defval"><Person uk={t.createdBy} /></div>
-          </div>
-          <div className="ad-def">
-            <label>Reviewed by</label>
-            <div className="ad-defval">{t.reviewedBy ? <Person uk={t.reviewedBy} /> : <span className="ad-mute">—</span>}</div>
-          </div>
-          <div className="ad-def">
             <label>Problem type</label>
             <div className="ad-defval">{(t.targets || []).length ? "Specific ads reported" : "General ad clutter"}</div>
           </div>
@@ -855,7 +846,7 @@ export default function ReportDetail({
         {t.state === "review" && (
           <>
             <span className="ad-tally">
-              {approved} approved · {rejected} rejected · {undecided} pending — reviewer: {CURRENT_USER.name}
+              {approved} approved · {rejected} rejected · {undecided} pending
             </span>
             {/* No "Edit report" here on purpose: once the pipeline has run,
                 changing the URL or targets would leave the rules below
@@ -874,7 +865,6 @@ export default function ReportDetail({
           <>
             <span className="ad-tally">
               Locked — {approved > 0 ? `${approved} rule${approved === 1 ? "" : "s"} deployed.` : "closed with no rules deployed."}
-              {t.reviewedBy ? ` Reviewed by ${userOf(t.reviewedBy)?.name}.` : ""}
             </span>
             <button className="ad-btn ad-btn-danger" onClick={onDelete}>Delete report</button>
           </>

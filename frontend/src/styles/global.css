@@ -149,6 +149,12 @@ body { margin: 0; }
 .ad-stat:focus-visible { outline: 2px solid var(--green-deep); outline-offset: 2px; }
 .ad-stat .ad-statnum { font-size: 22px; font-weight: bold; color: var(--text); }
 .ad-stat .ad-statlabel { font-size: 12px; color: var(--text-soft); margin-top: 2px; }
+/* Total is a summary, not a state, so it takes the brand colour rather than
+   one of the status colours — otherwise it reads as another filter chip. */
+.ad-stat.s-all { border-left-color: var(--green-deep); }
+/* The merged Queued + Running card keeps the running colour: what it really
+   answers is "is anything in flight right now". */
+.ad-stat.s-active { border-left-color: var(--green); }
 .ad-stat.s-draft { border-left-color: #A9B4AC; }
 .ad-stat.s-inprocess { border-left-color: var(--green); }
 .ad-stat.s-review { border-left-color: var(--blue); }
@@ -156,6 +162,12 @@ body { margin: 0; }
 .ad-stat.s-failed { border-left-color: #C0392B; }
 .ad-stat.s-done { border-left-color: var(--green-deep); }
 .ad-stat.on { box-shadow: 0 0 0 2px var(--green-tint); }
+/* Time under the date in the Created column. Tabular figures so the seconds
+   line up down the column and near-identical timestamps are easy to compare. */
+.ad-rowtime {
+  font-size: 11px; color: var(--text-mute); margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
 
 /* ---------- card + toolbar ---------- */
 .ad-card {
@@ -252,7 +264,6 @@ table.ad-table.ad-table-fixed { table-layout: fixed; min-width: 860px; }
   border: 1px solid var(--border); border-radius: 4px; padding: 2px 7px;
   white-space: nowrap;
 }
-.ad-person { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
 .ad-mute { color: var(--text-mute); }
 .ad-empty { padding: 44px 20px; text-align: center; color: var(--text-soft); font-size: 13.5px; }
 
@@ -361,9 +372,17 @@ table.ad-table.ad-table-fixed { table-layout: fixed; min-width: 860px; }
 /* bulk selection in the rule library */
 .ad-check { width: 15px; height: 15px; accent-color: var(--green-deep); cursor: pointer; }
 .ad-rowsel { background: var(--green-tint); }
-.ad-bulkbar { display: flex; align-items: center; gap: 10px; font-size: 12.5px; }
-.ad-bulkbar .ad-btn { padding: 5px 10px; font-size: 12.5px; }
-.ad-bulkbar svg { width: 13px; height: 13px; }
+.ad-bulkbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; font-size: 12.5px; }
+/* Labels stay on one line. These buttons share the toolbar row with the
+   search box, and being shrinkable let them be squeezed below their text
+   width: "Test in playground" and "Delete selected" wrapped to two lines
+   and stood visibly taller than "Merge" and "Clear" next to them. The bar
+   wraps as a whole instead. */
+.ad-bulkbar .ad-btn {
+  padding: 5px 10px; font-size: 12.5px;
+  white-space: nowrap; flex: 0 0 auto;
+}
+.ad-bulkbar svg { width: 13px; height: 13px; flex: none; }
 
 /* three-way choice list (duplicate link prompt) */
 .ad-choices { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
@@ -398,12 +417,6 @@ table.ad-table.ad-table-fixed { table-layout: fixed; min-width: 860px; }
 .ad-pagebtn:hover:not(:disabled) { color: var(--green-deep); background: var(--border-soft); }
 .ad-pagebtn:disabled { opacity: 0.35; cursor: default; }
 .ad-pagebtn:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
-
-/* avatar */
-.ad-av {
-  display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 50%; font-weight: bold; flex: none;
-}
 
 /* status badges */
 .ad-badge {
@@ -505,9 +518,17 @@ table.ad-table.ad-table-fixed { table-layout: fixed; min-width: 860px; }
 /* bulk selection in the rule library */
 .ad-check { width: 15px; height: 15px; accent-color: var(--green-deep); cursor: pointer; }
 .ad-rowsel { background: var(--green-tint); }
-.ad-bulkbar { display: flex; align-items: center; gap: 10px; font-size: 12.5px; }
-.ad-bulkbar .ad-btn { padding: 5px 10px; font-size: 12.5px; }
-.ad-bulkbar svg { width: 13px; height: 13px; }
+.ad-bulkbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; font-size: 12.5px; }
+/* Labels stay on one line. These buttons share the toolbar row with the
+   search box, and being shrinkable let them be squeezed below their text
+   width: "Test in playground" and "Delete selected" wrapped to two lines
+   and stood visibly taller than "Merge" and "Clear" next to them. The bar
+   wraps as a whole instead. */
+.ad-bulkbar .ad-btn {
+  padding: 5px 10px; font-size: 12.5px;
+  white-space: nowrap; flex: 0 0 auto;
+}
+.ad-bulkbar svg { width: 13px; height: 13px; flex: none; }
 
 /* three-way choice list (duplicate link prompt) */
 .ad-choices { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
@@ -542,12 +563,6 @@ table.ad-table.ad-table-fixed { table-layout: fixed; min-width: 860px; }
 .ad-pagebtn:hover:not(:disabled) { color: var(--green-deep); background: var(--border-soft); }
 .ad-pagebtn:disabled { opacity: 0.35; cursor: default; }
 .ad-pagebtn:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
-
-/* avatar */
-.ad-av {
-  display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 50%; font-weight: bold; flex: none;
-}
 
 /* status badges */
 .ad-badge {
@@ -821,7 +836,20 @@ tr.rulefail .ad-ruletext { color: var(--text-mute); }
 }
 
 /* rule playground */
-.ad-rulesbox { font-family: var(--mono); font-size: 12.5px; line-height: 1.6; }
+.ad-rulesbox {
+  font-family: var(--mono); font-size: 12.5px; line-height: 1.6;
+  /* Rules are long single lines (selectors, $option lists). Wrapping them
+     mid-token made a pasted list unreadable, so keep each rule on its own
+     line and scroll sideways for the long ones. */
+  min-height: 220px; white-space: pre; overflow-x: auto;
+}
+/* The playground is a working surface rather than a form: its page field and
+   rules box both get more room than the compact ones in the report modal. */
+.ad-pgform .ad-input { font-family: var(--mono); font-size: 13px; padding: 11px 12px; }
+.ad-pgform .ad-field { margin-bottom: 14px; }
+/* Copy / Run pair under a site's live rules. Wraps rather than overflowing
+   on a narrow window, since both labels carry a rule count. */
+.ad-liveactions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 
 /* Playground screenshots: tall enough to judge a page at a glance, and
    drag-resizable from the corner the way a textarea is. */

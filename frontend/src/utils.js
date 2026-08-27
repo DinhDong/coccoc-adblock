@@ -27,6 +27,52 @@ export const agoText = (d) => {
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 };
 
+// A scheme followed by "//" — the shape a web address actually has. Matching
+// only this (rather than any "word:") keeps "example.com:8080/path" readable
+// as a bare host with a port, which the looser pattern would mistake for a
+// scheme and refuse to complete.
+const HAS_AUTHORITY_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
+
+// Schemes that carry no host at all. These must be left exactly as typed so
+// isWebUrl below rejects them; completing "javascript:…" to
+// "https://javascript:…" would dress up something dangerous as an ordinary
+// link and hand it to the crawler.
+const OPAQUE_SCHEME = /^(?:javascript|data|vbscript|file|blob|mailto):/i;
+
+/**
+ * Fill in the scheme a moderator did not type.
+ *
+ * "vnexpress.net" and "vnexpress.net/the-thao" are how people actually write
+ * a site down, and rejecting them for a missing "https://" was busywork.
+ * Anything already carrying a scheme is returned untouched, so an explicit
+ * http:// is never silently upgraded.
+ */
+export const normalizeUrl = (raw) => {
+  const text = (raw || "").trim();
+  if (!text) return "";
+  if (text.startsWith("//")) return "https:" + text;          // protocol-relative
+  if (HAS_AUTHORITY_SCHEME.test(text) || OPAQUE_SCHEME.test(text)) return text;
+  return "https://" + text;
+};
+
+/**
+ * Whether a typed value is a usable web address once the scheme is filled in.
+ *
+ * Parsed rather than pattern-matched, so ports, paths, query strings and
+ * unicode hosts all behave. The host must contain a dot: a bare word is not
+ * something the crawler can resolve, and accepting it would turn a typo into
+ * a failed run several minutes later.
+ */
+export const isWebUrl = (raw) => {
+  try {
+    const u = new URL(normalizeUrl(raw));
+    if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+    return u.hostname.includes(".") && !u.hostname.endsWith(".");
+  } catch {
+    return false;
+  }
+};
+
 export const hostname = (url) => {
   try { return new URL(url).hostname.replace(/^www\./, ""); }
   catch { return url.replace(/^https?:\/\//, "").split("/")[0]; }
@@ -37,6 +83,20 @@ export const fmtDate = (iso) => {
   // Handle both date-only strings (YYYY-MM-DD) and full ISO datetimes.
   const d = iso.includes("T") ? new Date(iso) : new Date(iso + "T00:00:00");
   return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+};
+
+// Clock time for a timestamp, empty when the value carries no time at all.
+// Reports created in one batch land in the same second, so seconds are shown
+// rather than just hours and minutes — without them a run of reports reads as
+// having been created at the identical moment. Rows written before the API
+// returned a real timestamp hold a date-only string; those get "" instead of
+// a fabricated midnight.
+export const fmtTime = (iso) => {
+  if (!iso || !iso.includes("T")) return "";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime())
+    ? ""
+    : d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 };
 
 export const todayISO = () => new Date().toISOString().slice(0, 10);

@@ -151,7 +151,7 @@ CREATE TABLE IF NOT EXISTS rule_outputs (
             )
 
             # Per-rule approve/reject decisions, keyed by rule text:
-            # {"<rule>": {"decision": "approve"|"reject", "by": str, "at": iso}}
+            # {"<rule>": {"decision": "approve"|"reject", "at": iso}}
             if not _column_exists(cur, "rule_outputs", "decisions"):
                 cur.execute(
                     "ALTER TABLE rule_outputs ADD COLUMN decisions JSON AFTER validation_result"
@@ -255,7 +255,7 @@ def save_crawl_input(
 
     # Merge rather than replace. The pipeline calls this with its own
     # normalised context on every stage transition; replacing wiped the fields
-    # the UI owns (env, focus, targets, createdBy), so after one run every
+    # the UI owns (env, focus, targets), so after one run every
     # report displayed as Desktop with no targets no matter how it was created.
     if existing_id and ticket_context is not None:
         with get_connection() as conn:
@@ -652,7 +652,6 @@ def save_rule_decision(
     report_id: str,
     rule: str,
     decision: Optional[str],
-    decided_by: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Record (or clear, when decision is None) one reviewer decision.
@@ -696,7 +695,6 @@ def save_rule_decision(
             else:
                 decisions[rule] = {
                     "decision": decision,
-                    "by": decided_by,
                     "at": datetime.now(timezone.utc).isoformat(),
                 }
 

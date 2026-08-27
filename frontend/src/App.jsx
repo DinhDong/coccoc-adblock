@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react";
-import { STATE_ORDER, CURRENT_USER } from "./constants.js";
+import { CARD_ORDER, CARD_STATES } from "./constants.js";
 import { nowISO, todayISO } from "./utils.js";
 import Layout from "./components/Layout.jsx";
 import ReportDetail, { clearReportImageCache } from "./components/ReportDetail.jsx";
@@ -148,7 +148,6 @@ export default function App() {
             focus: ticket.focus,
             targets: ticket.targets,
             notes: ticket.notes,
-            createdBy: ticket.createdBy,
             created: ticket.created,
           },
           focus_region: ticket.focus,
@@ -360,7 +359,7 @@ export default function App() {
         const response = await fetch(`${backendUrl}/api/tickets/${encodeURIComponent(id)}/decisions`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ rule: ruleText, decision: next, decided_by: CURRENT_USER.k }),
+          body: JSON.stringify({ rule: ruleText, decision: next }),
         });
         const body = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(body.error || `decision save failed ${response.status}`);
@@ -410,7 +409,7 @@ export default function App() {
       return;
     }
 
-    setT(id, { state: "done", doneAt: todayISO(), reviewedAt: nowISO(), reviewedBy: CURRENT_USER.k });
+    setT(id, { state: "done", doneAt: todayISO() });
     setModal(null);
   };
 
@@ -573,7 +572,6 @@ ${error.message}`);
       id,
       state: "draft",
       created: todayISO(),
-      createdBy: CURRENT_USER.k,
       ...data,
     };
 
@@ -643,15 +641,30 @@ ${error.message}`);
     () =>
       tickets
         .filter((t) => !q || t.name.toLowerCase().includes(q) || t.url.toLowerCase().includes(q))
-        .filter((t) => statusFilter === "all" || t.state === statusFilter)
-        .sort((a, b) => new Date(b.created || 0) - new Date(a.created || 0)),
+        // A card can stand for several states, so match against its set
+        // rather than comparing to a single state name.
+        .filter((t) => statusFilter === "all" || (CARD_STATES[statusFilter] || []).includes(t.state))
+        // Newest first, falling back to the report id. A batch creates many
+        // reports inside the same second; without the tiebreak those compare
+        // equal and their order drifts between renders, so a report could
+        // appear to move down the list on its own.
+        .sort((a, b) =>
+          new Date(b.created || 0) - new Date(a.created || 0) ||
+          String(b.id).localeCompare(String(a.id))
+        ),
     [tickets, q, statusFilter]
   );
 
-  // Kept for the stat cards, which count every state regardless of the filter.
-  const byState = useMemo(() => {
-    const m = Object.fromEntries(STATE_ORDER.map((k) => [k, []]));
-    tickets.forEach((t) => m[t.state] && m[t.state].push(t));
+  // Counts behind the stat cards. Keyed by card, not by state, because one
+  // card can cover several states — and counted over every ticket, so the
+  // numbers stay put while a filter is applied.
+  const byCard = useMemo(() => {
+    const m = Object.fromEntries(CARD_ORDER.map((k) => [k, []]));
+    tickets.forEach((t) => {
+      CARD_ORDER.forEach((k) => {
+        if (k === "all" || CARD_STATES[k].includes(t.state)) m[k].push(t);
+      });
+    });
     return m;
   }, [tickets]);
 
@@ -691,7 +704,7 @@ ${error.message}`);
       {view === "reports" && (
         <Reports
           items={filtered}
-          byState={byState}
+          byCard={byCard}
           statusFilter={statusFilter}
           setStatusFilter={setStatusFilter}
           query={query}
@@ -726,6 +739,7 @@ ${error.message}`);
           loading={rulesLoading}
           onRefresh={loadRules}
           onOpenReport={(id) => setModal({ kind: "ticket", id })}
+          onSendToPlayground={(seed) => { setPlaygroundSeed(seed); setView("playground"); }}
         />
       )}
       {view === "playground" && (

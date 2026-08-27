@@ -300,8 +300,7 @@ coccoc-adblock/
         │   ├── ReportTable.jsx
         │   ├── NewReportModal.jsx      # doubles as the edit form
         │   ├── DuplicateTargetModal.jsx# "this link has been run before"
-        │   ├── StatusBadge.jsx
-        │   └── Avatar.jsx
+        │   └── StatusBadge.jsx
         │
         └── styles/global.css
 ```

@@ -1,6 +1,6 @@
 import {
   ClipboardList, FileCode2, FlaskConical, Radio, Settings,
-  Gauge, HelpCircle, Coins, LogIn,
+  Gauge, HelpCircle, Coins,
 } from "lucide-react";
 import { VIEW_TITLES } from "../constants.js";
 import { agoText } from "../utils.js";
@@ -41,9 +41,6 @@ export default function Layout({ view, setView, lastSync, children }) {
             CMS / <b>{VIEW_TITLES[view]}</b>
             {view !== "reports" && <span className="ad-crumbsub"> · Last updated {agoText(lastSync)}</span>}
           </div>
-          <button className="ad-btn ad-btn-ghost" disabled title="Not part of this demo">
-            <LogIn /> Log in
-          </button>
         </header>
         {children}
       </div>

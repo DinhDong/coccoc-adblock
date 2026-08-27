@@ -1,13 +1,13 @@
 import { useEffect, useState } from "react";
 import { Plus, Search, RefreshCw, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight } from "lucide-react";
-import { STATE_ORDER, STATES } from "../constants.js";
+import { CARD_ORDER, STATES } from "../constants.js";
 import ReportTable from "../components/ReportTable.jsx";
 import { usePersistentState, parsePageSize } from "../usePersistentState.js";
 
 const PAGE_SIZES = [5, 10, 15, 20];
 
 export default function Reports({
-  items, byState, statusFilter, setStatusFilter, query, setQuery,
+  items, byCard, statusFilter, setStatusFilter, query, setQuery,
   lastSync, refreshing, onRefresh, onOpen, onNew,
 }) {
   const [page, setPage] = useState(1);
@@ -40,14 +40,16 @@ export default function Reports({
 
       {/* stat cards */}
       <div className="ad-stats">
-        {STATE_ORDER.map((k) => (
+        {CARD_ORDER.map((k) => (
           <button
             key={k}
             className={"ad-stat s-" + k + (statusFilter === k ? " on" : "")}
-            onClick={() => setStatusFilter(statusFilter === k ? "all" : k)}
+            // Total is the cleared state, so clicking it just clears rather
+            // than toggling to a filter that would hide everything.
+            onClick={() => setStatusFilter(statusFilter === k || k === "all" ? "all" : k)}
             title={STATES[k].sub}
           >
-            <div className="ad-statnum">{(byState[k] || []).length}</div>
+            <div className="ad-statnum">{(byCard[k] || []).length}</div>
             <div className="ad-statlabel">{STATES[k].card}</div>
           </button>
         ))}
@@ -78,8 +80,7 @@ export default function Reports({
               onChange={(e) => setStatusFilter(e.target.value)}
               aria-label="Filter by status"
             >
-              <option value="all">All</option>
-              {STATE_ORDER.map((k) => (
+              {CARD_ORDER.map((k) => (
                 <option key={k} value={k}>{STATES[k].label}</option>
               ))}
             </select>

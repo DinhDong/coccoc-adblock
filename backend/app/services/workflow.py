@@ -713,6 +713,13 @@ def run_rule_validation(
             if combined_sandbox
             else False
         ),
+        # The per-rule verdicts, not just the totals. They were already built
+        # for validation_data above and written to the artefact and the
+        # database, but left out of this return — so run_playground_test, the
+        # one caller that reads them straight from here rather than from the
+        # stored blob, always saw an empty list and rendered a rule table with
+        # nothing but its headers.
+        "outcomes": validation_data["outcomes"],
     }
 
 

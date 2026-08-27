@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
-import { ENVS, CURRENT_USER } from "../constants.js";
+import { ENVS } from "../constants.js";
+import { normalizeUrl, isWebUrl } from "../utils.js";
 
 // Doubles as the edit form: pass `ticket` to prefill and switch to save mode.
 export default function NewReportModal({ nextName, ticket, onCreate, onSave, onClose }) {
@@ -26,13 +27,16 @@ export default function NewReportModal({ nextName, ticket, onCreate, onSave, onC
 
   const submit = () => {
     if (!name.trim()) { setErr("Give the report a name."); return; }
-    if (!/^https?:\/\/.+\..+/.test(url.trim())) {
-      setErr("Enter the reported page URL, e.g. https://example.vn/article");
+    if (!isWebUrl(url)) {
+      setErr("Enter the reported page, e.g. example.vn/article or https://example.vn/article");
       return;
     }
     const data = {
       name: name.trim(),
-      url: url.trim(),
+      // Stored with the scheme filled in, so everything downstream — the
+      // crawler, the domain the registry keys on, the duplicate check — sees
+      // one consistent form no matter how it was typed.
+      url: normalizeUrl(url),
       env,
       focus: focus.trim(),
       targets: targets.split(",").map((s) => s.trim()).filter(Boolean),
@@ -50,7 +54,7 @@ export default function NewReportModal({ nextName, ticket, onCreate, onSave, onC
           <div className="ad-msub">
             {editing
               ? "Changes apply to the next run — rules already generated are left as they are."
-              : `Will be created by ${CURRENT_USER.name} · runs crawl → rule generation → sandbox`}
+              : "Runs crawl → rule generation → sandbox"}
           </div>
         </div>
         <button className="ad-close" onClick={onClose} aria-label="Close"><X size={18} /></button>
@@ -74,9 +78,14 @@ export default function NewReportModal({ nextName, ticket, onCreate, onSave, onC
         <div className="ad-field">
           <label htmlFor="nr-url">Website link</label>
           <input
-            id="nr-url" className="ad-input" placeholder="https://…"
+            id="nr-url" className="ad-input" placeholder="example.vn/article"
             value={url} onChange={(e) => { setUrl(e.target.value); setErr(""); }}
           />
+          {/* Only shown when the scheme was filled in for them, so it reads as
+              confirmation of what will be crawled rather than noise. */}
+          {!err && normalizeUrl(url) !== url.trim() && isWebUrl(url) && (
+            <div className="ad-hint">Will crawl {normalizeUrl(url)}</div>
+          )}
           {err && <div className="ad-err">{err}</div>}
         </div>
 

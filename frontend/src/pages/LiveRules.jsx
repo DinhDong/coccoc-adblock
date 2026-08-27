@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { RefreshCw, ChevronRight, Copy, Check, Search } from "lucide-react";
+import { RefreshCw, ChevronRight, Copy, Check, Search, Play } from "lucide-react";
 import { ENVS } from "../constants.js";
 import { fmtDate } from "../utils.js";
 
@@ -12,7 +12,7 @@ const envLabel = (key) => ENVS.find((e) => e.k === key)?.label || key;
 // A rule counts as live once a moderator approved it AND the report it came
 // from was closed. Approved rules on a still-open report are shown separately
 // rather than hidden, so nothing a moderator approved silently disappears.
-export default function LiveRules({ rules, loading, onRefresh, onOpenReport }) {
+export default function LiveRules({ rules, loading, onRefresh, onOpenReport, onSendToPlayground }) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(() => new Set());
   const [copied, setCopied] = useState("");
@@ -230,14 +230,34 @@ export default function LiveRules({ rules, loading, onRefresh, onOpenReport }) {
                               ))}
                             </tbody>
                           </table>
-                          <button
-                            className="ad-btn ad-btn-ghost"
-                            style={{ marginTop: 10 }}
-                            onClick={() => copy(copyLabel, visible.map((r) => r.text).join("\n"))}
-                            disabled={visible.length === 0}
-                          >
-                            {copied === copyLabel ? <Check /> : <Copy />} Copy {copyLabel} rules
-                          </button>
+                          <div className="ad-liveactions">
+                            <button
+                              className="ad-btn ad-btn-ghost"
+                              onClick={() => copy(copyLabel, visible.map((r) => r.text).join("\n"))}
+                              disabled={visible.length === 0}
+                            >
+                              {copied === copyLabel ? <Check /> : <Copy />} Copy {copyLabel} rules
+                            </button>
+                            {/* Replays what is actually deployed, against the live page. The only
+                                way to catch a rule that passed at review time and has since stopped
+                                matching because the site changed underneath it. */}
+                            <button
+                              className="ad-btn ad-btn-primary"
+                              onClick={() =>
+                                onSendToPlayground?.({
+                                  url: visible[0]?.url,
+                                  rules: visible.map((r) => r.text),
+                                  // With the "All" tab open these rows can span platforms and the
+                                  // sandbox loads one. Use the chosen tab, or the first row's own.
+                                  environment: activeEnv === "all" ? envOf(visible[0]) : activeEnv,
+                                  autoRun: true,
+                                })
+                              }
+                              disabled={visible.length === 0 || !visible[0]?.url}
+                            >
+                              <Play /> Run {visible.length} rule{visible.length === 1 ? "" : "s"}
+                            </button>
+                          </div>
                         </>
                       )}
                     </div>

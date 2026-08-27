@@ -34,6 +34,41 @@ export function usePersistentState(key, fallback, parse = (v) => v) {
   return [value, set];
 }
 
+/**
+ * The same idea for values that are not plain text.
+ *
+ * usePersistentState writes with String(next), which turns an object into
+ * "[object Object]". This one round-trips through JSON instead, so a whole
+ * result payload survives a view switch. Kept separate rather than folded into
+ * the function above, because JSON.stringify would wrap existing string
+ * callers in quotes and change what they read back.
+ *
+ * Passing null clears the key rather than storing "null".
+ */
+export function usePersistentJson(key, fallback) {
+  const [value, setValue] = useState(() => {
+    try {
+      const stored = window.localStorage.getItem(key);
+      return stored === null ? fallback : JSON.parse(stored);
+    } catch {
+      // Unparseable leftovers from an older shape must not break the page.
+      return fallback;
+    }
+  });
+
+  const set = (next) => {
+    setValue(next);
+    try {
+      if (next === null || next === undefined) window.localStorage.removeItem(key);
+      else window.localStorage.setItem(key, JSON.stringify(next));
+    } catch {
+      /* storage unavailable — keep it in memory only */
+    }
+  };
+
+  return [value, set];
+}
+
 /** Page sizes are stored as text; reject anything that is not a positive number. */
 export const parsePageSize = (raw) => {
   const n = Number(raw);

@@ -396,7 +396,6 @@ def create_app():
         payload = request.get_json(force=True, silent=True) or {}
         rule = payload.get("rule")
         decision = payload.get("decision")
-        decided_by = payload.get("decided_by")
 
         if not rule:
             return {"error": "rule is required"}, 400
@@ -411,7 +410,6 @@ def create_app():
                 report_id=report_id,
                 rule=rule,
                 decision=decision,
-                decided_by=decided_by,
             )
         except RuntimeError as exc:
             return {"error": str(exc)}, 404

@@ -200,14 +200,19 @@ export default function RuleLibrary({
   const selectedDomains = new Set(selectedRules.map((r) => r.domain));
   const canTest = selectedRules.length > 0 && selectedDomains.size === 1;
 
-  // Hands the selection to the playground, which runs it on arrival. One
-  // sandbox screen instead of two slightly different ones.
+  // Hands the selection to the playground, which fills its form with it. One
+  // sandbox screen instead of two slightly different ones. It stops short of
+  // starting the run so the environment and the rule list can be checked
+  // first — a pass takes 30-90 seconds to undo.
   const testSelected = () => {
     if (!canTest) return;
     onSendToPlayground({
       url: selectedRules[0].url,
       rules: selectedRules.map((r) => r.text),
-      environment: "desktop",
+      // The rules' own platform, not a hardcoded desktop. Testing an
+      // Android-only selector in a desktop viewport reports a failure that
+      // says nothing about the rule.
+      environment: selectedRules[0].env || "desktop",
     });
   };
 
@@ -276,10 +281,14 @@ export default function RuleLibrary({
                       : "Run these rules through the sandbox"
                   }
                 >
-                  <FlaskConical /> Test in playground
+                  <FlaskConical /> Test
                 </button>
-                <button className="ad-btn ad-btn-danger" onClick={deleteSelected}>
-                  <Trash2 /> Delete selected
+                <button
+                  className="ad-btn ad-btn-danger"
+                  onClick={deleteSelected}
+                  title={`Delete ${selected.size} selected rule${selected.size === 1 ? "" : "s"}`}
+                >
+                  <Trash2 /> Delete
                 </button>
                 <button className="ad-btn ad-btn-ghost" onClick={() => setSelected(new Set())}>
                   Clear

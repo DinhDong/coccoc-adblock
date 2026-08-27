@@ -80,13 +80,6 @@ so keep exactly one MySQL block uncommented.
 The schema creates and migrates itself on first request, so a fresh database
 needs no manual SQL.
 
-> **Currently pinned to the local database.** The shared team server is
-> unreachable, so `docker-compose.yml` sets `MYSQL_HOST=db` (plus user,
-> password and database) directly in the `environment:` block of `backend`,
-> `api` and `worker`. Compose's `environment:` overrides `env_file:`, so those
-> five lines win over whatever `.env.local` says. To go back to the shared
-> server, delete that block from all three services.
-
 ### Running the worker service
 
 Compose starts it automatically. It takes **no arguments** — the database is its

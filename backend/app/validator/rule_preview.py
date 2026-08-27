@@ -405,11 +405,17 @@ def _screenshot(page, timeout_ms: int) -> bytes:
     try:
         return page.screenshot(full_page=True, timeout=timeout_ms)
     except Exception:
+        # Same device-pixel ceiling the crawler hits: a tall page under a
+        # mobile profile's device_scale_factor exceeds 32767px. Drop to CSS
+        # scale before giving up on capturing the whole page.
         try:
-            return page.screenshot(full_page=False, timeout=timeout_ms)
-        except Exception as exc:
-            logger.warning("Screenshot failed: %s", exc)
-            return b""
+            return page.screenshot(full_page=True, scale="css", timeout=timeout_ms)
+        except Exception:
+            try:
+                return page.screenshot(full_page=False, timeout=timeout_ms)
+            except Exception as exc:
+                logger.warning("Screenshot failed: %s", exc)
+                return b""
 
 
 def _load_page(page, url: str, timeout_error_cls: Any) -> None:

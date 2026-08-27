@@ -342,7 +342,9 @@ def _append_ticket_context(
     expected = ticket_context.get("expected", "")
     steps = ticket_context.get("steps", [])
     target_to_block = ticket_context.get("target_to_block", [])
+    target_to_block_explicit = bool(ticket_context.get("target_to_block_explicit"))
     target_to_preserve = ticket_context.get("target_to_preserve", [])
+    notes = ticket_context.get("notes", "")
 
     lines.append("\nUser ticket context:")
     lines.append(f"  Problem type: {problem_type}")
@@ -374,6 +376,12 @@ def _append_ticket_context(
     if expected:
         lines.append(f"  Expected behavior: {_truncate(str(expected), 500)}")
 
+    # Free text the reporter wrote. It was stored and carried through the
+    # pipeline but never reached the model, so the box labelled "Notes for the
+    # pipeline" influenced nothing at all.
+    if notes:
+        lines.append(f"  Reporter notes: {_truncate(str(notes), 500)}")
+
     if isinstance(steps, list) and steps:
         lines.append("  Reproduction steps:")
         for step in steps[:8]:
@@ -385,9 +393,21 @@ def _append_ticket_context(
             lines.append(f"    - {_truncate(str(item), 160)}")
 
     if isinstance(target_to_block, list) and target_to_block:
-        lines.append("  Should block:")
+        # An explicit list came from the reporter, who was asked to name the
+        # ads to block and nothing else — so say so, or the model treats it as
+        # one more hint and blocks whatever else it finds.
+        lines.append(
+            "  Block only these (named by the reporter):"
+            if target_to_block_explicit
+            else "  Should block:"
+        )
         for item in target_to_block[:12]:
             lines.append(f"    - {_truncate(str(item), 160)}")
+        if target_to_block_explicit:
+            lines.append(
+                "    Do not generate rules for other ads on the page, even if "
+                "the signals below show them."
+            )
 
 
 def _append_region_context(

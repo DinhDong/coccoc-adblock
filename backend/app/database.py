@@ -77,6 +77,20 @@ def _column_exists(cursor, table_name: str, column_name: str) -> bool:
     return cursor.fetchone() is not None
 
 
+def ensure_schema() -> None:
+    """
+    Apply pending schema migrations. Safe to call repeatedly.
+
+    Public because migrations used to be reachable only from the write paths
+    in this module. Reads in tickets.py open their own connection and SELECT
+    columns declared here, so against a database that had not been written to
+    since a column was added, every read failed with "Unknown column" until
+    something happened to save a row. Callers that serve reads (the Flask app,
+    the worker) run this at startup instead of relying on that.
+    """
+    _ensure_schema()
+
+
 def _ensure_schema() -> None:
     global _db_schema_initialized
     if _db_schema_initialized:
@@ -147,6 +161,16 @@ CREATE TABLE IF NOT EXISTS rule_outputs (
             if not _column_exists(cur, "rule_outputs", "images"):
                 cur.execute(
                     "ALTER TABLE rule_outputs ADD COLUMN images JSON AFTER after_screenshot"
+                )
+
+            # When the worker claimed this report. updated_at cannot stand in
+            # for it: every stage transition touches updated_at, so it tracks
+            # the last sign of progress, not the start. Without a real start
+            # the UI could only count elapsed time for a run it queued itself,
+            # and a page reload mid-run reset the clock to zero.
+            if not _column_exists(cur, "crawl_inputs", "run_started_at"):
+                cur.execute(
+                    "ALTER TABLE crawl_inputs ADD COLUMN run_started_at TIMESTAMP NULL"
                 )
 
             if not _column_exists(cur, "crawl_inputs", "report_id"):

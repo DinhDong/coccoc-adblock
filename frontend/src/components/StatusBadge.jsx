@@ -32,5 +32,6 @@ export default function StatusBadge({ t }) {
     );
   }
   if (t.state === "review") return <span className="ad-badge b-review">Awaiting review</span>;
+  if (t.state === "new") return <span className="ad-badge b-review">In queue</span>;
   return <span className="ad-badge b-done">Done</span>;
 }

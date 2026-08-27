@@ -1,12 +1,21 @@
 """
-Tracks which ABP rules have already been generated for a domain so the
-pipeline doesn't ask the LLM to re-suggest (and re-validate) the same rule
-across multiple crawls of the same site — e.g. vnexpress-desktop,
-vnexpress-android and vnexpress-ios all surface the same `||admicro.vn^`
-network rule, but only need to go through sandbox validation once.
+Tracks which ABP rules have already been generated for a domain *on a given
+environment*, so the pipeline doesn't ask the LLM to re-suggest (and
+re-validate) a rule it has already cleared for that platform.
 
-Persisted as a flat JSON file keyed by domain, since there's no database
-yet — swap this for a `rules` table lookup once database/schema.sql lands.
+Scoping is per (domain, environment), not per domain. Keying by domain alone
+meant whichever platform crawled a site first claimed every rule for it: an
+iOS run of baomoi.com registered all 13 of its rules, and the Android run
+minutes later found all 9 of the rules it generated already present, skipped
+every one, and finished with nothing to review. Mobile-only selectors were
+reachable by exactly one platform — whichever happened to run first. Each
+environment now keeps its own set, so the same site can be worked on desktop,
+Android and iOS independently.
+
+Persisted as a JSON file of {domain: {environment: [rules]}}, since there's no
+database yet — swap this for a `rules` table lookup once database/schema.sql
+lands. Entries written before this change were flat {domain: [rules]} lists;
+they are migrated on read (see _load_registry).
 """
 
 import json
@@ -23,6 +32,18 @@ logger = logging.getLogger(__name__)
 REGISTRY_PATH = Path("data/rule_outputs/rule_registry.json")
 
 _COSMETIC_SPLIT_RE = re.compile(r"^([^#]*)(##|#@#)(.+)$")
+
+# Mirrors the environments the crawler profiles and worker.resolve_environment
+# accept. Anything unrecognised falls back to desktop rather than creating a
+# junk bucket that would silently dedupe against nothing.
+KNOWN_ENVIRONMENTS = ("desktop", "android", "ios")
+DEFAULT_ENVIRONMENT = "desktop"
+
+
+def normalize_environment(value: Optional[str]) -> str:
+    """Coerce an environment label to one of KNOWN_ENVIRONMENTS."""
+    text = str(value or "").strip().lower()
+    return text if text in KNOWN_ENVIRONMENTS else DEFAULT_ENVIRONMENT
 
 
 def get_domain(url: str) -> str:
@@ -174,18 +195,45 @@ def merge_rule_texts(first: str, second: str) -> Tuple[Optional[str], Optional[s
 _REGISTRY_LOCK = threading.RLock()
 
 
-def _load_registry() -> Dict[str, List[str]]:
+def _load_registry() -> Dict[str, Dict[str, List[str]]]:
+    """
+    Read the registry, upgrading any pre-environment entries as it goes.
+
+    Legacy entries are flat {domain: [rules]} lists with no environment
+    recorded. They are filed under desktop: every one of them predates the fix
+    to worker.resolve_environment, which read only "platform" while the UI
+    wrote "env" — so those runs all executed as desktop no matter which
+    platform the ticket asked for. Desktop is where they actually came from.
+    """
     if not REGISTRY_PATH.exists():
         return {}
     try:
         with open(REGISTRY_PATH, encoding="utf-8") as f:
-            return json.load(f)
+            raw = json.load(f)
     except (json.JSONDecodeError, OSError):
         logger.warning("Rule registry unreadable, starting fresh: %s", REGISTRY_PATH)
         return {}
 
+    if not isinstance(raw, dict):
+        return {}
 
-def _save_registry(registry: Dict[str, List[str]]) -> None:
+    registry: Dict[str, Dict[str, List[str]]] = {}
+    for domain, entry in raw.items():
+        if isinstance(entry, list):
+            registry[domain] = {DEFAULT_ENVIRONMENT: [r for r in entry if isinstance(r, str)]}
+        elif isinstance(entry, dict):
+            buckets: Dict[str, List[str]] = {}
+            for env, rules in entry.items():
+                if not isinstance(rules, list):
+                    continue
+                key = normalize_environment(env)
+                buckets.setdefault(key, [])
+                buckets[key].extend(r for r in rules if isinstance(r, str))
+            registry[domain] = {k: sorted(set(v)) for k, v in buckets.items() if v}
+    return registry
+
+
+def _save_registry(registry: Dict[str, Dict[str, List[str]]]) -> None:
     REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
     # Write to a sibling file and replace, so a crash mid-write cannot leave
     # truncated JSON behind — the loader would silently treat that as empty
@@ -196,45 +244,85 @@ def _save_registry(registry: Dict[str, List[str]]) -> None:
     os.replace(tmp_path, REGISTRY_PATH)
 
 
-def get_existing_rules(domain: str) -> Set[str]:
-    """Normalized rule strings already on record for this domain."""
-    return set(_load_registry().get(domain, []))
+def get_existing_rules(domain: str, environment: Optional[str] = None) -> Set[str]:
+    """
+    Normalized rule strings already on record for this domain.
+
+    With an environment, only that platform's rules — this is what dedup runs
+    against, so an Android crawl is not blocked by what an iOS crawl already
+    registered. Without one, the union across every platform, which is what
+    callers auditing "does this site have any rules at all" want.
+    """
+    buckets = _load_registry().get(domain, {})
+    if environment is None:
+        return {rule for rules in buckets.values() for rule in rules}
+    return set(buckets.get(normalize_environment(environment), []))
 
 
-def register_rules(domain: str, normalized_rules: List[str]) -> None:
-    """Add newly-generated normalized rules to the domain's registry entry."""
+def register_rules(
+    domain: str,
+    normalized_rules: List[str],
+    environment: Optional[str] = None,
+) -> None:
+    """Add newly-generated normalized rules to this domain+environment entry."""
     if not normalized_rules:
         return
+    env = normalize_environment(environment)
     with _REGISTRY_LOCK:
         registry = _load_registry()
-        existing = set(registry.get(domain, []))
+        buckets = registry.setdefault(domain, {})
+        existing = set(buckets.get(env, []))
         existing.update(normalized_rules)
-        registry[domain] = sorted(existing)
+        buckets[env] = sorted(existing)
         _save_registry(registry)
 
 
-def unregister_rule(domain: str, rule_text: str) -> bool:
+def unregister_rule(
+    domain: str,
+    rule_text: str,
+    environment: Optional[str] = None,
+) -> bool:
     """
     Drop a single rule from a domain's registry entry.
 
     Called when a moderator deletes or rewrites a rule: without this the
     registry would keep treating it as already-known and dedupe it out of
     every future run, so the rule could never be proposed again.
+
+    Environment defaults to every platform. A moderator rejecting a rule is
+    judging the rule, not the platform it happened to be generated on, so
+    leaving copies registered under the other environments would keep it
+    deduped out of their runs and it could never be proposed again there.
     """
+    key = normalize_rule(rule_text)
     with _REGISTRY_LOCK:
         registry = _load_registry()
-        existing = registry.get(domain)
-        if not existing:
+        buckets = registry.get(domain)
+        if not buckets:
             return False
 
-        key = normalize_rule(rule_text)
-        remaining = [r for r in existing if r != key]
-        if len(remaining) == len(existing):
+        targets = (
+            list(buckets.keys())
+            if environment is None
+            else [normalize_environment(environment)]
+        )
+
+        removed = False
+        for env in targets:
+            rules = buckets.get(env)
+            if not rules or key not in rules:
+                continue
+            remaining = [r for r in rules if r != key]
+            if remaining:
+                buckets[env] = remaining
+            else:
+                buckets.pop(env, None)
+            removed = True
+
+        if not removed:
             return False
 
-        if remaining:
-            registry[domain] = remaining
-        else:
+        if not buckets:
             registry.pop(domain, None)
 
         _save_registry(registry)
@@ -256,13 +344,21 @@ def unregister_rule_anywhere(rule_text: str) -> List[str]:
 
     with _REGISTRY_LOCK:
         registry = _load_registry()
-        for domain, rules in list(registry.items()):
-            if key not in rules:
+        for domain, buckets in list(registry.items()):
+            hit = False
+            for env, rules in list(buckets.items()):
+                if key not in rules:
+                    continue
+                remaining = [r for r in rules if r != key]
+                if remaining:
+                    buckets[env] = remaining
+                else:
+                    buckets.pop(env, None)
+                hit = True
+
+            if not hit:
                 continue
-            remaining = [r for r in rules if r != key]
-            if remaining:
-                registry[domain] = remaining
-            else:
+            if not buckets:
                 registry.pop(domain, None)
             touched.append(domain)
 
@@ -274,42 +370,75 @@ def unregister_rule_anywhere(rule_text: str) -> List[str]:
     return touched
 
 
-def clear_rules(domain: str) -> int:
-    """Remove all known rules for a domain. Returns the count of removed rules."""
+def clear_rules(domain: str, environment: Optional[str] = None) -> int:
+    """
+    Remove known rules for a domain. Returns the count of removed rules.
+
+    Scoped to one environment when given, so a "regenerate from scratch" on
+    Android does not throw away the desktop rules for the same site.
+    """
     with _REGISTRY_LOCK:
         registry = _load_registry()
-        removed = len(registry.pop(domain, []))
+        if environment is None:
+            removed = sum(len(v) for v in registry.pop(domain, {}).values())
+        else:
+            env = normalize_environment(environment)
+            buckets = registry.get(domain, {})
+            removed = len(buckets.pop(env, []))
+            if not buckets:
+                registry.pop(domain, None)
         if removed:
             _save_registry(registry)
     if removed:
-        logger.info("Cleared %d rule(s) from registry for %s", removed, domain)
+        logger.info(
+            "Cleared %d rule(s) from registry for %s (%s)",
+            removed,
+            domain,
+            environment or "all environments",
+        )
     return removed
 
 
-def filter_new_rules(url: str, rules: List) -> Tuple[List, List]:
+def filter_new_rules(
+    url: str,
+    rules: List,
+    environment: Optional[str] = None,
+) -> Tuple[List, List, List]:
     """
-    Split candidate ParsedRule objects into (new, duplicate) based on what's
-    already registered for this URL's domain, and on duplicates within the
-    same LLM response.
+    Classify candidate ParsedRule objects into (new, known, repeated).
 
-    Does not mutate the registry — call register_rules() with the returned
-    new-rule set once the caller decides to keep them.
+    - new:      not seen before for this domain on this environment
+    - known:    already registered for this domain+environment
+    - repeated: the model proposed the same rule twice in one response
+
+    The two kinds are returned separately because they are not the same
+    problem. A rule already in the registry is a real candidate a moderator
+    may still want to approve, so the caller keeps it and flags it. The same
+    rule appearing twice in one batch is just noise and is dropped — showing a
+    moderator the identical rule twice is never useful.
+
+    Does not mutate the registry — call register_rules() once the caller
+    decides what to keep.
     """
     domain = get_domain(url)
-    existing = get_existing_rules(domain)
+    existing = get_existing_rules(domain, environment)
 
-    new_rules, duplicate_rules = [], []
+    new_rules, known_rules, repeated_rules = [], [], []
     seen_in_batch: Set[str] = set()
 
     for rule in rules:
         key = normalize_rule(rule.rule)
-        if key in existing or key in seen_in_batch:
-            duplicate_rules.append(rule)
+        if key in seen_in_batch:
+            repeated_rules.append(rule)
+            continue
+        seen_in_batch.add(key)
+
+        if key in existing:
+            known_rules.append(rule)
         else:
             new_rules.append(rule)
-            seen_in_batch.add(key)
 
-    return new_rules, duplicate_rules
+    return new_rules, known_rules, repeated_rules
 
 
 # ------------------------------------------------------------------
@@ -323,12 +452,19 @@ if __name__ == "__main__":
     registry = _load_registry()
     if len(sys.argv) > 1:
         domain = sys.argv[1].lower()
-        rules = registry.get(domain, [])
-        print(f"{domain}: {len(rules)} known rule(s)")
-        for r in rules:
-            print(f"  {r}")
+        buckets = registry.get(domain, {})
+        total = sum(len(r) for r in buckets.values())
+        print(f"{domain}: {total} known rule(s)")
+        for env in sorted(buckets):
+            print(f"  [{env}] {len(buckets[env])} rule(s)")
+            for r in buckets[env]:
+                print(f"    {r}")
     else:
         if not registry:
             print("Rule registry is empty.")
-        for domain, rules in sorted(registry.items()):
-            print(f"{domain}: {len(rules)} known rule(s)")
+        for domain, buckets in sorted(registry.items()):
+            per_env = ", ".join(
+                f"{env}={len(buckets[env])}" for env in sorted(buckets)
+            )
+            total = sum(len(r) for r in buckets.values())
+            print(f"{domain}: {total} known rule(s) ({per_env})")

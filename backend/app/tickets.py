@@ -2,6 +2,7 @@ import json
 import os
 import re
 import uuid
+from datetime import datetime
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
@@ -53,6 +54,84 @@ def _parse_ticket_context(ticket_context: Any) -> Dict[str, Any]:
         return json.loads(ticket_context)
     except Exception:
         return {}
+
+
+_REPORT_ID_RE = re.compile(r"^RPT-(\d{4})-0(\d{3})$")
+
+
+def _report_id_exists(report_id: str) -> bool:
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM crawl_inputs WHERE report_id=%s LIMIT 1",
+                (report_id,),
+            )
+            return cur.fetchone() is not None
+
+
+def allocate_report_id(year: Optional[int] = None) -> str:
+    """
+    Pick the next unused RPT-<year>-0NNN id, deciding it here rather than in
+    the browser.
+
+    The frontend used to mint these from a counter seeded at 148 that reset on
+    every page load. save_crawl_input updates in place when report_id is taken,
+    so after a reload the next "new" report silently took over an existing one,
+    inheriting its rules, decisions and created_at — RPT-2026-0149 was created
+    on 20 Aug and re-adopted four days later by someone who thought they were
+    filing a fresh report.
+
+    Ids that do not fit the counter shape (older timestamp-style ones) are
+    ignored when picking the maximum but still block reuse via the existence
+    check below.
+    """
+    year = year or datetime.now().year
+    prefix = f"RPT-{year}-0"
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT report_id FROM crawl_inputs WHERE report_id LIKE %s",
+                (prefix + "%",),
+            )
+            rows = cur.fetchall()
+
+    highest = 147  # so the first allocated id stays RPT-<year>-0148
+    for row in rows:
+        match = _REPORT_ID_RE.match(str(row.get("report_id") or ""))
+        if match and int(match.group(1)) == year:
+            highest = max(highest, int(match.group(2)))
+
+    candidate = highest + 1
+    while _report_id_exists(f"RPT-{year}-0{candidate:03d}"):
+        candidate += 1
+    return f"RPT-{year}-0{candidate:03d}"
+
+
+def create_ticket(ticket: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Create a ticket, guaranteeing it does not overwrite an existing one.
+
+    Returns {"id", "record_id", "renamed"}. A requested id that is already
+    taken is replaced rather than merged into: creating a report must never
+    mutate somebody else's, and `renamed` lets the UI say so.
+    """
+    requested = str(ticket.get("id") or ticket.get("name") or "").strip()
+    renamed = False
+
+    if not requested or _report_id_exists(requested):
+        renamed = bool(requested)
+        requested = allocate_report_id()
+
+    payload = dict(ticket)
+    payload["id"] = requested
+    # The name is what the UI shows and what older code fell back to for the
+    # id, so keep the two in step when the id had to change.
+    if renamed or not payload.get("name"):
+        payload["name"] = requested
+
+    record_id = persist_ticket_to_db(payload)
+    return {"id": requested, "record_id": record_id, "renamed": renamed}
 
 
 def persist_ticket_to_db(ticket: Dict[str, Any]) -> int:
@@ -121,20 +200,27 @@ def _derive_confidence(outcome: Dict[str, Any]) -> float:
 
 def _duplicates_for_ui(rules_blob: Any) -> Dict[str, Any]:
     """
-    Summarise the rules the generator produced but discarded as already known.
+    Summarise the rules the generator produced that already existed elsewhere.
 
-    'internal' rules were already in this domain's rule_registry entry;
-    'external' ones matched a public filter list. Both are dropped before
-    validation, so without this the UI silently shows fewer rules than the
-    model actually proposed.
+    'internal' rules were already in this domain+environment's rule_registry
+    entry; 'external' ones matched a public filter list. They are kept in the
+    rule list and flagged so a moderator can still approve them; `dropped`
+    marks the older rows where they were removed before validation instead.
     """
-    empty = {"total": 0, "internal": 0, "external": 0, "rules": []}
+    empty = {"total": 0, "internal": 0, "external": 0, "rules": [], "dropped": False}
 
     rules_data = _parse_json_blob(rules_blob)
     if not isinstance(rules_data, dict):
         return empty
 
-    skipped = rules_data.get("duplicates_skipped")
+    # Current runs keep duplicates in the rule list and flag them. Rows from
+    # before that change stored them under "duplicates_skipped" and really did
+    # drop them, so `dropped` tells the UI which of the two it is looking at.
+    skipped = rules_data.get("duplicates_flagged")
+    dropped = False
+    if not isinstance(skipped, dict):
+        skipped = rules_data.get("duplicates_skipped")
+        dropped = True
     if not isinstance(skipped, dict):
         return empty
 
@@ -154,7 +240,28 @@ def _duplicates_for_ui(rules_blob: Any) -> Dict[str, Any]:
         "internal": _optional_count(skipped.get("internal")),
         "external": _optional_count(skipped.get("external")),
         "rules": internal_rules + external_rules,
+        "dropped": dropped,
     }
+
+
+def _generated_count(rules_blob: Any, kept: int, duplicates: Dict[str, Any]) -> int:
+    """
+    How many rules the generator proposed for this report.
+
+    Prefers generated_rule_count from the stored record. Older rows and rows
+    the worker flattened before that column was preserved do not carry it, so
+    fall back to reconstructing it. Duplicates only add to the total when they
+    were dropped from the list; on current runs they are already counted in
+    `kept`, and adding them again would overstate what the model produced.
+    """
+    rules_data = _parse_json_blob(rules_blob)
+    if isinstance(rules_data, dict):
+        recorded = _optional_count(rules_data.get("generated_rule_count"))
+        if recorded:
+            return recorded
+    if duplicates.get("dropped"):
+        return kept + _optional_count(duplicates.get("total"))
+    return kept
 
 
 def _optional_count(value: Any) -> int:
@@ -199,12 +306,22 @@ def _rules_for_ui(
     rows: list[Dict[str, Any]] = []
     for entry in candidates:
         source = ""
+        duplicate = None
         if isinstance(entry, str):
             text, rule_type = entry, "unknown"
         elif isinstance(entry, dict):
             text = entry.get("rule") or entry.get("raw") or ""
             rule_type = entry.get("rule_type") or "unknown"
             source = entry.get("source") or ""
+            # Set when this rule already exists somewhere. It is a warning
+            # attached to an ordinary rule, not a verdict: the row stays
+            # reviewable and approvable exactly like any other.
+            dup = entry.get("duplicate")
+            if isinstance(dup, dict):
+                duplicate = {
+                    "kind": str(dup.get("kind") or ""),
+                    "source": str(dup.get("source") or ""),
+                }
         else:
             continue
 
@@ -230,6 +347,7 @@ def _rules_for_ui(
                     "reason": "",
                     "decision": decision,
                     "source": source,
+                    "duplicate": duplicate,
                 }
             )
             continue
@@ -258,6 +376,7 @@ def _rules_for_ui(
                 ),
                 "decision": decision,
                 "source": source,
+                "duplicate": duplicate,
             }
         )
 
@@ -290,17 +409,32 @@ def _metrics_for_ui(
     completion = _optional_count(usage.get("completion_tokens")) or _optional_count(output_tokens)
     total = _optional_count(usage.get("total_tokens")) or (prompt + completion)
 
-    crawl = _optional_count(crawl_ms) or _optional_count(rules_data.get("crawl_elapsed_ms"))
+    # crawl_inputs.crawl_duration_ms does NOT hold the crawl duration. The
+    # worker writes its whole-job wall clock into that column (see
+    # worker.build_output_payload), so reading it as the crawl stage showed
+    # 3m 26s for a crawl that took 12s, and then counted the entire run again
+    # inside the total. The stage figure the pipeline actually measured lives
+    # in the rules blob; the column is only a fallback for rows written
+    # before it did.
+    crawl = _optional_count(rules_data.get("crawl_elapsed_ms"))
     generation = _optional_count(rules_data.get("generation_elapsed_ms"))
     validation_ms = _optional_count(validation.get("validation_elapsed_ms"))
+    job_ms = _optional_count(crawl_ms)
+    if not crawl and not generation and not validation_ms:
+        crawl = job_ms
+
+    stage_total = crawl + generation + validation_ms
+    # Wall clock can never be shorter than the stages it contains, so the
+    # larger of the two is right whichever way the column was written. The
+    # gap between them is real pipeline overhead (screenshot upload, DB
+    # writes) that belongs in the total.
+    total_ms = max(stage_total, job_ms)
 
     return {
         "crawlMs": crawl or None,
         "generationMs": generation or None,
         "validationMs": validation_ms or None,
-        # The pipeline's own workflow_elapsed_ms covers generation+validation
-        # only, so the wall-clock total is summed here instead.
-        "totalMs": (crawl + generation + validation_ms) or None,
+        "totalMs": total_ms or None,
         "avgValidationMsPerRule": _optional_count(
             validation.get("average_validation_time_per_rule_ms")
         ) or None,
@@ -378,7 +512,14 @@ SELECT
     ro.decisions          AS decisions_blob,
     ro.input_tokens       AS input_tokens,
     ro.output_tokens      AS output_tokens,
-    ci.crawl_duration_ms  AS crawl_duration_ms
+    ci.crawl_duration_ms  AS crawl_duration_ms,
+    ci.run_started_at     AS run_started_at,
+    -- Elapsed is computed here rather than from the timestamp in the browser.
+    -- MySQL runs on UTC and the serialised timestamp carries no offset, so a
+    -- client in UTC+7 parsing it as local time reads a run that started
+    -- seconds ago as seven hours old. Both sides of this subtraction come
+    -- from the same server clock, so it is right whatever either timezone is.
+    TIMESTAMPDIFF(SECOND, ci.run_started_at, NOW()) AS run_elapsed_s
 FROM crawl_inputs ci
 LEFT JOIN rule_outputs ro ON ro.input_id = ci.id
 ORDER BY ci.created_at DESC
@@ -409,8 +550,30 @@ ORDER BY ci.created_at DESC
             "stage": stage,
             "created": ticket_context.get("created") or (row.get("created_at").isoformat() if row.get("created_at") else None),
             "updatedAt": row.get("updated_at").isoformat() if row.get("updated_at") else None,
+            # Stamped when the worker claimed the report. The UI counts up
+            # from this while the run is in flight, so the elapsed time is
+            # correct even for someone who opened the page mid-run.
+            "runStartedAt": (
+                row.get("run_started_at").isoformat()
+                if row.get("run_started_at")
+                else None
+            ),
+            # Seconds the current run has been going, straight from the
+            # database clock. The UI ticks upward from this and re-anchors on
+            # every poll, so it never drifts and never depends on the
+            # viewer's timezone being right.
+            "runElapsedMs": (
+                int(row["run_elapsed_s"]) * 1000
+                if row.get("run_elapsed_s") is not None
+                else None
+            ),
             "rules": rules,
             "duplicates": duplicates,
+            # What the model actually proposed, before dedup dropped anything.
+            # The pipeline panel shows this next to the kept count so a report
+            # that generated rules but kept none reads as "9 generated, 9
+            # already known" rather than as a run that produced nothing.
+            "generatedCount": _generated_count(row.get("rule_blob"), len(rules), duplicates),
             "ruleStatus": row.get("rule_status"),
             "errorMessage": row.get("error_message"),
             "metrics": _metrics_for_ui(
@@ -451,6 +614,7 @@ SELECT
     ci.report_id,
     ci.domain,
     ci.url,
+    ci.ticket_context     AS ticket_context,
     ci.status             AS ticket_status,
     ro.rules              AS rule_blob,
     ro.validation_result  AS validation_blob,
@@ -467,6 +631,11 @@ ORDER BY ro.updated_at DESC
     for row in rows:
         report_state, _ = _normalize_ticket_state(row.get("ticket_status") or "")
         updated_at = row.get("updated_at")
+        # Rules are registered per (domain, environment), so the library and
+        # the Live rules page have to show which platform a rule belongs to —
+        # otherwise the same selector listed under two platforms reads as an
+        # accidental duplicate rather than deliberate per-platform coverage.
+        rule_env = _context_environment(row.get("ticket_context"))
 
         for rule in _rules_for_ui(
             row.get("rule_blob"),
@@ -479,6 +648,12 @@ ORDER BY ro.updated_at DESC
                     "reportId": row.get("report_id"),
                     "domain": row.get("domain"),
                     "url": row.get("url"),
+                    # Same fallback fetch_all_tickets uses, so a rule and the
+                    # report it came from never disagree about the platform.
+                    # Reports predating per-platform tickets stored no env and
+                    # all ran as desktop, which is where the registry
+                    # migration files their rules too.
+                    "env": rule_env or "desktop",
                     "reportState": report_state,
                     # "Live" means an approved rule on a closed report — the
                     # same definition the Performance page already uses.
@@ -1116,6 +1291,24 @@ def delete_rule(report_id: str, rule: str) -> Dict[str, Any]:
     return {"rule_count": len(remaining)}
 
 
+def _context_environment(blob: Any) -> Optional[str]:
+    """
+    Read the crawl environment out of a stored ticket_context.
+
+    The UI writes it as "env" and the pipeline's normalised context calls the
+    same thing "platform"; both spellings are in the table, so both are read.
+    """
+    context = _parse_json_blob(blob)
+    if not isinstance(context, dict):
+        return None
+
+    for key in ("env", "platform", "environment"):
+        value = str(context.get(key) or "").strip().lower()
+        if value in {"desktop", "android", "ios"}:
+            return value
+    return None
+
+
 def _report_domain(report_id: str) -> Optional[str]:
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -1132,13 +1325,38 @@ def _report_domain(report_id: str) -> Optional[str]:
     return get_domain(row["url"])
 
 
+def _report_environment(report_id: str) -> Optional[str]:
+    """
+    The platform a report was crawled on, for scoping registry writes.
+
+    The registry is keyed per (domain, environment), so a manually-added rule
+    has to land in the bucket for the platform the moderator was looking at —
+    filing it under the default would dedupe it out of that platform's next
+    run while leaving it proposable on the one it was written for.
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT ticket_context FROM crawl_inputs WHERE report_id=%s",
+                (report_id,),
+            )
+            row = cur.fetchone()
+    if not row:
+        return None
+    return _context_environment(row.get("ticket_context"))
+
+
 def _register_rule_for_report(report_id: str, rule: str) -> None:
     try:
         from .services.rule_registry import normalize_rule, register_rules
 
         domain = _report_domain(report_id)
         if domain:
-            register_rules(domain, [normalize_rule(rule)])
+            register_rules(
+                domain,
+                [normalize_rule(rule)],
+                _report_environment(report_id),
+            )
     except Exception:
         # The registry is a dedup optimisation, not the source of truth.
         pass

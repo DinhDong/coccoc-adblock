@@ -2,8 +2,11 @@ from flask import Flask
 from flask_cors import CORS
 
 try:
+    from .database import ensure_schema
     from .tickets import (
         persist_ticket_to_db,
+        create_ticket as create_ticket_record,
+        allocate_report_id,
         fetch_all_tickets,
         fetch_all_rules,
         fetch_token_usage,
@@ -26,8 +29,11 @@ try:
         _normalize_ticket_state as normalize_ticket_state,
     )
 except ImportError:  # pragma: no cover
+    from app.database import ensure_schema
     from app.tickets import (
         persist_ticket_to_db,
+        create_ticket as create_ticket_record,
+        allocate_report_id,
         fetch_all_tickets,
         fetch_all_rules,
         fetch_token_usage,
@@ -80,9 +86,27 @@ def create_app():
     app = Flask(__name__)
     CORS(app)
 
+    # Bring the schema up to date before serving anything. Read endpoints
+    # SELECT columns that database.py declares, but only its write paths used
+    # to run migrations — so a database nobody had written to since a column
+    # was added answered every read with "Unknown column". That is exactly
+    # what happened switching back to the shared server after run_started_at
+    # was added against a local one. Best-effort: a database that is simply
+    # unreachable should surface on the request that needs it, with its own
+    # error, rather than stopping the app from starting.
+    try:
+        ensure_schema()
+    except Exception as exc:  # pragma: no cover - startup diagnostics only
+        app.logger.warning("Schema check skipped at startup: %s", exc)
+
     @app.get("/health")
     def health():
         return {"ok": True}
+
+    @app.get("/api/tickets/next-id")
+    def next_ticket_id():
+        """The id a new report would get, so the form can show it up front."""
+        return {"id": allocate_report_id()}, 200
 
     @app.post("/api/tickets")
     def create_ticket():
@@ -92,8 +116,19 @@ def create_app():
         if not payload:
             return {"error": "empty payload"}, 400
 
-        record_id = persist_ticket_to_db(payload)
-        return {"ok": True, "record_id": record_id}, 201
+        # Ids are assigned here, not in the browser. A client-side counter
+        # reset on every page load and handed out ids that already existed,
+        # and save_crawl_input updates in place when report_id is taken — so
+        # a "new" report quietly overwrote an old one instead of being
+        # created. create_ticket_record picks a free id and reports whether
+        # the requested one had to be replaced.
+        result = create_ticket_record(payload)
+        return {
+            "ok": True,
+            "record_id": result["record_id"],
+            "id": result["id"],
+            "renamed": result["renamed"],
+        }, 201
 
     @app.get("/api/tickets")
     def list_tickets():

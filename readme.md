@@ -243,7 +243,7 @@ coccoc-adblock/
 │       │   ├── crawler.py              # crawl stage entry point
 │       │   ├── rule_generator.py       # prompt build -> LLM -> parsed rules
 │       │   ├── rule_validator.py       # syntax + scope + policy + sandbox
-│       │   ├── rule_registry.py        # per-domain dedup ledger + rule merging
+│       │   ├── rule_registry.py        # per-domain+env dedup ledger + rule merging
 │       │   ├── ticket_context.py       # normalises ticket fields for prompts
 │       │   ├── problem_policy.py       # problem type -> allowed rule direction
 │       │   └── external_filter_lists.py# skip rules public lists already cover
@@ -347,6 +347,60 @@ Status vocabulary:
 | `failed`, `crawl_failed` | run failed | Run failed |
 | `done` | review finished | Done |
 
+Rule deduplication is scoped per **(domain, environment)**, not per domain.
+`rule_registry.json` holds `{domain: {environment: [rules]}}`. Keying by domain
+alone meant whichever platform crawled a site first claimed every rule for it:
+an iOS run of baomoi.com registered its 13 rules, and the Android run minutes
+later found all 9 of the rules it generated already present. Entries written
+before this change were flat lists; they are migrated to the `desktop` bucket
+on read, which is where they actually came from — they predate the fix to
+`worker.resolve_environment`, so every one of those runs executed as desktop
+regardless of the platform the ticket asked for.
+
+**Duplicates are not rejected.** A rule that already exists is generated,
+validated and shown like any other, carrying a flag that says where it was
+seen before (`already generated for baomoi.com on android`, `already covered
+by easylist`). The moderator decides — the approve/reject buttons stay live.
+Only rules the model proposed twice *within one response* are dropped, since
+showing the same rule twice helps nobody. Because of this there is no longer a
+prompt before crawling a site that has been crawled before: that question is
+answered on the review screen, where the duplicates are actually visible.
+
+Stored records use `duplicates_flagged`. Reports run before this change used
+`duplicates_skipped` and really did have those rules removed, so the two keys
+are kept distinct and the API reports which it read via `duplicates.dropped`.
+
+A run that keeps no rules is not a failed run. The pipeline panel reports what
+the generator proposed against what survived ("9 rules generated · 7 kept · 2
+already known"), so a report emptied by dedup explains itself instead of
+looking broken.
+
+`crawl_inputs.crawl_duration_ms` does **not** hold the crawl duration —
+`worker.build_output_payload` writes the whole job's wall clock into it. The
+per-stage figures the pipeline actually measured live in the JSON blobs
+(`crawl_elapsed_ms`, `generation_elapsed_ms`, `validation_elapsed_ms`), and
+that is what `_metrics_for_ui` reads. Reading the column as the crawl stage
+reported 3m 26s for a crawl that took 12s, then counted the whole run a second
+time inside the total. The total is `max(sum of stages, job wall clock)`: the
+clock can never be shorter than what it contains, and the gap between them is
+real overhead (screenshot upload, DB writes) that belongs in the total.
+
+While a run is in flight the report shows a live counter rather than a partial
+total. Elapsed comes from `TIMESTAMPDIFF(SECOND, run_started_at, NOW())`,
+computed by MySQL and re-anchored on every poll — the server runs on UTC and
+serialises timestamps without an offset, so a client in UTC+7 parsing
+`run_started_at` itself would read a run that started seconds ago as seven
+hours old. `run_started_at` is stamped once, when the worker claims the report;
+`updated_at` cannot stand in for it because every stage transition touches it.
+
+Report ids are assigned by the backend (`GET /api/tickets/next-id`, and again
+on `POST /api/tickets`). They used to come from a browser-side counter seeded
+at 148 that reset on every page load; because `save_crawl_input` updates in
+place when `report_id` is taken, a "new" report silently overwrote an existing
+one — inheriting its rules, decisions and `created_at`. Creating a report now
+never mutates another; a taken name is replaced and the response says so via
+`renamed`.
+
 `new` and `processing` are deliberately distinct in the UI. Only one report is
 ever *running* — the worker claims a single row at a time — so everything else
 that has been submitted shows as **Queued** with its place in line ("Queued ·
@@ -360,7 +414,8 @@ many are ahead of their own.
 | method | path | purpose |
 |---|---|---|
 | GET | `/api/tickets` | all tickets with rules, metrics, duplicates |
-| POST | `/api/tickets` | create a ticket |
+| POST | `/api/tickets` | create a ticket; the backend assigns a free `report_id` |
+| GET | `/api/tickets/next-id` | the id a new report would get, for the create form |
 | PATCH | `/api/tickets/<id>` | edit fields, or change status |
 | DELETE | `/api/tickets/<id>` | delete a report and its rules/images |
 | POST | `/api/tickets/<id>/run` | queue the report for the worker, returns `202` |

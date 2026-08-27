@@ -6,6 +6,20 @@
   --orange: #FF7439;
   --orange-dark: #C2551F;
   --orange-tint: #FFEBE0;
+  /* "Awaiting review" used to be orange, a hue away from the red of a failed
+     run — at a glance the two states were hard to tell apart in a list. Blue
+     shares no edge with either the reds or the greens used elsewhere. */
+  --blue: #3B76C4;
+  --blue-dark: #1A56A8;
+  --blue-tint: #E8F0FE;
+  --blue-border: #C3D9F5;
+  /* Caution, distinct from the reds used for failure. A duplicate rule is a
+     "look before you approve", not a rejection, so it must not read as one. */
+  --amber-dark: #8A6206;
+  --amber-tint: #FEF6E0;
+  --amber-border: #EDD9A3;
+  /* The red already used by the failed badge and .ad-failtext. */
+  --red-dark: #A5271A;
   --bg: #F4F6F4;
   --card: #FFFFFF;
   --border: #E1E7E2;
@@ -137,7 +151,9 @@ body { margin: 0; }
 .ad-stat .ad-statlabel { font-size: 12px; color: var(--text-soft); margin-top: 2px; }
 .ad-stat.s-draft { border-left-color: #A9B4AC; }
 .ad-stat.s-inprocess { border-left-color: var(--green); }
-.ad-stat.s-review { border-left-color: var(--orange); }
+.ad-stat.s-review { border-left-color: var(--blue); }
+/* Failed had no colour of its own and fell back to the default grey border. */
+.ad-stat.s-failed { border-left-color: #C0392B; }
 .ad-stat.s-done { border-left-color: var(--green-deep); }
 .ad-stat.on { box-shadow: 0 0 0 2px var(--green-tint); }
 
@@ -206,6 +222,15 @@ body { margin: 0; }
 /* ---------- table ---------- */
 .ad-tablewrap { overflow-x: auto; }
 table.ad-table { width: 100%; border-collapse: collapse; min-width: 860px; }
+/* Column widths come from the colgroup, not from the content, so the grid
+   never re-measures. Under the default `auto` layout the Status column swung
+   about 100px between "Awaiting review" (109px) and "Running · Sandbox
+   validation" (202px), and every other column shifted to absorb it each time
+   a run started or finished. At 860px the 28% Status share is 241px, which
+   still clears the 202px worst-case badge; below that the wrapper scrolls, as
+   it always has. Scoped to this table because .ad-table is shared with the
+   rule library, which has a different set of columns. */
+table.ad-table.ad-table-fixed { table-layout: fixed; min-width: 860px; }
 .ad-table th {
   text-align: left; font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase;
   color: var(--text-mute); font-weight: bold;
@@ -375,7 +400,7 @@ table.ad-table { width: 100%; border-collapse: collapse; min-width: 860px; }
 .ad-badge svg { width: 12px; height: 12px; }
 .ad-badge.b-draft { background: #F0F2F0; color: #55645C; border-color: #DCE2DD; }
 .ad-badge.b-inprocess { background: var(--green-tint); color: #4C7A1D; border-color: #CFE6AD; }
-.ad-badge.b-review { background: var(--orange-tint); color: var(--orange-dark); border-color: #F7C6A8; }
+.ad-badge.b-review { background: var(--blue-tint); color: var(--blue-dark); border-color: var(--blue-border); }
 .ad-badge.b-done { background: #E3F2CF; color: var(--green-deep); border-color: #C4E3A3; }
 .ad-badge.b-failed { background: #FCE8E6; color: #A5271A; border-color: #F3C0BA; }
 
@@ -519,7 +544,7 @@ table.ad-table { width: 100%; border-collapse: collapse; min-width: 860px; }
 .ad-badge svg { width: 12px; height: 12px; }
 .ad-badge.b-draft { background: #F0F2F0; color: #55645C; border-color: #DCE2DD; }
 .ad-badge.b-inprocess { background: var(--green-tint); color: #4C7A1D; border-color: #CFE6AD; }
-.ad-badge.b-review { background: var(--orange-tint); color: var(--orange-dark); border-color: #F7C6A8; }
+.ad-badge.b-review { background: var(--blue-tint); color: var(--blue-dark); border-color: var(--blue-border); }
 .ad-badge.b-done { background: #E3F2CF; color: var(--green-deep); border-color: #C4E3A3; }
 .ad-badge.b-failed { background: #FCE8E6; color: #A5271A; border-color: #F3C0BA; }
 
@@ -616,10 +641,6 @@ table.ad-table { width: 100%; border-collapse: collapse; min-width: 860px; }
 .ad-warnicon { width: 15px; height: 15px; flex: none; margin-top: 1px; color: var(--orange-dark); }
 .ad-warntitle { font-size: 12.5px; font-weight: bold; color: var(--orange-dark); }
 .ad-warnbody { font-size: 12px; color: var(--text-soft); line-height: 1.5; margin-top: 3px; }
-.ad-warndetails { margin-top: 6px; font-size: 12px; color: var(--text-soft); }
-.ad-warndetails summary { cursor: pointer; color: var(--orange-dark); }
-.ad-warndetails ul { margin: 6px 0 0; padding-left: 18px; }
-.ad-warndetails li { font-family: var(--mono); font-size: 11.5px; word-break: break-all; line-height: 1.6; }
 .ad-errbox { background: #FCE8E6; border-color: #E8897C; }
 .ad-errbox .ad-warnicon, .ad-errbox .ad-warntitle { color: #A5271A; }
 .ad-errbox .ad-warnbody { word-break: break-word; }
@@ -634,7 +655,20 @@ table.ad-table { width: 100%; border-collapse: collapse; min-width: 860px; }
 }
 .ad-ruletable td { padding: 9px 8px; border-bottom: 1px solid var(--border-soft); vertical-align: top; }
 .ad-ruletext { font-family: var(--mono); font-size: 12.5px; word-break: break-all; line-height: 1.4; }
-.ad-rulereason { font-size: 11.5px; color: var(--text-mute); margin-top: 3px; }
+/* The sandbox rejected this rule — same red as the failed badge. */
+.ad-rulereason { font-size: 11.5px; color: var(--red-dark); margin-top: 3px; }
+
+/* Duplicate rules are shown and remain approvable, so this is styled as a
+   caution, not as a rejection — no red, and the row keeps its normal weight. */
+.ad-dupchip {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-left: 8px; padding: 1px 7px; border-radius: 999px;
+  font-family: var(--font); font-size: 10.5px; letter-spacing: 0.02em;
+  background: var(--amber-tint); color: var(--amber-dark);
+  border: 1px solid var(--amber-border); vertical-align: middle;
+}
+.ad-dupchip svg { width: 11px; height: 11px; }
+.ad-rulewarn { font-size: 11.5px; color: var(--amber-dark); margin-top: 3px; }
 tr.rulefail .ad-ruletext { color: var(--text-mute); }
 .ad-conf { font-size: 12px; color: var(--text-soft); white-space: nowrap; }
 .ad-decide { display: flex; gap: 6px; }
@@ -815,6 +849,51 @@ tr.rulefail .ad-ruletext { color: var(--text-mute); }
   background: var(--orange-tint); border: 1px solid #F7C6A8; color: var(--orange-dark);
 }
 .ad-sitebody { padding: 4px 16px 16px; }
+
+/* Per-site platform filter inside an expanded site on the Live rules page.
+   Deliberately NOT .ad-envtab — that class is the full-width environment
+   picker in NewReportModal and Playground, and reusing it here would restyle
+   both. Rules are registered per (domain, environment), so one site can hold
+   a separate set for desktop, Android and iOS. */
+.ad-siteenvtabs {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  margin: 8px 0 12px; padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.ad-siteenvtab {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--font); font-size: 12.5px; cursor: pointer;
+  padding: 5px 11px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--card); color: var(--text-soft);
+}
+.ad-siteenvtab:hover { border-color: var(--green); color: var(--text); }
+.ad-siteenvtab:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
+.ad-siteenvtab.on {
+  background: var(--green-tint); border-color: var(--green);
+  color: var(--green-deep); font-weight: bold;
+}
+.ad-siteenvnum {
+  font-size: 11px; padding: 0 6px; border-radius: 999px;
+  background: rgba(0, 0, 0, 0.06); color: inherit;
+}
+
+/* Estimated (not measured) durations in the pipeline panel — italic and
+   muted so they never read as a real timing. */
+.ad-stepeta { color: var(--text-mute); font-style: italic; }
+/* The live elapsed counter while a run is in flight — a real measurement, so
+   upright and full-strength, unlike the italic estimates beside it. */
+.ad-steplive { color: var(--text); font-weight: bold; font-variant-numeric: tabular-nums; }
+.ad-stepest { color: var(--text-mute); font-weight: normal; font-style: italic; font-size: 11.5px; }
+
+/* Rule yield: what the generator produced vs what survived dedup. */
+.ad-yield {
+  margin-top: 10px; padding-top: 10px;
+  border-top: 1px solid var(--border-soft);
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px;
+  font-size: 12.5px; color: var(--text-soft);
+}
+.ad-yieldmain { color: var(--text); }
+.ad-yieldnote { color: var(--text-mute); }
 
 /* queued: waiting for the worker, distinct from actively running */
 .ad-badge.b-queued { background: #EEF1F6; color: #4A5568; border-color: #D3DAE5; }

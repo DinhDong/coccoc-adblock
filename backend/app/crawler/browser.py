@@ -929,14 +929,38 @@ def render_url(
                         full_page=True,
                         timeout=timeout_ms,
                     )
-            except Exception:
-                logger.debug(
-                    "focus/full_page screenshot failed; falling back to viewport screenshot"
+            except Exception as exc:
+                # A full-page capture is measured in *device* pixels, so the
+                # mobile profiles (390x844 at device_scale_factor 3) blow past
+                # the engine's 32767px hard limit on any page taller than
+                # ~10900 CSS px, which is most of them. The crawl screenshot
+                # for every Android and iOS report was therefore silently a
+                # viewport-height crop, while the validator's images -- taken
+                # in Chromium -- were full height.
+                #
+                # scale="css" captures one pixel per CSS pixel, keeping the
+                # whole page at a third of the height. Less detail than a 3x
+                # capture, but the alternative was showing one screenful.
+                logger.warning(
+                    "Full-page screenshot failed (%s); retrying at CSS scale",
+                    str(exc).splitlines()[0] if str(exc) else exc,
                 )
-                screenshot_bytes = page.screenshot(
-                    full_page=False,
-                    timeout=timeout_ms,
-                )
+                try:
+                    screenshot_bytes = page.screenshot(
+                        full_page=True,
+                        scale="css",
+                        timeout=timeout_ms,
+                    )
+                except Exception as exc_css:
+                    logger.warning(
+                        "CSS-scale full-page screenshot also failed (%s); "
+                        "falling back to a viewport-only capture",
+                        str(exc_css).splitlines()[0] if str(exc_css) else exc_css,
+                    )
+                    screenshot_bytes = page.screenshot(
+                        full_page=False,
+                        timeout=timeout_ms,
+                    )
 
             # An element screenshot may have scrolled the page — reset to the top
             # so fixed-element geometry stays consistent with focus_box.

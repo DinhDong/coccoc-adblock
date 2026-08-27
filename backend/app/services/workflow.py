@@ -209,6 +209,10 @@ def run_rule_generation(
 
     url = crawl_result.get("url", "")
     domain = get_domain(url)
+    # Dedup is scoped per platform: the same site crawled on Android must not
+    # be deduped against what an iOS run already registered, or the second
+    # platform finishes with nothing to review.
+    environment = crawl_result.get("environment", "desktop")
 
     generation_started = time.perf_counter()
 
@@ -251,36 +255,80 @@ def run_rule_generation(
         return []
 
     if discard_existing:
-        cleared = clear_rules(domain)
+        cleared = clear_rules(domain, environment)
 
         if cleared:
             logger.info(
-                "Stage 1: cleared %d existing rule(s) for %s (discard mode)",
+                "Stage 1: cleared %d existing rule(s) for %s on %s (discard mode)",
                 cleared,
                 domain,
+                environment,
             )
 
-    rules, internal_dupes = filter_new_rules(url, generated_rules)
+    # Duplicates are no longer thrown away. A rule that already exists is
+    # still a real candidate — the moderator decides whether it is worth
+    # approving — so it stays in the list and carries a flag explaining where
+    # it was seen before. Only rules the model repeated within one response
+    # are dropped, because showing the same rule twice helps nobody.
+    fresh_rules, internal_dupes, repeated = filter_new_rules(
+        url, generated_rules, environment
+    )
+
+    if repeated:
+        logger.info(
+            "Stage 1: dropped %d rule(s) the model proposed more than once for %s",
+            len(repeated),
+            report_id,
+        )
 
     if internal_dupes:
         logger.info(
-            "Stage 1: skipped %d rule(s) already in internal registry for %s",
+            "Stage 1: flagged %d rule(s) already registered for %s on %s",
             len(internal_dupes),
             domain,
+            environment,
         )
 
-    rules, external_dupes = filter_uncovered(
-        rules,
+    fresh_rules, external_dupes = filter_uncovered(
+        fresh_rules,
         skip=skip_external,
     )
 
     if external_dupes:
         for rule, source in external_dupes:
             logger.info(
-                "Stage 1: skipped rule already in %s: %s",
+                "Stage 1: flagged rule already in %s: %s",
                 source,
                 _coerce_rule(rule),
             )
+
+    # Why each flagged rule is a duplicate, keyed by its text so the per-rule
+    # records below can carry the note through to the review screen.
+    duplicate_notes: Dict[str, Dict[str, str]] = {}
+    for rule in internal_dupes:
+        duplicate_notes[_coerce_rule(rule)] = {
+            "kind": "internal",
+            "source": f"already generated for {domain} on {environment}",
+        }
+    for rule, source in external_dupes:
+        duplicate_notes[_coerce_rule(rule)] = {
+            "kind": "external",
+            "source": f"already covered by {source}",
+        }
+
+    # Rebuild in the order the model produced them, so a flagged rule sits
+    # beside its neighbours instead of being bumped to the end of the list.
+    kept_texts = {
+        _coerce_rule(rule)
+        for rule in fresh_rules + internal_dupes + [r for r, _ in external_dupes]
+    }
+    seen_texts: set = set()
+    rules = []
+    for rule in generated_rules:
+        text = _coerce_rule(rule)
+        if text in kept_texts and text not in seen_texts:
+            seen_texts.add(text)
+            rules.append(rule)
 
     total_skipped = len(internal_dupes) + len(external_dupes)
 
@@ -305,7 +353,11 @@ def run_rule_generation(
         "model": model,
         "fallback_used": fallback_used,
         "prompt_preview": prompt_preview,
-        "duplicates_skipped": {
+        # Named "flagged", not "skipped": these rules are included in the list
+        # below and can still be approved. Rows written before that change use
+        # the old "duplicates_skipped" key and really were dropped, so the two
+        # names are kept distinct rather than reused.
+        "duplicates_flagged": {
             "total": total_skipped,
             "internal": len(internal_dupes),
             "external": len(external_dupes),
@@ -329,6 +381,11 @@ def run_rule_generation(
                     rule,
                     "raw",
                     _coerce_rule(rule),
+                ),
+                **(
+                    {"duplicate": duplicate_notes[_coerce_rule(rule)]}
+                    if _coerce_rule(rule) in duplicate_notes
+                    else {}
                 ),
             }
             for rule in rules
@@ -367,11 +424,12 @@ def run_rule_generation(
         )
 
     if not rules:
-        # Everything the model proposed was already known. The blob written
-        # above still carries duplicates_skipped so the UI can explain why
-        # this run has nothing to review.
+        # Reachable only when the model produced nothing usable at all.
+        # Duplicates no longer empty a run: they stay in the list flagged, so
+        # a report can no longer finish with nothing to review just because
+        # the site had been crawled before.
         logger.info(
-            "Stage 1: all %d generated rule(s) were duplicates for %s",
+            "Stage 1: no usable rules from %d candidate(s) for %s",
             len(generated_rules),
             report_id,
         )
@@ -384,13 +442,14 @@ def run_rule_generation(
             normalize_rule(_coerce_rule(rule))
             for rule in rules
         ],
+        environment,
     )
 
     _log_token_usage(token_usage)
 
     logger.info(
-        "Stage 1: %d new rule(s) saved → %s | "
-        "%d duplicate(s) skipped | problem_type=%s | "
+        "Stage 1: %d rule(s) saved → %s | "
+        "%d flagged as duplicate | problem_type=%s | "
         "processing_mode=%s | generation_elapsed_ms=%d",
         len(rules),
         rules_path,
@@ -1203,7 +1262,10 @@ def run_pipeline(
         )
 
     domain = get_domain(page_url)
-    existing = get_existing_rules(domain)
+    # Scoped to this run's platform: "discard" clears only this environment,
+    # so counting every platform's rules here would offer to throw away far
+    # more than the choice actually affects.
+    existing = get_existing_rules(domain, env)
 
     # An API caller (the web UI) decides up front and passes the answer in;
     # only the CLI falls through to the interactive prompt below.

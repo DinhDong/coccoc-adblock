@@ -51,6 +51,10 @@ def normalize_ticket_context(raw_context: Any) -> Dict[str, Any]:
     expected = _clean_text(context.get("expected", ""))
     platform = _normalize_platform(context.get("platform", ""))
     steps = _normalize_steps(context.get("steps", []))
+    # "Notes for the pipeline" is free text the reporter wrote about the
+    # problem, so it belongs with the other descriptive fields that drive
+    # problem-type and validation-hint inference.
+    notes = _clean_text(context.get("notes", ""))
 
     combined_text = " ".join(
         [
@@ -59,6 +63,7 @@ def normalize_ticket_context(raw_context: Any) -> Dict[str, Any]:
             " ".join(steps),
             actual,
             expected,
+            notes,
         ]
     ).strip()
 
@@ -72,7 +77,14 @@ def normalize_ticket_context(raw_context: Any) -> Dict[str, Any]:
 
     resolution_strategy = get_resolution_strategy(problem_type)
 
-    target_to_block = _normalize_string_list(context.get("target_to_block", []))
+    # The UI calls this "targets" ("Block these ads only"); the pipeline calls
+    # it target_to_block. Only the pipeline spelling was read, so anything
+    # typed into that box was dropped and silently replaced by the inferred
+    # defaults. An explicit list wins over inference — the field says "only".
+    targets_explicit = _normalize_string_list(
+        context.get("target_to_block") or context.get("targets") or []
+    )
+    target_to_block = targets_explicit
     if not target_to_block:
         target_to_block = infer_targets_to_block(problem_type, combined_text)
 
@@ -117,6 +129,10 @@ def normalize_ticket_context(raw_context: Any) -> Dict[str, Any]:
         "actual": actual,
         "expected": expected,
         "target_to_block": target_to_block,
+        # True when the reporter listed the targets themselves rather than
+        # them being inferred. The prompt leans on this to honour the "only"
+        # in "Block these ads only" instead of treating the list as a hint.
+        "target_to_block_explicit": bool(targets_explicit),
         "target_to_preserve": target_to_preserve,
         "validation_hints": merged_hints,
         "current_rules": current_rules,
@@ -558,6 +574,12 @@ def _is_empty_context(context: Mapping[str, Any]) -> bool:
         "region_focus",
         "focus_region",
         "focus",
+        # Both are written by the New Report form. Without them a ticket whose
+        # only content was "Block these ads only" or "Notes for the pipeline"
+        # counted as empty and fell through to the legacy defaults, discarding
+        # exactly what the reporter had taken the trouble to type.
+        "targets",
+        "notes",
     ]
 
     for key in meaningful_keys:

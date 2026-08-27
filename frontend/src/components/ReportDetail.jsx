@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { X, ExternalLink, CheckCircle2, XCircle, AlertTriangle, Pencil, Trash2, Plus, Check, Combine, ZoomIn, ZoomOut, RotateCcw } from "lucide-react";
 import { STAGES, ENVS, CURRENT_USER, userOf } from "../constants.js";
 import { fmtDate, fmtDur } from "../utils.js";
@@ -177,81 +177,119 @@ export function clearReportImageCache(reportId) {
   else imageCache.clear();
 }
 
-const ZOOM_MIN = 1;
-const ZOOM_MAX = 8;
-const ZOOM_STEP = 0.25;
+// Each step multiplies rather than adds. A full-page mobile capture fits at
+// ~15px wide, so the ceiling (width fills the stage) lands near 80x — additive
+// steps of 0.5 would have taken about 160 clicks to cross that. Multiplying by
+// 1.6 gets there in roughly ten, and keeps the steps feeling even at both ends
+// because each one is the same proportional change.
+const ZOOM_FACTOR = 1.6;
 
 export function Lightbox({ image, onClose }) {
   const [zoom, setZoom] = useState(1);
-  // Pan offset in screen pixels, so a zoomed-in crawl can be read top to bottom.
-  const [offset, setOffset] = useState({ x: 0, y: 0 });
-  // Size the image fills at 100%, measured once it has loaded. Zoom multiplies
-  // this into a real width/height rather than a CSS transform: transform
-  // scales the already-rasterised element, so a 4000px screenshot laid out at
-  // ~900px would be magnified from that 900px bitmap and look mushy. Changing
-  // the layout size makes the browser resample from the full-resolution source.
+  // Size the image occupies at 100%, measured once it has loaded. Zoom
+  // multiplies this into a real width/height rather than a CSS transform:
+  // transform scales the already-rasterised element, so a 16000px screenshot
+  // laid out at ~700px would be magnified from that 700px bitmap and look
+  // mushy. Changing the layout size makes the browser resample the source.
   const [fit, setFit] = useState(null);
-  const drag = useRef(null);
+  const [stageW, setStageW] = useState(0);
   const stage = useRef(null);
+  // Where to put the scroll position after a zoom step, so the point you
+  // clicked stays under the cursor instead of jumping to the top.
+  const anchor = useRef(null);
+
+  // Zooming stops where the image width fills the stage. Past that you would
+  // have to pan sideways to read a single line — and these captures are tall
+  // and narrow, so there is nothing out there to pan to.
+  const maxZoom = fit && stageW ? Math.max(1, stageW / fit.w) : 1;
+  const clamp = (z) => Math.min(maxZoom, Math.max(1, z));
+
+  const measureStage = () => {
+    if (stage.current) setStageW(stage.current.clientWidth);
+  };
 
   const onImageLoad = (e) => {
     const r = e.currentTarget.getBoundingClientRect();
     if (r.width && r.height) setFit({ w: r.width, h: r.height });
+    measureStage();
   };
 
-  const clamp = (z) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
-  const reset = () => { setZoom(1); setOffset({ x: 0, y: 0 }); };
+  useEffect(() => {
+    measureStage();
+    window.addEventListener("resize", measureStage);
+    return () => window.removeEventListener("resize", measureStage);
+  }, []);
 
-  const zoomBy = (delta) =>
-    setZoom((z) => {
-      const next = clamp(z + delta);
-      if (next === 1) setOffset({ x: 0, y: 0 });
-      return next;
-    });
+  const zoomBy = (factor, clientY) => {
+    const node = stage.current;
+    if (node && fit) {
+      const rect = node.getBoundingClientRect();
+      const y = clientY == null ? rect.height / 2 : clientY - rect.top;
+      anchor.current = { ratio: (node.scrollTop + y) / (fit.h * zoom), y };
+    }
+    setZoom((z) => clamp(z * factor));
+  };
+
+  const reset = () => { anchor.current = null; setZoom(1); };
+
+  // Restore the anchored position before paint, so the jump is never visible.
+  // Re-measuring here as well keeps maxZoom honest if the usable width does
+  // change underneath us (a browser without scrollbar-gutter support, say).
+  useLayoutEffect(() => {
+    const node = stage.current;
+    if (!node || !fit) return;
+    if (anchor.current) {
+      const { ratio, y } = anchor.current;
+      anchor.current = null;
+      node.scrollTop = ratio * fit.h * zoom - y;
+    }
+    if (node.clientWidth && node.clientWidth !== stageW) setStageW(node.clientWidth);
+  }, [zoom, fit, stageW]);
+
+  // If the ceiling drops (window resized smaller, gutter appeared), bring an
+  // already-applied zoom back under it rather than leaving the image wider
+  // than the stage.
+  useEffect(() => {
+    setZoom((z) => Math.min(z, maxZoom));
+  }, [maxZoom]);
 
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === "Escape") return onClose();
-      if (e.key === "+" || e.key === "=") zoomBy(ZOOM_STEP);
-      if (e.key === "-" || e.key === "_") zoomBy(-ZOOM_STEP);
+      if (e.key === "+" || e.key === "=") zoomBy(ZOOM_FACTOR);
+      if (e.key === "-" || e.key === "_") zoomBy(1 / ZOOM_FACTOR);
       if (e.key === "0") reset();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  });
 
-  // React registers onWheel passively, so preventDefault there is ignored and
-  // the page scrolls behind the overlay. Bind natively with passive:false.
-  useEffect(() => {
-    const node = stage.current;
-    if (!node) return;
-    const onWheel = (e) => {
-      e.preventDefault();
-      zoomBy(e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP);
-    };
-    node.addEventListener("wheel", onWheel, { passive: false });
-    return () => node.removeEventListener("wheel", onWheel);
-  }, []);
+  // Clicking the backdrop closes; clicking the image zooms. The wheel is left
+  // alone entirely so the stage scrolls natively — no preventDefault, no
+  // custom handler, and the scrollbar behaves the way every other page does.
+  const onStageClick = (e) => {
+    if (e.target === stage.current) {
+      if (zoom === 1) onClose();
+      return;
+    }
+    zoomBy(ZOOM_FACTOR, e.clientY);
+  };
 
-  const onPointerDown = (e) => {
-    if (zoom === 1) return;
-    drag.current = { x: e.clientX - offset.x, y: e.clientY - offset.y };
-    e.currentTarget.setPointerCapture(e.pointerId);
+  const onStageContextMenu = (e) => {
+    e.preventDefault();
+    zoomBy(1 / ZOOM_FACTOR, e.clientY);
   };
-  const onPointerMove = (e) => {
-    if (!drag.current) return;
-    setOffset({ x: e.clientX - drag.current.x, y: e.clientY - drag.current.y });
-  };
-  const onPointerUp = () => { drag.current = null; };
+
+  const atMax = zoom >= maxZoom - 0.001;
 
   return (
     <div className="ad-lightbox" role="dialog" aria-modal="true" aria-label={image.label}>
       <div className="ad-lightbar" onClick={(e) => e.stopPropagation()}>
-        <button className="ad-lightbtn" onClick={() => zoomBy(-ZOOM_STEP)} disabled={zoom <= ZOOM_MIN} aria-label="Zoom out" title="Zoom out (−)">
+        <button className="ad-lightbtn" onClick={() => zoomBy(1 / ZOOM_FACTOR)} disabled={zoom <= 1} aria-label="Zoom out" title="Zoom out (right-click or −)">
           <ZoomOut size={17} />
         </button>
         <span className="ad-zoomlevel">{Math.round(zoom * 100)}%</span>
-        <button className="ad-lightbtn" onClick={() => zoomBy(ZOOM_STEP)} disabled={zoom >= ZOOM_MAX} aria-label="Zoom in" title="Zoom in (+)">
+        <button className="ad-lightbtn" onClick={() => zoomBy(ZOOM_FACTOR)} disabled={atMax} aria-label="Zoom in" title="Zoom in (left-click or +)">
           <ZoomIn size={17} />
         </button>
         <button className="ad-lightbtn" onClick={reset} disabled={zoom === 1} aria-label="Reset zoom" title="Reset (0)">
@@ -265,12 +303,9 @@ export function Lightbox({ image, onClose }) {
       <div
         className="ad-lightstage"
         ref={stage}
-        onClick={(e) => { if (e.target === e.currentTarget && zoom === 1) onClose(); }}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
-        style={{ cursor: zoom > 1 ? (drag.current ? "grabbing" : "grab") : "default" }}
+        onClick={onStageClick}
+        onContextMenu={onStageContextMenu}
+        style={{ cursor: atMax ? "zoom-out" : "zoom-in" }}
       >
         <img
           src={image.url}
@@ -279,21 +314,21 @@ export function Lightbox({ image, onClose }) {
           onLoad={onImageLoad}
           style={
             zoom === 1 || !fit
-              ? { transform: `translate(${offset.x}px, ${offset.y}px)` }
+              ? undefined
               : {
                   // Explicit size, not scale() — this is what keeps it sharp.
                   width: `${fit.w * zoom}px`,
                   height: `${fit.h * zoom}px`,
                   maxWidth: "none",
                   maxHeight: "none",
-                  transform: `translate(${offset.x}px, ${offset.y}px)`,
                 }
           }
         />
       </div>
 
       <figcaption className="ad-lightcap">
-        {image.label} · scroll or +/− to zoom{zoom > 1 ? " · drag to pan" : ""}
+        {image.label} · left-click to zoom in · right-click to zoom out
+        {zoom > 1 ? " · scroll to move down the page" : ""}
       </figcaption>
     </div>
   );

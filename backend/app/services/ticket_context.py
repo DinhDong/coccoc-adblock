@@ -56,23 +56,30 @@ def normalize_ticket_context(raw_context: Any) -> Dict[str, Any]:
     # problem-type and validation-hint inference.
     notes = _clean_text(context.get("notes", ""))
 
-    combined_text = " ".join(
+    # Two strings on purpose. `descriptive_text` is the reporter's structured
+    # account of the problem; `combined_text` adds the free-text notes so they
+    # can inform inference. The fallback below keys off the structured text
+    # only: notes that match no known problem type (a scribble, a test string)
+    # would otherwise make combined_text non-empty, suppress the fallback, and
+    # leave the ticket classified "unknown" with the generic safe-patch
+    # strategy — worse than the default it used to get.
+    descriptive_text = " ".join(
         [
             request,
             description,
             " ".join(steps),
             actual,
             expected,
-            notes,
         ]
     ).strip()
+    combined_text = " ".join([descriptive_text, notes]).strip()
 
     problem_type = _resolve_problem_type(
         raw_problem_type=context.get("problem_type", ""),
         combined_text=combined_text,
     )
 
-    if problem_type == "unknown" and not combined_text:
+    if problem_type == "unknown" and not descriptive_text:
         problem_type = LEGACY_DEFAULT_PROBLEM_TYPE
 
     resolution_strategy = get_resolution_strategy(problem_type)

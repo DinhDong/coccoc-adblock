@@ -326,15 +326,29 @@ table.ad-table.ad-table-fixed { table-layout: fixed; min-width: 860px; }
 /* overflow hidden keeps a scaled image inside the stage instead of forcing
    the whole overlay to scroll */
 .ad-lightstage {
-  flex: 1; min-height: 0; overflow: hidden;
-  display: flex; align-items: center; justify-content: center;
-  touch-action: none;
+  flex: 1; min-height: 0;
+  /* The stage is a real scroller now: the wheel moves down the page instead
+     of zooming, which is what a 16000px-tall capture actually needs. Zoom is
+     capped where the image width fills the stage, so there is never anything
+     to reach sideways for. */
+  overflow-y: auto; overflow-x: hidden;
+  /* Reserve the scrollbar gutter permanently. Without it clientWidth shrinks
+     by the scrollbar's width the moment zooming makes the image scrollable —
+     after maxZoom was calculated from the wider value — so the image ended up
+     a scrollbar wider than the stage and overflowed sideways. */
+  scrollbar-gutter: stable;
+  display: flex; justify-content: center;
+  /* flex-start, not center: a centred flex item taller than its container
+     gets its top clipped and becomes unreachable by scrolling. `margin: auto`
+     on the image below still centres it while it is small enough to fit. */
+  align-items: flex-start;
+  touch-action: pan-y;
 }
 /* No will-change/transform scaling here: that pins the image to one GPU
    texture rasterised at layout size, so zooming magnifies that bitmap instead
    of resampling the source. Zoom sets width/height explicitly instead. */
 .ad-lightstage img {
-  display: block; max-width: 100%; max-height: 100%;
+  display: block; margin: auto; max-width: 100%; max-height: 100%;
   object-fit: contain; border-radius: 6px; background: var(--card);
   user-select: none; -webkit-user-drag: none;
   image-rendering: auto;

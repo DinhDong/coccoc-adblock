@@ -845,6 +845,7 @@ class SandboxSession:
             from ..crawler.browser import (
                 ENVIRONMENTS,
                 _STEALTH_LAUNCH_ARGS,
+                capture_full_page,
                 _apply_stealth,
                 _import_playwright,
             )
@@ -861,6 +862,10 @@ class SandboxSession:
             return
 
         self._apply_stealth = _apply_stealth
+        # Held on the instance like _apply_stealth: the import above is
+        # local to __init__, but the capture is used from test_rules and
+        # the reference-page setup.
+        self._capture_full_page = capture_full_page
         self._timeout_error_cls = timeout_error_cls
 
         profile = ENVIRONMENTS.get(self.environment, ENVIRONMENTS["desktop"])
@@ -876,18 +881,30 @@ class SandboxSession:
             "extra_http_headers": {"Accept-Language": "en-US,en;q=0.9"},
         }
 
+        # Validate in the engine the profile names, the same way the crawler
+        # launches. This was hardcoded to chromium, so an iOS ticket was
+        # crawled in WebKit but sandbox-validated in Chromium wearing an
+        # iPhone user agent — rules were judged against a rendering the
+        # reporter never saw. The stealth flags are Chromium switches and are
+        # not passed to other engines.
+        browser_type = profile.get("browser_type", "chromium")
+        launch_kwargs = {"headless": True}
+        if browser_type == "chromium":
+            launch_kwargs["args"] = _STEALTH_LAUNCH_ARGS
+
         logger.debug(
-            "Sandbox session starting in '%s' environment (viewport %s, mobile=%s)",
+            "Sandbox session starting in '%s' environment "
+            "(engine %s, viewport %s, mobile=%s)",
             self.environment,
+            browser_type,
             profile["viewport"],
             profile["is_mobile"],
         )
 
         try:
             self._playwright = sync_playwright().start()
-            self._browser = self._playwright.chromium.launch(
-                headless=True,
-                args=_STEALTH_LAUNCH_ARGS,
+            self._browser = getattr(self._playwright, browser_type).launch(
+                **launch_kwargs
             )
         except Exception as exc:
             self._fatal_error = f"sandbox browser failed for {self.url}: {exc}"
@@ -1018,9 +1035,13 @@ class SandboxSession:
             )
 
             if capture_screenshot:
-                result.tested_screenshot = test_page.screenshot(
-                    full_page=True,
-                    timeout=DEFAULT_TIMEOUT_MS,
+                # Via the shared helper: an unguarded full_page call here
+                # raised on tall mobile pages and took the whole sandbox
+                # session down with it, failing every rule under test.
+                result.tested_screenshot = self._capture_full_page(
+                    test_page,
+                    DEFAULT_TIMEOUT_MS,
+                    f"{self.url} (tested)",
                 )
 
             result.blocked_requests = list(
@@ -1265,9 +1286,10 @@ class SandboxSession:
         }
 
         try:
-            self._reference_screenshot = page.screenshot(
-                full_page=True,
-                timeout=DEFAULT_TIMEOUT_MS,
+            self._reference_screenshot = self._capture_full_page(
+                page,
+                DEFAULT_TIMEOUT_MS,
+                f"{self.url} (reference)",
             )
         except Exception as exc:
             logger.warning("Reference screenshot failed for %s: %s", self.url, exc)

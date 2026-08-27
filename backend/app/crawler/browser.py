@@ -530,6 +530,42 @@ def _import_playwright() -> Any:
         ) from exc
 
 
+def capture_full_page(page: Any, timeout_ms: int, label: str = "page") -> bytes:
+    """
+    Full-page screenshot that survives the engine's pixel ceiling.
+
+    A full-page capture is measured in *device* pixels, so the mobile profiles
+    (390x844 at device_scale_factor 3) exceed the 32767px hard limit on any
+    page taller than ~10900 CSS px — which is most real sites. Callers used to
+    either fall back to a viewport-height crop or, in the sandbox, let the
+    error escape and fail every rule under test.
+
+    scale="css" captures one pixel per CSS pixel, keeping the whole page at a
+    third of the height. Less detail than a 3x capture, but the alternative is
+    one screenful or nothing at all. The viewport crop is the last resort.
+    """
+    try:
+        return page.screenshot(full_page=True, timeout=timeout_ms)
+    except Exception as exc:
+        logger.warning(
+            "Full-page screenshot of %s failed (%s); retrying at CSS scale",
+            label,
+            str(exc).splitlines()[0] if str(exc) else exc,
+        )
+
+    try:
+        return page.screenshot(full_page=True, scale="css", timeout=timeout_ms)
+    except Exception as exc_css:
+        logger.warning(
+            "CSS-scale full-page screenshot of %s failed (%s); "
+            "falling back to a viewport-only capture",
+            label,
+            str(exc_css).splitlines()[0] if str(exc_css) else exc_css,
+        )
+
+    return page.screenshot(full_page=False, timeout=timeout_ms)
+
+
 def _apply_stealth(page: Any, user_agent: Optional[str] = None) -> None:
     """
     Apply stealth patches to a Playwright page.
@@ -919,48 +955,20 @@ def render_url(
                 if scoped_html:
                     html = scoped_html
 
-            try:
-                if focus_handle is not None:
-                    # Element screenshot captures just the focused region and
-                    # scrolls it into view automatically.
-                    screenshot_bytes = focus_handle.screenshot(timeout=timeout_ms)
-                else:
-                    screenshot_bytes = page.screenshot(
-                        full_page=True,
-                        timeout=timeout_ms,
-                    )
-            except Exception as exc:
-                # A full-page capture is measured in *device* pixels, so the
-                # mobile profiles (390x844 at device_scale_factor 3) blow past
-                # the engine's 32767px hard limit on any page taller than
-                # ~10900 CSS px, which is most of them. The crawl screenshot
-                # for every Android and iOS report was therefore silently a
-                # viewport-height crop, while the validator's images -- taken
-                # in Chromium -- were full height.
-                #
-                # scale="css" captures one pixel per CSS pixel, keeping the
-                # whole page at a third of the height. Less detail than a 3x
-                # capture, but the alternative was showing one screenful.
-                logger.warning(
-                    "Full-page screenshot failed (%s); retrying at CSS scale",
-                    str(exc).splitlines()[0] if str(exc) else exc,
-                )
+            if focus_handle is not None:
+                # Element screenshot captures just the focused region and
+                # scrolls it into view automatically.
                 try:
-                    screenshot_bytes = page.screenshot(
-                        full_page=True,
-                        scale="css",
-                        timeout=timeout_ms,
-                    )
-                except Exception as exc_css:
+                    screenshot_bytes = focus_handle.screenshot(timeout=timeout_ms)
+                except Exception as exc:
                     logger.warning(
-                        "CSS-scale full-page screenshot also failed (%s); "
-                        "falling back to a viewport-only capture",
-                        str(exc_css).splitlines()[0] if str(exc_css) else exc_css,
+                        "Focus-region screenshot failed (%s); capturing the "
+                        "whole page instead",
+                        str(exc).splitlines()[0] if str(exc) else exc,
                     )
-                    screenshot_bytes = page.screenshot(
-                        full_page=False,
-                        timeout=timeout_ms,
-                    )
+                    screenshot_bytes = capture_full_page(page, timeout_ms, url)
+            else:
+                screenshot_bytes = capture_full_page(page, timeout_ms, url)
 
             # An element screenshot may have scrolled the page — reset to the top
             # so fixed-element geometry stays consistent with focus_box.

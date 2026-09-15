@@ -586,13 +586,16 @@ ${error.message}`);
         throw new Error(body.error || `ticket save failed ${response.status}`);
       }
       if (body.id && body.id !== id) {
-        // The requested name was taken. Adopt the id the backend assigned,
-        // otherwise the local row would point at a report that is not there.
+        // Adopt the id the backend assigned, otherwise the local row would
+        // point at a report that is not there. It differs either because the
+        // name was taken (renamed: the name becomes the new id too) or because
+        // it had characters an id cannot hold, like spaces (the typed name
+        // stays as the label).
         if (body.renamed) {
           window.alert(`${id} already exists, so this report was filed as ${body.id}.`);
         }
         id = body.id;
-        ticketPayload = { ...ticketPayload, id, name: body.id };
+        ticketPayload = { ...ticketPayload, id, name: body.renamed ? body.id : ticketPayload.name };
       }
     } catch (error) {
       console.error("Failed to save ticket to backend", error);

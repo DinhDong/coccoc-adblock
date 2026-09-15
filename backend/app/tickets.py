@@ -40,6 +40,11 @@ except ImportError:  # pragma: no cover
         normalize_rule,
     )
 
+try:
+    from .services.worker import safe_report_id
+except ImportError:  # pragma: no cover
+    from app.services.worker import safe_report_id
+
 
 def record_run_failure(report_id: str, message: str) -> None:
     """
@@ -130,6 +135,13 @@ def create_ticket(ticket: Dict[str, Any]) -> Dict[str, Any]:
     mutate somebody else's, and `renamed` lets the UI say so.
     """
     requested = str(ticket.get("id") or ticket.get("name") or "").strip()
+    # Store the id in the exact form the worker will run it under. The worker
+    # passes every id through safe_report_id, and the pipeline saves each stage
+    # by that id — so "IOS test" ran as "IOS-test", found no row with that id,
+    # and inserted a second report beside the real one. The name shown in the
+    # list keeps whatever the moderator typed.
+    if requested:
+        requested = safe_report_id(requested)
     renamed = False
 
     if not requested or _report_id_exists(requested):

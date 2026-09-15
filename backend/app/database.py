@@ -63,6 +63,17 @@ def get_connection():
         charset="utf8mb4",
         cursorclass=DictCursor,
         autocommit=True,
+        # Read every TIMESTAMP column back as UTC, whatever zone the server
+        # runs in. MySQL stores TIMESTAMP as UTC but hands it back converted to
+        # the session zone, and that zone differs by server: the local docker
+        # container runs UTC, the shared team server runs SYSTEM = +07:00. The
+        # API labels these values as UTC (tickets._iso_utc), so on the team
+        # server every created/updated time showed seven hours in the future.
+        #
+        # Safe for writes: every write to these columns uses NOW() or a
+        # CURRENT_TIMESTAMP default, which stores the same instant in any
+        # session zone, and TIMESTAMPDIFF against NOW() stays consistent.
+        init_command="SET time_zone = '+00:00'",
     )
 
 
